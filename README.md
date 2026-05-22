@@ -37,11 +37,24 @@ Save `Project Progress Tracker.html` from this repo anywhere on your computer (t
 
 ### 3. Install the Rocketlane Chat Bridge userscript
 
+**One-click install (recommended — auto-updates):**
+
+👉 [**Install Rocketlane Chat Bridge**](https://raw.githubusercontent.com/hapnes-dev/tampermonkey-scripts/main/rocketlane-chat-bridge/rocketlane-chat-bridge.user.js)
+
+Click the link above. Tampermonkey will open an install prompt — confirm **Install**. The script will auto-update whenever a new version is pushed.
+
+The userscript is hosted in a separate repo: [Hapnes-dev/tampermonkey-scripts → rocketlane-chat-bridge](https://github.com/Hapnes-dev/tampermonkey-scripts/tree/main/rocketlane-chat-bridge).
+
+<details>
+<summary>Manual install (without auto-update)</summary>
+
 1. Open the Tampermonkey dashboard (puzzle icon → Tampermonkey → Dashboard).
 2. Click the **+** tab to create a new script.
 3. Open `rocketlane-chat-bridge/rocketlane-chat-bridge.user.js` from this repo in a text editor.
 4. Select all (Ctrl+A) → copy → paste into Tampermonkey → **File → Save** (Ctrl+S).
-5. Confirm Tampermonkey shows the script as enabled.
+
+This copy doesn't auto-update — you'll need to manually paste new versions when this repo's bridge file changes.
+</details>
 
 ### 4. Enable file URL access
 
