@@ -13963,8 +13963,19 @@
           const chatHeader = document.createElement("div");
           chatHeader.className = "sectionTitle chatSectionTitle";
           chatHeader.style.alignItems = "center";
+          // Collapse chevron on the LEFT side of the title (matches Notes /
+          // Categories style). The chevron text content + state are bound
+          // later by updateCollapseUI; we just place the element here.
+          const collapseBtn = document.createElement("button");
+          collapseBtn.type = "button";
+          collapseBtn.className = "chatRefreshBtn chatCollapseBtn";
+          collapseBtn.setAttribute("aria-label", "Toggle chat visibility");
           const chatH3 = document.createElement("h3");
           chatH3.textContent = "Chat history";
+          chatH3.style.display = "flex";
+          chatH3.style.alignItems = "center";
+          chatH3.style.gap = "8px";
+          chatH3.insertBefore(collapseBtn, chatH3.firstChild);
           chatHeader.appendChild(chatH3);
 
           // Right-side controls: [Private | General] tabs + refresh button.
@@ -13994,14 +14005,6 @@
           refreshBtn.setAttribute("aria-label", "Refresh chat");
           refreshBtn.textContent = "↻";
 
-          // Collapse / show toggle — chat starts collapsed by default; users
-          // expand it when they want to see the conversation. State persists
-          // per-project in localStorage.
-          const collapseBtn = document.createElement("button");
-          collapseBtn.type = "button";
-          collapseBtn.className = "chatRefreshBtn chatCollapseBtn";
-          collapseBtn.setAttribute("aria-label", "Toggle chat visibility");
-
           // Expand / fullscreen toggle — when active, the chat panel becomes
           // a fixed overlay covering the viewport so the user can read long
           // threads and compose without the cramped detail-panel layout.
@@ -14012,10 +14015,12 @@
           expandBtn.setAttribute("aria-label", "Expand chat");
           expandBtn.textContent = "⤢";
 
+          // Note: collapseBtn is placed on the LEFT next to the chat title
+          // (created above before chatH3) — matches Notes / Categories style.
+
           chatControls.appendChild(tabs);
           chatControls.appendChild(refreshBtn);
           chatControls.appendChild(expandBtn);
-          chatControls.appendChild(collapseBtn);
           chatHeader.appendChild(chatControls);
 
           const chatBody = document.createElement("div");
