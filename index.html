@@ -4098,6 +4098,47 @@
       .chatExpandBtn {
         font-size: 14px;
       }
+      .chatCollapseBtn {
+        font-size: 12px;
+        line-height: 1;
+        transition: transform 240ms cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      .chatPanel.chatPanelCollapsed .chatCollapseBtn {
+        transform: rotate(-90deg);
+      }
+
+      /* Chat collapse / expand animation.
+         When collapsed, the body + compose shrink to zero height and fade
+         out. Transitions match the task-expand motion language (decelerate
+         curve, ~400ms) so the chat reveals/conceals smoothly. */
+      .chatHistoryBody,
+      .chatCompose {
+        transition:
+          max-height 400ms cubic-bezier(0.16, 1, 0.3, 1),
+          opacity 280ms ease,
+          margin 400ms cubic-bezier(0.16, 1, 0.3, 1),
+          padding 400ms cubic-bezier(0.16, 1, 0.3, 1),
+          border-width 400ms cubic-bezier(0.16, 1, 0.3, 1);
+        overflow: hidden;
+      }
+      .chatPanel.chatPanelCollapsed .chatHistoryBody,
+      .chatPanel.chatPanelCollapsed .chatCompose {
+        max-height: 0 !important;
+        opacity: 0;
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+        border-top-width: 0 !important;
+        border-bottom-width: 0 !important;
+        pointer-events: none;
+      }
+      /* When the panel is collapsed, the chatHistoryBody overflow needs
+         to stay hidden (which it already is during transition); restore
+         scroll once the panel is fully expanded. */
+      .chatPanel:not(.chatPanelCollapsed) .chatHistoryBody {
+        overflow-y: auto;
+      }
 
       .chatRefreshBtn {
         appearance: none;
@@ -4404,6 +4445,7 @@
         background: var(--surface-1);
         border: 1px solid var(--hairline);
         border-radius: var(--radius-lg);
+        max-height: 500px; /* explicit cap so collapse transition has a known target */
       }
       .chatComposeInput {
         width: 100%;
@@ -13843,6 +13885,14 @@
           refreshBtn.setAttribute("aria-label", "Refresh chat");
           refreshBtn.textContent = "↻";
 
+          // Collapse / show toggle — chat starts collapsed by default; users
+          // expand it when they want to see the conversation. State persists
+          // per-project in localStorage.
+          const collapseBtn = document.createElement("button");
+          collapseBtn.type = "button";
+          collapseBtn.className = "chatRefreshBtn chatCollapseBtn";
+          collapseBtn.setAttribute("aria-label", "Toggle chat visibility");
+
           // Expand / fullscreen toggle — when active, the chat panel becomes
           // a fixed overlay covering the viewport so the user can read long
           // threads and compose without the cramped detail-panel layout.
@@ -13856,6 +13906,7 @@
           chatControls.appendChild(tabs);
           chatControls.appendChild(refreshBtn);
           chatControls.appendChild(expandBtn);
+          chatControls.appendChild(collapseBtn);
           chatHeader.appendChild(chatControls);
 
           const chatBody = document.createElement("div");
@@ -14353,6 +14404,27 @@
           chatPanel.appendChild(chatBody);
           chatPanel.appendChild(compose);
           picWrap.appendChild(chatPanel);
+
+          // Chat collapse state — persists per project (default: collapsed).
+          // The chat is expensive to fetch/render, so starting collapsed keeps
+          // the detail panel snappy. User clicks the chevron to expand.
+          const chatCollapseKey = "progress_tracker_chat_collapsed_" + String(rlProjectIdForNotes);
+          let chatIsCollapsed = true;
+          try {
+            const saved = localStorage.getItem(chatCollapseKey);
+            if (saved === "false") chatIsCollapsed = false;
+          } catch (_) {}
+          const updateCollapseUI = () => {
+            chatPanel.classList.toggle("chatPanelCollapsed", chatIsCollapsed);
+            collapseBtn.textContent = chatIsCollapsed ? "▼" : "▲";
+            collapseBtn.title = chatIsCollapsed ? "Show chat" : "Hide chat";
+          };
+          updateCollapseUI();
+          collapseBtn.addEventListener("click", () => {
+            chatIsCollapsed = !chatIsCollapsed;
+            updateCollapseUI();
+            try { localStorage.setItem(chatCollapseKey, String(chatIsCollapsed)); } catch (_) {}
+          });
 
           let chatIsFullscreen = false;
           const exitFullscreenOnEsc = (ev) => {
