@@ -3341,6 +3341,136 @@
       }
       body.notesFullscreenOpen { overflow: hidden; }
 
+      /* First-run install prompt — shown when the Tampermonkey bridge
+         isn't detected. Walks the user through installing the userscript
+         that enables Rocketlane integration. */
+      .installBridgeBackdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(4px);
+        z-index: 2000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        animation: installFadeIn 220ms ease-out;
+      }
+      @keyframes installFadeIn {
+        from { opacity: 0; }
+        to   { opacity: 1; }
+      }
+      .installBridgeModal {
+        width: min(640px, 100%);
+        max-height: 90vh;
+        overflow-y: auto;
+        background: #0f1424;
+        border: 1px solid var(--hairline-strong);
+        border-radius: 16px;
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
+        padding: 28px 32px;
+        color: var(--text);
+      }
+      @media (prefers-color-scheme: light) {
+        .installBridgeModal { background: #ffffff; }
+      }
+      .installBridgeModal h2 {
+        font-size: 20px;
+        font-weight: 700;
+        margin: 0 0 4px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .installBridgeModal h2 .installIcon {
+        font-size: 24px;
+      }
+      .installBridgeModal .installSubtitle {
+        color: var(--muted);
+        font-size: 13px;
+        margin: 0 0 18px;
+        line-height: 1.5;
+      }
+      .installBridgeModal ol {
+        padding-left: 22px;
+        margin: 0 0 18px;
+        font-size: 13.5px;
+        line-height: 1.7;
+      }
+      .installBridgeModal ol li { margin-bottom: 8px; }
+      .installBridgeModal a {
+        color: var(--accent);
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      .installBridgeModal code,
+      .installBridgeModal kbd {
+        background: var(--surface-3);
+        padding: 1px 6px;
+        border-radius: 4px;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 12px;
+        border: 1px solid var(--hairline);
+      }
+      .installBridgeModal .installFile {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 12px;
+        background: var(--surface-3);
+        border: 1px solid var(--hairline);
+        padding: 6px 10px;
+        border-radius: 6px;
+        margin: 6px 0;
+      }
+      .installBridgeActions {
+        display: flex;
+        gap: 10px;
+        justify-content: flex-end;
+        margin-top: 8px;
+        padding-top: 16px;
+        border-top: 1px solid var(--hairline);
+      }
+      .installBridgeBtn {
+        appearance: none;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        padding: 9px 16px;
+        border-radius: 8px;
+        border: 1px solid var(--hairline-strong);
+        background: var(--surface-2);
+        color: var(--text);
+        cursor: pointer;
+        transition: background 100ms ease, border-color 100ms ease;
+      }
+      .installBridgeBtn:hover { background: var(--surface-3); }
+      .installBridgeBtn.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #0a0f1f;
+      }
+      .installBridgeBtn.primary:hover {
+        filter: brightness(1.1);
+      }
+      .installStatusLine {
+        font-size: 12px;
+        color: var(--muted2);
+        margin-top: 14px;
+        padding: 10px 12px;
+        background: var(--surface-2);
+        border-radius: 8px;
+        border-left: 3px solid var(--accent);
+      }
+      .installStatusLine.ok {
+        border-left-color: #22c55e;
+        color: var(--text);
+      }
+      .installStatusLine.warn {
+        border-left-color: #f59e0b;
+      }
+
       /* Task notes popout — right-click on a task notes textarea opens this
          centered modal that's larger than the inline textarea but smaller
          than fullscreen. Mirrors the notes fullscreen styling. */
@@ -19175,6 +19305,114 @@
       updateDataFileButtons();
       render();
       void rocketlaneMaybeRunLiveSync();
+
+      // ──────────────────────────────────────────────────────────────────
+      // First-run install prompt
+      // ──────────────────────────────────────────────────────────────────
+      // If the Tampermonkey bridge isn't injected, walk the user through
+      // installing it. The userscript runs at document-start; we give it a
+      // ~1.5s grace period before deciding it's missing. Dismissable for
+      // the session — remembers via sessionStorage so a deliberate dismiss
+      // doesn't haunt every reload, but a new browser session re-prompts.
+      function showInstallBridgePrompt() {
+        if (document.getElementById("installBridgeBackdrop")) return;
+        if (sessionStorage.getItem("progress_tracker_install_dismissed_v1") === "1") return;
+
+        const backdrop = document.createElement("div");
+        backdrop.id = "installBridgeBackdrop";
+        backdrop.className = "installBridgeBackdrop";
+
+        const modal = document.createElement("div");
+        modal.className = "installBridgeModal";
+        modal.innerHTML = `
+          <h2><span class="installIcon">🚀</span> Setup required</h2>
+          <p class="installSubtitle">
+            The Rocketlane bridge (a small Tampermonkey userscript) isn't running yet.
+            Without it the tracker can't load chat, files, or notifications.
+          </p>
+
+          <ol>
+            <li>
+              Install the
+              <a href="https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo" target="_blank" rel="noopener noreferrer">Tampermonkey</a>
+              Chrome extension if you don't have it.
+            </li>
+            <li>
+              Open Tampermonkey's Dashboard (puzzle icon → Tampermonkey → Dashboard).
+              Click the <kbd>+</kbd> tab to create a new script.
+            </li>
+            <li>
+              Paste the contents of
+              <span class="installFile">rocketlane-chat-bridge.user.js</span>
+              from the
+              <a href="https://github.com/Hapnes-dev/Project-Progress-Tracker/blob/main/rocketlane-chat-bridge/rocketlane-chat-bridge.user.js" target="_blank" rel="noopener noreferrer">GitHub repo</a>,
+              then save (<kbd>Ctrl</kbd>+<kbd>S</kbd>).
+            </li>
+            <li>
+              Go to <code>chrome://extensions</code> → Tampermonkey → <strong>Details</strong>
+              → toggle <strong>Allow access to file URLs</strong> to <strong>ON</strong>.
+            </li>
+            <li>
+              Open <a href="https://kiona.rocketlane.com" target="_blank" rel="noopener noreferrer">kiona.rocketlane.com</a> once while logged in so the userscript can capture your session key.
+            </li>
+            <li>
+              Come back here and click <strong>Reload</strong> below.
+            </li>
+          </ol>
+
+          <div class="installStatusLine" id="installStatusLine">
+            Bridge status: <strong>not detected</strong>
+          </div>
+
+          <div class="installBridgeActions">
+            <button type="button" class="installBridgeBtn" id="installDismissBtn">Dismiss for now</button>
+            <button type="button" class="installBridgeBtn primary" id="installReloadBtn">Reload page</button>
+          </div>
+        `;
+        backdrop.appendChild(modal);
+        document.body.appendChild(backdrop);
+
+        document.getElementById("installDismissBtn").addEventListener("click", () => {
+          sessionStorage.setItem("progress_tracker_install_dismissed_v1", "1");
+          backdrop.remove();
+        });
+        document.getElementById("installReloadBtn").addEventListener("click", () => {
+          // Clear the dismiss flag so we re-evaluate after reload
+          sessionStorage.removeItem("progress_tracker_install_dismissed_v1");
+          location.reload();
+        });
+
+        // Poll once per second — if the bridge appears (e.g., user installed
+        // the userscript without reloading), close the modal automatically.
+        const poll = window.setInterval(() => {
+          if (window.RocketlaneBridge?.isAvailable) {
+            window.clearInterval(poll);
+            const line = document.getElementById("installStatusLine");
+            if (line) {
+              line.className = "installStatusLine ok";
+              line.innerHTML = "Bridge detected. <strong>Reloading…</strong>";
+            }
+            window.setTimeout(() => location.reload(), 800);
+          }
+        }, 1000);
+        // Stop polling if user closes the modal
+        backdrop.addEventListener("click", (e) => {
+          if (e.target === backdrop) {
+            // Click on backdrop = dismiss for session
+            sessionStorage.setItem("progress_tracker_install_dismissed_v1", "1");
+            window.clearInterval(poll);
+            backdrop.remove();
+          }
+        });
+      }
+
+      // Give the userscript ~1.5s to inject (it runs at document-start in
+      // most cases, but other tabs / heavy pages can delay it slightly).
+      window.setTimeout(() => {
+        if (!window.RocketlaneBridge?.isAvailable) {
+          showInstallBridgePrompt();
+        }
+      }, 1500);
     </script>
   </body>
 </html>
