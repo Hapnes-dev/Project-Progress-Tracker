@@ -2539,13 +2539,14 @@
 
       /* Per-category open animation. One-shot keyframe — plays when the
          section is freshly mounted with the .areaBoxJustOpened marker.
-         Same decelerate curve as the parent collapsibles for consistency. */
+         Slower / more visible than the parent collapsibles so the open
+         feels deliberate when you toggle one card. */
       @keyframes areaBoxOpenIn {
-        from { opacity: 0; transform: translateY(-6px); }
-        to   { opacity: 1; transform: translateY(0); }
+        from { opacity: 0; transform: translateY(-10px) scale(0.985); }
+        to   { opacity: 1; transform: translateY(0) scale(1); }
       }
       .areaBox.areaBoxJustOpened {
-        animation: areaBoxOpenIn 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+        animation: areaBoxOpenIn 600ms cubic-bezier(0.16, 1, 0.3, 1) both;
       }
 
       /* Chevron in the category title — points down when collapsed,
@@ -15233,12 +15234,12 @@
           // Per-category open animation: one-shot keyframe fires when the
           // section is freshly mounted with the expanded marker. The class
           // is removed after the animation so subsequent re-renders don't
-          // re-fire it.
+          // re-fire it. Duration matches the CSS animation (600ms) + buffer.
           const catCardKey = String(p.id) + "|" + String(area);
           if (categoryJustExpanded.has(catCardKey)) {
             categoryJustExpanded.delete(catCardKey);
             section.classList.add("areaBoxJustOpened");
-            window.setTimeout(() => section.classList.remove("areaBoxJustOpened"), 500);
+            window.setTimeout(() => section.classList.remove("areaBoxJustOpened"), 750);
           }
 
           const title = document.createElement("div");
