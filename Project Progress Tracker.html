@@ -18530,8 +18530,14 @@
                 };
               } catch (_) { /* fall through to list refetch */ }
             }
-            // Fallback: refetch the project list (may still return cached URLs)
-            const fresh = await bridge.fetchProjectAttachments(rlPid);
+            // Fallback: refetch both project lists (folders + task atts)
+            const [taskAtts, folderAtts] = await Promise.all([
+              bridge.fetchProjectAttachments(rlPid),
+              typeof bridge.fetchProjectFolders === "function"
+                ? bridge.fetchProjectFolders(rlPid).catch(() => [])
+                : Promise.resolve([]),
+            ]);
+            const fresh = [...(taskAtts || []), ...(folderAtts || [])];
             const a = fresh.find((x) => x.attachmentId === attachmentId);
             return {
               full: String(a?.downloadUrl ?? a?.location ?? "").trim(),
@@ -18540,7 +18546,29 @@
           };
 
           try {
-            const atts = await bridge.fetchProjectAttachments(rlPid);
+            // Fetch both endpoints in parallel:
+            //  - /attachments/project/{id}  → task/conversation/form attachments
+            //  - /projects/{id}/folders    → Shared Files + Private Files
+            // Merge into one list so the popover shows everything Rocketlane
+            // surfaces on its own Files page, de-duplicated by attachmentId.
+            const [taskAtts, folderAtts] = await Promise.all([
+              bridge.fetchProjectAttachments(rlPid),
+              typeof bridge.fetchProjectFolders === "function"
+                ? bridge.fetchProjectFolders(rlPid).catch((e) => {
+                    console.warn("[FilesPopover] folder fetch failed:", e);
+                    return [];
+                  })
+                : Promise.resolve([]),
+            ]);
+            const seen = new Set();
+            const merged = [];
+            for (const a of [...(taskAtts || []), ...(folderAtts || [])]) {
+              const id = a?.attachmentId;
+              if (id && seen.has(id)) continue;
+              if (id) seen.add(id);
+              merged.push(a);
+            }
+            const atts = merged;
             attsRef = atts;
             body.textContent = "";
 

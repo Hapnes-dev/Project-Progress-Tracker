@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.3.0
+// @version      1.4.0
 // @description  Bridges Rocketlane chat API to the local Project Progress Tracker, bypassing CORS.
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
@@ -379,6 +379,38 @@
           ontimeout: () => reject(new Error("Marking notifications seen timed out")),
         });
       });
+    },
+
+    /**
+     * Fetch the project's "Shared Files" / "Private Files" folders.
+     * Returns a flat array of attachment objects with an extra
+     * `_folder` field (folder name) and `_isPrivate` flag.
+     * Complements fetchProjectAttachments() which only covers
+     * task/conversation attachments — folder files live elsewhere.
+     */
+    async fetchProjectFolders(projectId) {
+      const data = await gmFetch(
+        TENANT_API + "/projects/" + encodeURIComponent(projectId) + "/folders"
+      );
+      const folders = Array.isArray(data?.value) ? data.value
+        : Array.isArray(data) ? data
+        : [];
+      const out = [];
+      for (const f of folders) {
+        const folderName = String(f?.folderName ?? "Files").trim();
+        const isPrivate = !!f?.isPrivate;
+        const atts = Array.isArray(f?.attachments) ? f.attachments : [];
+        for (const a of atts) {
+          out.push({
+            ...a,
+            _folder: folderName,
+            _isPrivate: isPrivate,
+            _source: folderName,
+            _link: null,
+          });
+        }
+      }
+      return out;
     },
 
     async fetchProjectAttachments(projectId) {
