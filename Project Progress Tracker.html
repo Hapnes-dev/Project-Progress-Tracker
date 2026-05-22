@@ -4107,6 +4107,53 @@
         transform: rotate(-90deg);
       }
 
+      /* Generic collapsible-section chevron button — used in Notes and
+         Categories headers. Visually matches the chat collapse button. */
+      .sectionCollapseBtn {
+        appearance: none;
+        background: transparent;
+        border: 1px solid var(--hairline);
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1;
+        width: 22px;
+        height: 22px;
+        border-radius: 6px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+        flex-shrink: 0;
+      }
+      .sectionCollapseBtn:hover {
+        background: var(--surface-3);
+        color: var(--text);
+        border-color: var(--hairline-strong);
+      }
+
+      /* Generic collapsible section — wraps content that can be folded
+         away with the same smooth motion as the chat panel. */
+      .collapsibleSection {
+        max-height: 4000px; /* generous cap; collapses to 0 */
+        opacity: 1;
+        overflow: hidden;
+        transition:
+          max-height 400ms cubic-bezier(0.16, 1, 0.3, 1),
+          opacity 280ms ease,
+          margin 400ms cubic-bezier(0.16, 1, 0.3, 1),
+          padding 400ms cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      .collapsibleSection.collapsed {
+        max-height: 0;
+        opacity: 0;
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+        pointer-events: none;
+      }
+
       /* Chat collapse / expand animation.
          When collapsed, the body + compose shrink to zero height and fade
          out. Transitions match the task-expand motion language (decelerate
@@ -13605,6 +13652,11 @@
         notesHeader.style.gap = "10px";
         notesHeader.style.marginTop = "20px";
         notesHeader.style.marginBottom = "8px";
+        notesHeader.style.cursor = "pointer";
+        const notesCollapseBtn = document.createElement("button");
+        notesCollapseBtn.type = "button";
+        notesCollapseBtn.className = "sectionCollapseBtn";
+        notesCollapseBtn.setAttribute("aria-label", "Toggle notes");
         const notesHeaderLabel = document.createElement("div");
         notesHeaderLabel.className = "small";
         notesHeaderLabel.textContent = "Notes";
@@ -13613,6 +13665,7 @@
         notesHeaderLabel.style.textTransform = "uppercase";
         notesHeaderLabel.style.letterSpacing = "0.06em";
         notesHeaderLabel.style.color = "var(--muted)";
+        notesHeader.appendChild(notesCollapseBtn);
         notesHeader.appendChild(notesHeaderLabel);
 
         // Sync status badge
@@ -13840,9 +13893,43 @@
         });
 
         // Append the single Notes block to the detail view
+        // Wrap notes content in a collapsible section. Header always visible;
+        // textarea + save status collapse/expand with smooth animation.
+        const notesSection = document.createElement("div");
+        notesSection.className = "collapsibleSection";
+        notesSection.appendChild(notesTa);
+        notesSection.appendChild(notesSavedMsg);
+
+        // Notes collapse state — persists per project (default: collapsed)
+        const notesCollapseKey = "progress_tracker_notes_collapsed_" + String(p.id);
+        let notesIsCollapsedLocal = true;
+        try {
+          const saved = localStorage.getItem(notesCollapseKey);
+          if (saved === "false") notesIsCollapsedLocal = false;
+        } catch (_) {}
+        const updateNotesCollapseUI = () => {
+          notesSection.classList.toggle("collapsed", notesIsCollapsedLocal);
+          notesCollapseBtn.textContent = notesIsCollapsedLocal ? "▼" : "▲";
+          notesHeader.title = notesIsCollapsedLocal ? "Show notes" : "Hide notes";
+        };
+        updateNotesCollapseUI();
+        const toggleNotes = () => {
+          notesIsCollapsedLocal = !notesIsCollapsedLocal;
+          updateNotesCollapseUI();
+          try { localStorage.setItem(notesCollapseKey, String(notesIsCollapsedLocal)); } catch (_) {}
+        };
+        notesHeader.addEventListener("click", (e) => {
+          // Avoid toggling when clicking on links or interactive elements
+          const t = e.target;
+          if (t && t.closest && t.closest("a, button:not(.sectionCollapseBtn), input")) {
+            // Allow clicks on the collapse button itself
+            if (!t.closest(".sectionCollapseBtn")) return;
+          }
+          toggleNotes();
+        });
+
         picWrap.appendChild(notesHeader);
-        picWrap.appendChild(notesTa);
-        picWrap.appendChild(notesSavedMsg);
+        picWrap.appendChild(notesSection);
 
         // ──────────────────────────────────────────────────────────────────
         // Chat history (via Rocketlane Chat Bridge userscript / extension)
@@ -14896,9 +14983,18 @@
         const catTools = document.createElement("div");
         catTools.className = "sectionTitle";
         catTools.style.marginTop = "6px";
+        catTools.style.cursor = "pointer";
+        const catCollapseBtn = document.createElement("button");
+        catCollapseBtn.type = "button";
+        catCollapseBtn.className = "sectionCollapseBtn";
+        catCollapseBtn.setAttribute("aria-label", "Toggle categories");
         const catH = document.createElement("h3");
         catH.textContent = "Categories";
         catH.style.fontSize = "14px";
+        catH.style.display = "flex";
+        catH.style.alignItems = "center";
+        catH.style.gap = "8px";
+        catH.insertBefore(catCollapseBtn, catH.firstChild);
         const addCatBtn = document.createElement("button");
         addCatBtn.className = "btn";
         addCatBtn.type = "button";
@@ -16188,7 +16284,37 @@
           areasGrid.appendChild(section);
         }
 
-        root.appendChild(areasGrid);
+        // Wrap categories grid in a collapsible section. Header stays visible;
+        // the grid expands/collapses smoothly.
+        const catSection = document.createElement("div");
+        catSection.className = "collapsibleSection";
+        catSection.appendChild(areasGrid);
+
+        const catCollapseKey = "progress_tracker_categories_collapsed_" + String(p.id);
+        let catIsCollapsedLocal = true;
+        try {
+          const saved = localStorage.getItem(catCollapseKey);
+          if (saved === "false") catIsCollapsedLocal = false;
+        } catch (_) {}
+        const updateCatCollapseUI = () => {
+          catSection.classList.toggle("collapsed", catIsCollapsedLocal);
+          catCollapseBtn.textContent = catIsCollapsedLocal ? "▼" : "▲";
+          catTools.title = catIsCollapsedLocal ? "Show categories" : "Hide categories";
+        };
+        updateCatCollapseUI();
+        const toggleCats = () => {
+          catIsCollapsedLocal = !catIsCollapsedLocal;
+          updateCatCollapseUI();
+          try { localStorage.setItem(catCollapseKey, String(catIsCollapsedLocal)); } catch (_) {}
+        };
+        catTools.addEventListener("click", (e) => {
+          const t = e.target;
+          if (t && t.closest && t.closest("button:not(.sectionCollapseBtn), input, select")) return;
+          toggleCats();
+        });
+
+        // Replace the standalone areasGrid append with the wrapped section
+        root.appendChild(catSection);
 
         els.detailBody.innerHTML = "";
         els.detailBody.appendChild(root);
