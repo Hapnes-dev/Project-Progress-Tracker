@@ -2,7 +2,13 @@
 
 A single-file HTML dashboard for tracking project delivery progress, with deep integration into [Rocketlane](https://www.rocketlane.com/) for syncing project data, chat history, attachments, and notifications.
 
-Runs entirely in the browser from a `file://` URL — no build step, no backend, no install beyond opening the HTML file.
+## 🌐 Try it live
+
+**[hapnes-dev.github.io/Project-Progress-Tracker](https://hapnes-dev.github.io/Project-Progress-Tracker/)**
+
+The hosted version always runs the latest commit on `main`. State is still stored in *your* browser's `localStorage` — nothing leaves your device. You still need to install the Tampermonkey bridge below for Rocketlane integration to work.
+
+Prefer a local copy? Download `Project Progress Tracker.html` and open it from your desktop — it works the same way.
 
 ## Features
 

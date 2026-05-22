@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.2.0
+// @version      1.3.0
 // @description  Bridges Rocketlane chat API to the local Project Progress Tracker, bypassing CORS.
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
@@ -10,6 +10,7 @@
 // @downloadURL  https://raw.githubusercontent.com/hapnes-dev/tampermonkey-scripts/main/rocketlane-chat-bridge/rocketlane-chat-bridge.user.js
 // @match        https://kiona.rocketlane.com/*
 // @match        file:///*
+// @match        https://hapnes-dev.github.io/Project-Progress-Tracker/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
