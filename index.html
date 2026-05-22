@@ -2537,6 +2537,28 @@
          looked too wide. Sibling cards may shift between rows when one
          grows; that's a known CSS Grid auto-placement effect. */
 
+      /* Per-category open animation. One-shot keyframe — plays when the
+         section is freshly mounted with the .areaBoxJustOpened marker.
+         Same decelerate curve as the parent collapsibles for consistency. */
+      @keyframes areaBoxOpenIn {
+        from { opacity: 0; transform: translateY(-6px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      .areaBox.areaBoxJustOpened {
+        animation: areaBoxOpenIn 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+      }
+
+      /* Chevron in the category title — points down when collapsed,
+         flips up when the section is expanded. The class
+         .areaBoxExpanded is added in renderDetail when expandedCategories
+         is true for this area. */
+      .areaBoxCollapseBtn {
+        transition: transform 240ms cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      .areaBox.areaBoxExpanded .areaBoxCollapseBtn {
+        transform: rotate(180deg);
+      }
+
       /* Task rows — subtle hairline border, status communicated by tinted fill.
          Smooth transitions so the row's selected-state visual changes settle
          in alongside the details expansion instead of snapping. */
@@ -15203,7 +15225,16 @@
         for (const area of getAreasForProject(p)) {
           const section = document.createElement("div");
           section.className = "areaBox" + (area === "rocketlane_tasks" ? " rocketlaneBox" : "");
-          // (Category animation removed — instant toggle is the cleanest UX.)
+          // Per-category open animation: one-shot keyframe fires when the
+          // section is freshly mounted with the expanded marker. The class
+          // is removed after the animation so subsequent re-renders don't
+          // re-fire it.
+          const catCardKey = String(p.id) + "|" + String(area);
+          if (categoryJustExpanded.has(catCardKey)) {
+            categoryJustExpanded.delete(catCardKey);
+            section.classList.add("areaBoxJustOpened");
+            window.setTimeout(() => section.classList.remove("areaBoxJustOpened"), 500);
+          }
 
           const title = document.createElement("div");
           title.className = "sectionTitle";
@@ -15211,6 +15242,21 @@
           h.textContent = labelForArea(area, p);
           title.style.cursor = "pointer";
           h.style.cursor = "pointer";
+          // Chevron button — visual indicator that the category is collapsible.
+          // Shows the same way as Notes/Categories/Chat collapse buttons.
+          const catCardCollapseBtn = document.createElement("button");
+          catCardCollapseBtn.type = "button";
+          catCardCollapseBtn.className = "sectionCollapseBtn areaBoxCollapseBtn";
+          catCardCollapseBtn.setAttribute("aria-label", "Toggle " + labelForArea(area, p));
+          catCardCollapseBtn.textContent = "▼";  // will be flipped to ▲ via CSS when expanded
+          catCardCollapseBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            toggleCategory();
+          });
+          h.style.display = "flex";
+          h.style.alignItems = "center";
+          h.style.gap = "8px";
+          h.insertBefore(catCardCollapseBtn, h.firstChild);
           const addBtn = document.createElement("button");
           addBtn.className = "btn";
           addBtn.type = "button";
@@ -15300,8 +15346,12 @@
 
           const toggleCategory = () => {
             p.expandedCategories = p.expandedCategories ?? {};
-            p.expandedCategories[area] = !p.expandedCategories[area];
+            const willExpand = !p.expandedCategories[area];
+            p.expandedCategories[area] = willExpand;
             // UI-only state; don't save.
+            if (willExpand) {
+              categoryJustExpanded.add(String(p.id) + "|" + String(area));
+            }
             render();
           };
 
