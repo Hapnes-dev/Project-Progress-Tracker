@@ -16151,17 +16151,9 @@
             // section's click handler will already fire; this is harmless.
           });
 
-          title.addEventListener("contextmenu", (e) => {
-            if (/** @type {HTMLElement} */ (e.target)?.closest?.("button")) return;
-            e.preventDefault();
-            showContextMenu(e, [
-              { label: "Rename category", action: () => {
-                const next = prompt("Rename category:", labelForArea(area, p));
-                if (next != null && next.trim()) renameArea(p.id, area, next.trim());
-              }},
-              { label: "Remove category", danger: true, action: () => removeCategory(p.id, area) },
-            ]);
-          });
+          // Category rename / remove right-click menu removed —
+          // categories are managed entirely from Rocketlane, so editing
+          // them locally creates drift that doesn't sync back.
 
           // Mark the section as expanded so CSS can take it full-width.
           if (showTasksForThisCategory) section.classList.add("areaBoxExpanded");
@@ -16181,18 +16173,8 @@
                 (inProgressCount > 0 ? " | " + inProgressCount + " In progress" : "")
               : "No tasks yet.";
             info.style.cursor = "pointer";
-            info.title = "Click to " + (showTasksForThisCategory ? "hide" : "show") + " tasks. Right-click for Rename/Remove.";
+            info.title = "Click to " + (showTasksForThisCategory ? "hide" : "show") + " tasks.";
             info.addEventListener("click", toggleCategory);
-            info.addEventListener("contextmenu", (e) => {
-              e.preventDefault();
-              showContextMenu(e, [
-                { label: "Rename category", action: () => {
-                  const next = prompt("Rename category:", labelForArea(area, p));
-                  if (next != null && next.trim()) renameArea(p.id, area, next.trim());
-                }},
-                { label: "Remove category", danger: true, action: () => removeCategory(p.id, area) },
-              ]);
-            });
             section.appendChild(title);
             section.appendChild(info);
             areasGrid.appendChild(section);
