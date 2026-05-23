@@ -16146,7 +16146,10 @@
                 // can shimmer text rendering during the slide.
                 const dx = Math.round(oldRect.left - newRect.left);
                 const dy = Math.round(oldRect.top - newRect.top);
-                if (dx === 0 && dy === 0) continue;
+                // Ignore tiny deltas (≤2px) — those are rendering noise,
+                // not real layout shift, and animating them just makes
+                // the card jitter for a fraction of a second.
+                if (Math.abs(dx) <= 2 && Math.abs(dy) <= 2) continue;
                 box.style.transition = "none";
                 box.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
                 box.style.willChange = "transform";
@@ -16176,18 +16179,38 @@
             };
           };
 
+          // Wrap the (capture → render → applyFlip) sequence so the page's
+          // scroll position is FROZEN across the render. Without this, any
+          // tiny scroll change introduced by render() (e.g. focus shift,
+          // chat refresh, layout reflow) gets baked into the FLIP deltas
+          // and shows up as "everything moved up a little" jitter.
+          const withScrollLock = (fn) => {
+            const sx = window.scrollX, sy = window.scrollY;
+            fn();
+            // Run AFTER any render-triggered scroll settles
+            if (window.scrollX !== sx || window.scrollY !== sy) {
+              window.scrollTo(sx, sy);
+            }
+            // Belt-and-braces: re-lock on the next frame too
+            requestAnimationFrame(() => {
+              if (window.scrollX !== sx || window.scrollY !== sy) {
+                window.scrollTo(sx, sy);
+              }
+            });
+          };
+
           const toggleCategory = () => {
             p.expandedCategories = p.expandedCategories ?? {};
             const willExpand = !p.expandedCategories[area];
             if (willExpand) {
               // Capture old positions BEFORE state change + render.
-              // The expanding card itself is excluded — its own open
-              // animation (clip-path wipe) plays separately.
               const applyFlip = flipSiblingCategories();
               p.expandedCategories[area] = true;
               categoryJustExpanded.add(String(p.id) + "|" + String(area));
-              render();
-              applyFlip();
+              withScrollLock(() => {
+                render();
+                applyFlip();
+              });
             } else {
               // Play the close-out animation on the existing section, THEN
               // re-render to remove the expanded content. Without the delay,
@@ -16195,17 +16218,15 @@
               section.classList.add("areaBoxJustClosing");
               const finish = () => {
                 section.removeEventListener("animationend", onDone);
-                // Capture rects right before the closing card disappears.
                 const applyFlip = flipSiblingCategories();
                 p.expandedCategories[area] = false;
-                render();
-                applyFlip();
+                withScrollLock(() => {
+                  render();
+                  applyFlip();
+                });
               };
               const onDone = () => finish();
               section.addEventListener("animationend", onDone);
-              // Safety fallback if animationend never fires (e.g. tab hidden).
-              // Has to outlast the close animation (420ms) so it doesn't
-              // yank the DOM mid-collapse.
               window.setTimeout(() => {
                 if (section.classList.contains("areaBoxJustClosing")) {
                   finish();
