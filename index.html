@@ -5413,14 +5413,11 @@
             />
           </div>
           <div>
-            <!-- Rocketlane link input removed — derived automatically from
-                 the Rocketlane projectId below. Keep a hidden input so all
-                 the existing form-handling code still finds an element. -->
+            <!-- Rocketlane link + projectId hidden from the UI — both are
+                 managed automatically by the Rocketlane sync flow. Kept as
+                 hidden inputs so form-handling code still finds elements. -->
             <input type="hidden" id="fRocketlaneUrl" />
-            <label class="small" for="fRocketlaneProjectId">
-              Rocketlane projectId (optional)
-            </label>
-            <input class="input" id="fRocketlaneProjectId" placeholder="e.g. 201" inputmode="numeric" />
+            <input type="hidden" id="fRocketlaneProjectId" />
           </div>
         </div>
         <div class="dlgFt">
@@ -13719,8 +13716,13 @@
         if (els.btnOpenRocketlaneProject) {
           const rlPid = String(p?.rocketlaneProjectId ?? "").trim();
           if (rlPid) {
-            els.btnOpenRocketlaneProject.disabled = false;
-            els.btnOpenRocketlaneProject.style.display = "";
+            // Permanently hidden — the dynamic favicon toolbar (above)
+            // now renders a "Rocketlane" link from p.rocketlaneUrl, so
+            // this static button would just duplicate it. Keep the
+            // element in the DOM so any code that looks it up still
+            // finds it; just never show it.
+            els.btnOpenRocketlaneProject.disabled = true;
+            els.btnOpenRocketlaneProject.style.display = "none";
             els.btnOpenRocketlaneProject.dataset.rlProjectId = rlPid;
           } else {
             els.btnOpenRocketlaneProject.disabled = true;
