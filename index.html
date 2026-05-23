@@ -16254,18 +16254,25 @@
             if (supportsViewTransitions) {
               if (willExpand) categoryJustExpanded.add(String(p.id) + "|" + String(area));
               const sx = window.scrollX, sy = window.scrollY;
-              const t = document.startViewTransition(() => {
-                p.expandedCategories[area] = willExpand;
-                render();
-              });
-              // Even with the API, restore scroll defensively in case
-              // anything inside render() nudges it.
-              t.finished.finally(() => {
+              const lock = () => {
                 if (window.scrollX !== sx || window.scrollY !== sy) {
                   try { window.scrollTo({ left: sx, top: sy, behavior: "instant" }); }
                   catch { window.scrollTo(sx, sy); }
                 }
+              };
+              const t = document.startViewTransition(() => {
+                p.expandedCategories[area] = willExpand;
+                render();
+                // Restore scroll IN the callback so the NEW snapshot
+                // (taken by the browser after this callback returns)
+                // already reflects the locked scroll position. This is
+                // the only place we can pre-empt the browser's own
+                // viewport-anchoring logic during render().
+                lock();
               });
+              // Belt-and-braces: re-lock after the transition completes
+              // in case anything async-fires inside render's settled.
+              if (t.finished) t.finished.finally(lock);
               return;
             }
 
