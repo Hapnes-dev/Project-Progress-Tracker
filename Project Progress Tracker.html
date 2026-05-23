@@ -1147,7 +1147,14 @@
       .task {
         display: grid;
         grid-template-columns: 180px 1fr auto;
-        gap: 10px;
+        /* Horizontal gap only — collapsed .taskDetails was leaving a 10px
+           row-gap below the visible row, making the task text look like
+           it was floating above the bottom of the box. The vertical
+           spacing between the title row and expanded details is now
+           controlled entirely by .taskDetails margin-top (which transitions
+           from 0 to 4px on expand). */
+        column-gap: 10px;
+        row-gap: 0;
         align-items: center;
         border: 1px solid var(--border);
         border-radius: 12px;
