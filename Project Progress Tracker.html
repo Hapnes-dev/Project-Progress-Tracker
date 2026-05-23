@@ -13881,6 +13881,44 @@
         // shows the actual brand mark instead of an emoji approximation.
         if (els.detailDynamicLinks) {
           els.detailDynamicLinks.innerHTML = "";
+          // If the project is synced with Rocketlane but local link fields
+          // are empty, kick off a one-time fetch of HubSpot Deal Description
+          // links and persist them into the project so the toolbar buttons
+          // appear without the user having to open + save the Edit dialog.
+          const rlPid = String(p.rocketlaneProjectId ?? "").trim();
+          const missingAny =
+            !String(p.overviewUrl ?? "").trim() ||
+            !String(p.oneflowUrl  ?? "").trim() ||
+            !String(p.youniumUrl  ?? "").trim() ||
+            !String(p.hubspotUrl  ?? "").trim();
+          if (rlPid && missingAny && !p._autoLinkFetchInFlight && !p._autoLinkFetchTried) {
+            p._autoLinkFetchInFlight = true;
+            rocketlaneFetchHubspotDealDescription(rlPid)
+              .then(({ links }) => {
+                let changed = false;
+                const fill = (key, value) => {
+                  if (!value) return;
+                  if (String(p[key] ?? "").trim()) return; // never overwrite user input
+                  p[key] = value;
+                  changed = true;
+                };
+                fill("overviewUrl", links.zendesk);
+                fill("oneflowUrl",  links.oneflow);
+                fill("youniumUrl",  links.younium);
+                fill("hubspotUrl",  links.hubspot);
+                if (links.rocketlane) fill("rocketlaneUrl", links.rocketlane);
+                if (changed) {
+                  save();
+                  // Re-render the detail view so the new buttons appear
+                  if (state.selectedProjectId === p.id) renderDetail();
+                }
+              })
+              .catch((err) => console.warn("[ProjectLinks] auto-fetch failed:", err))
+              .finally(() => {
+                p._autoLinkFetchInFlight = false;
+                p._autoLinkFetchTried = true;
+              });
+          }
           const faviconFor = (host) =>
             "https://www.google.com/s2/favicons?domain=" + host + "&sz=32";
           const linkDefs = [
