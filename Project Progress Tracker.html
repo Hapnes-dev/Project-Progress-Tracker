@@ -2687,20 +2687,12 @@
 
       /* Per-category open animation. Uses clip-path to wipe the card in
          from top to bottom — content stays at full size the whole time,
-         so text/buttons never look squished. The clip-path reveal pairs
-         with a slight opacity fade and a small drop for momentum. */
+         so text/buttons never look squished. No transform here — the
+         FLIP system in JS owns transform for the layout-slide. */
       @keyframes areaBoxOpenIn {
-        0% {
-          opacity: 0;
-          clip-path: inset(0 0 100% 0);
-          transform: translateY(-6px);
-        }
-        70% { opacity: 1; }
-        100% {
-          opacity: 1;
-          clip-path: inset(0 0 0 0);
-          transform: translateY(0);
-        }
+        0%   { opacity: 0; clip-path: inset(0 0 100% 0); }
+        70%  { opacity: 1; }
+        100% { opacity: 1; clip-path: inset(0 0 0 0); }
       }
       .areaBox.areaBoxJustOpened {
         animation: areaBoxOpenIn 700ms cubic-bezier(0.22, 1, 0.36, 1) both;
@@ -2708,20 +2700,19 @@
       /* Symmetric close: clip-path wipes the card up from the bottom
          while it fades out. Same no-stretch principle. */
       @keyframes areaBoxCloseOut {
-        0% {
-          opacity: 1;
-          clip-path: inset(0 0 0 0);
-          transform: translateY(0);
-        }
-        100% {
-          opacity: 0;
-          clip-path: inset(0 0 100% 0);
-          transform: translateY(-4px);
-        }
+        0%   { opacity: 1; clip-path: inset(0 0 0 0); }
+        100% { opacity: 0; clip-path: inset(0 0 100% 0); }
       }
       .areaBox.areaBoxJustClosing {
         animation: areaBoxCloseOut 420ms cubic-bezier(0.4, 0, 1, 1) forwards;
         pointer-events: none;
+      }
+      /* While a category is FLIP-sliding, suppress hover restyles on
+         every card — the moving border/background flicker as the cursor
+         passes is what reads as "vibration". */
+      .areasGrid.areaBoxFlipping .areaBox:hover {
+        border-color: var(--hairline);
+        background: var(--surface-1);
       }
 
       /* Chevron in the category title — points right (▶) when collapsed,
@@ -16128,35 +16119,56 @@
           //      stays in its old spot.
           //   4. Force reflow, then transition back to identity → cards
           //      slide from old to new position smoothly.
-          const flipSiblingCategories = (excludeArea) => {
+          // FLIP every visible category card (including the toggled one).
+          // The toggled card's own open/close animation uses ONLY clip-path
+          // + opacity, so it doesn't fight the transform applied here.
+          const flipSiblingCategories = () => {
             const oldRects = new Map();
             for (const box of document.querySelectorAll(".areaBox")) {
               const a = box.dataset.area;
-              if (a && a !== excludeArea) oldRects.set(a, box.getBoundingClientRect());
+              if (a) oldRects.set(a, box.getBoundingClientRect());
             }
             return () => {
+              const grid = document.querySelector(".areasGrid");
+              if (grid) grid.classList.add("areaBoxFlipping");
+              let pending = 0;
+              const tick = () => {
+                pending--;
+                if (pending <= 0 && grid) grid.classList.remove("areaBoxFlipping");
+              };
               for (const box of document.querySelectorAll(".areaBox")) {
                 const a = box.dataset.area;
-                if (!a || a === excludeArea) continue;
+                if (!a) continue;
                 const oldRect = oldRects.get(a);
                 if (!oldRect) continue;
                 const newRect = box.getBoundingClientRect();
-                const dx = oldRect.left - newRect.left;
-                const dy = oldRect.top - newRect.top;
-                if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+                // Round deltas to whole pixels — sub-pixel transforms
+                // can shimmer text rendering during the slide.
+                const dx = Math.round(oldRect.left - newRect.left);
+                const dy = Math.round(oldRect.top - newRect.top);
+                if (dx === 0 && dy === 0) continue;
                 box.style.transition = "none";
-                box.style.transform = `translate(${dx}px, ${dy}px)`;
+                box.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
                 box.style.willChange = "transform";
+                pending++;
                 // Force reflow so the browser registers the start state
                 void box.offsetWidth;
                 box.style.transition = "transform 420ms cubic-bezier(0.22, 1, 0.36, 1)";
-                box.style.transform = "";
-                box.addEventListener("transitionend", function clear() {
+                box.style.transform = "translate3d(0, 0, 0)";
+                const clear = () => {
                   box.style.transition = "";
                   box.style.willChange = "";
+                  box.style.transform = "";
                   box.removeEventListener("transitionend", clear);
-                }, { once: true });
+                  tick();
+                };
+                box.addEventListener("transitionend", clear, { once: true });
+                // Safety: ensure tick fires even if transitionend is missed
+                window.setTimeout(() => {
+                  if (box.style.willChange) clear();
+                }, 600);
               }
+              if (pending === 0 && grid) grid.classList.remove("areaBoxFlipping");
             };
           };
 
@@ -16167,7 +16179,7 @@
               // Capture old positions BEFORE state change + render.
               // The expanding card itself is excluded — its own open
               // animation (clip-path wipe) plays separately.
-              const applyFlip = flipSiblingCategories(String(area));
+              const applyFlip = flipSiblingCategories();
               p.expandedCategories[area] = true;
               categoryJustExpanded.add(String(p.id) + "|" + String(area));
               render();
@@ -16180,7 +16192,7 @@
               const finish = () => {
                 section.removeEventListener("animationend", onDone);
                 // Capture rects right before the closing card disappears.
-                const applyFlip = flipSiblingCategories(String(area));
+                const applyFlip = flipSiblingCategories();
                 p.expandedCategories[area] = false;
                 render();
                 applyFlip();
