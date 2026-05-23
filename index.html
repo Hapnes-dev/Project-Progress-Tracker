@@ -13898,9 +13898,43 @@
         // Cache the Rocketlane fieldId per project so we can write back without re-fetching
         p._rlNotesFieldId = p._rlNotesFieldId ?? null;
 
-        // Auto-load from Rocketlane (once per session per project, unless user has unsaved draft)
+        // Auto-load from Rocketlane (once per session per project, unless
+        // user has unsaved draft). ALL sync feedback (loading / success /
+        // error) is routed through the RL sync chip in the meta row — no
+        // separate status line near the Notes header. The chip is the
+        // canonical Rocketlane indicator for the whole detail panel.
         if (rlProjectIdForNotes && hasRlAuthForNotes && notesDraft === undefined) {
-          notesStatus.textContent = "Loading from Rocketlane...";
+          const rlChip = document.getElementById("rocketlaneSyncTag");
+          let chipPrev = null;
+          const saveChipState = () => {
+            if (!rlChip || chipPrev) return;
+            chipPrev = {
+              text: rlChip.textContent,
+              title: rlChip.title,
+              cls: rlChip.className,
+            };
+          };
+          const setChip = (text, cls, title) => {
+            if (!rlChip) return;
+            saveChipState();
+            rlChip.textContent = text;
+            rlChip.title = title || "";
+            rlChip.className = "tag" + (cls ? " " + cls : "");
+          };
+          const restoreChipAfter = (ms) => {
+            window.setTimeout(() => {
+              if (rlChip && document.contains(rlChip) && chipPrev) {
+                rlChip.textContent = chipPrev.text;
+                rlChip.title = chipPrev.title;
+                rlChip.className = chipPrev.cls;
+                chipPrev = null;
+              }
+            }, ms);
+          };
+
+          notesStatus.textContent = "";
+          setChip("Loading from Rocketlane…", "", "Fetching project notes");
+
           (async () => {
             try {
               const res = await rocketlaneFetchProjectNotes(rlProjectIdForNotes);
@@ -13911,34 +13945,20 @@
                 p.overviewNotes = res.text;
                 resizeNotesTa();
               }
-              // Briefly flash "Synced from Rocketlane" on the RL sync chip
-              // — but ONLY on successful sync. If the project doesn't have
-              // a notes field configured, just leave the chip showing its
-              // normal "RL sync: <when>" text. The chip should never become
-              // a notes-field error indicator.
               if (res.fieldId) {
-                const rlChip = document.getElementById("rocketlaneSyncTag");
-                if (rlChip) {
-                  const prevText = rlChip.textContent;
-                  const prevTitle = rlChip.title;
-                  const prevCls = rlChip.className;
-                  rlChip.textContent = "Synced from Rocketlane";
-                  rlChip.title = "Notes successfully synced";
-                  rlChip.className = "tag good";
-                  window.setTimeout(() => {
-                    if (document.contains(rlChip)) {
-                      rlChip.textContent = prevText;
-                      rlChip.title = prevTitle;
-                      rlChip.className = prevCls;
-                    }
-                  }, 2500);
-                }
+                setChip("Synced from Rocketlane", "good", "Notes successfully synced");
+                restoreChipAfter(2500);
+              } else {
+                // No notes field configured — just restore the normal chip
+                restoreChipAfter(0);
               }
-              // Keep notesStatus empty — the chip handles success feedback.
-              notesStatus.textContent = "";
             } catch (e) {
-              notesStatus.textContent = "Could not load from Rocketlane: " + String(e?.message ?? e).slice(0, 80);
-              notesStatus.style.color = "var(--bad)";
+              setChip(
+                "Could not load from Rocketlane",
+                "bad",
+                String(e?.message ?? e).slice(0, 200)
+              );
+              restoreChipAfter(4000);
             }
           })();
         }
