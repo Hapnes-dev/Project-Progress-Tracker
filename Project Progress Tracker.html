@@ -1099,11 +1099,34 @@
         background: rgba(255, 255, 255, 0.045);
       }
 
-      /* Keep category boxes neutral; only task rows use status colors */
-      .areaBox.started,
-      .areaBox.allDone {
+      /* Category status tints:
+         - .allDone     → green (all tasks completed)
+         - .hasInProgress → yellow (at least one task in progress)
+         - .started (without the above) → neutral (some non-todo activity
+           like waiting/blocked but nothing in-progress and not all done)
+         allDone takes precedence over hasInProgress since "complete" is
+         a stronger signal than "still working on it" — though in practice
+         a category shouldn't be both at once. */
+      .areaBox.started {
         border-color: var(--border);
         background: rgba(255, 255, 255, 0.03);
+      }
+      .areaBox.hasInProgress {
+        border-color: rgba(251, 191, 36, 0.45);
+        background: rgba(251, 191, 36, 0.08);
+      }
+      .areaBox.allDone {
+        border-color: rgba(52, 211, 153, 0.45);
+        background: rgba(52, 211, 153, 0.10);
+      }
+      /* Hover states inherit the tint but get slightly brighter for feedback */
+      .areaBox.hasInProgress:hover {
+        border-color: rgba(251, 191, 36, 0.6);
+        background: rgba(251, 191, 36, 0.12);
+      }
+      .areaBox.allDone:hover {
+        border-color: rgba(52, 211, 153, 0.6);
+        background: rgba(52, 211, 153, 0.14);
       }
 
       /* Rocketlane tasks: big full-width box at bottom */
@@ -15380,8 +15403,15 @@
           const tasks = (p.tasksByArea?.[area] ?? []).slice();
           const completedCount = tasks.filter((t) => isTaskCompleted(t)).length;
           const nonTodoCount = tasks.filter((t) => normalizeTaskStatus(t.status) !== "todo").length;
+          const inProgressCount = tasks.filter((t) => normalizeTaskStatus(t.status) === "in_progress").length;
           if (tasks.length > 0 && completedCount === tasks.length) {
             section.classList.add("allDone");
+          }
+          // "Has any in-progress task" → category gets the yellow status tint.
+          // Note: this can coexist with allDone in edge cases (shouldn't happen
+          // logically, but defensive). CSS gives priority to .allDone (green).
+          if (tasks.length > 0 && inProgressCount > 0) {
+            section.classList.add("hasInProgress");
           }
           if (tasks.length > 0 && completedCount !== tasks.length && nonTodoCount > 0) {
             section.classList.add("started");
