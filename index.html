@@ -14644,13 +14644,14 @@
               if (/\s/.test(ch)) break;
             }
             if (atIdx < 0) { closeMentionPopup(); return; }
-            const query = val.slice(atIdx + 1, cursor).toLowerCase();
-            // Substring match across firstName, lastName, or fullName
+            const stripDiacritics = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "");
+            const query = stripDiacritics(val.slice(atIdx + 1, cursor).toLowerCase());
+            // Substring match across firstName, lastName, or fullName (diacritic-insensitive)
             const matches = mentionMembers.filter((m) => {
               if (!query) return true;
-              return m.fullName.toLowerCase().includes(query) ||
-                     m.firstName.toLowerCase().includes(query) ||
-                     m.lastName.toLowerCase().includes(query);
+              return stripDiacritics(m.fullName.toLowerCase()).includes(query) ||
+                     stripDiacritics(m.firstName.toLowerCase()).includes(query) ||
+                     stripDiacritics(m.lastName.toLowerCase()).includes(query);
             }).slice(0, 8);
             if (!matches.length && !query) { closeMentionPopup(); return; }
             mentionStart = atIdx;
