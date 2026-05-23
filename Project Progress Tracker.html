@@ -13716,13 +13716,8 @@
         if (els.btnOpenRocketlaneProject) {
           const rlPid = String(p?.rocketlaneProjectId ?? "").trim();
           if (rlPid) {
-            // Permanently hidden — the dynamic favicon toolbar (above)
-            // now renders a "Rocketlane" link from p.rocketlaneUrl, so
-            // this static button would just duplicate it. Keep the
-            // element in the DOM so any code that looks it up still
-            // finds it; just never show it.
-            els.btnOpenRocketlaneProject.disabled = true;
-            els.btnOpenRocketlaneProject.style.display = "none";
+            els.btnOpenRocketlaneProject.disabled = false;
+            els.btnOpenRocketlaneProject.style.display = "";
             els.btnOpenRocketlaneProject.dataset.rlProjectId = rlPid;
           } else {
             els.btnOpenRocketlaneProject.disabled = true;
@@ -13923,12 +13918,15 @@
           }
           const faviconFor = (host) =>
             "https://www.google.com/s2/favicons?domain=" + host + "&sz=32";
+          // Note: Rocketlane is intentionally NOT in this favicon toolbar
+          // — the static "🚀 Rocketlane" button (rendered separately) owns
+          // that link, so the dynamic toolbar only shows the four
+          // third-party services.
           const linkDefs = [
             { url: p.overviewUrl,    icon: faviconFor("zendesk.com"),    label: "Zendesk" },
             { url: p.oneflowUrl,     icon: faviconFor("oneflow.com"),    label: "Oneflow" },
             { url: p.youniumUrl,     icon: faviconFor("younium.com"),    label: "Younium" },
             { url: p.hubspotUrl,     icon: faviconFor("hubspot.com"),    label: "HubSpot" },
-            { url: p.rocketlaneUrl,  icon: faviconFor("rocketlane.com"), label: "Rocketlane" },
           ];
           for (const def of linkDefs) {
             const raw = String(def.url ?? "").trim();
