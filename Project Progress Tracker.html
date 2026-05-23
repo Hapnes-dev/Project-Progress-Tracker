@@ -4745,12 +4745,14 @@
         border-radius: var(--radius);
         background: transparent;
       }
+      /* IMPORTANT: any property that changes glyph width (padding, bold,
+         letter-spacing, border, margin) will desync the overlay from the
+         textarea — caret + chars will drift. Keep this purely visual. */
       .composeMention {
-        background: rgba(72, 132, 255, 0.18);
+        background: rgba(72, 132, 255, 0.22);
         color: #79b4ff;
-        border-radius: 4px;
-        padding: 1px 3px;
-        font-weight: 600;
+        border-radius: 3px;
+        box-shadow: 0 0 0 1px rgba(72, 132, 255, 0.35);
       }
       .chatComposeInput {
         width: 100%;
