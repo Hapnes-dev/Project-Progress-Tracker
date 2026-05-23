@@ -1758,6 +1758,12 @@
         flex-direction: column;
         gap: 4px;
         min-width: 0;
+        /* Optical centering nudge: text cap-height + descender geometry
+           makes the visible glyph mass sit slightly above the geometric
+           center of its line-box. A 2px downward shift compensates so the
+           text reads as perfectly vertically centered next to the status
+           pill and the Remove button. */
+        padding-top: 2px;
       }
 
       .task .t .topLine {
