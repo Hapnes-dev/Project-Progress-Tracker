@@ -2685,52 +2685,16 @@
          looked too wide. Sibling cards may shift between rows when one
          grows; that's a known CSS Grid auto-placement effect. */
 
-      /* ── View Transitions tuning ───────────────────────────────────
-         The toggle uses document.startViewTransition() which snapshots
-         the page, runs render(), then cross-fades + morphs elements with
-         matching view-transition-name in the compositor. We just tell
-         the browser how long and how smooth.
-
-         The "root" pseudo controls the overall fade; each category card
-         gets its own named group via inline style="view-transition-name:
-         area-XXX". ::view-transition-group(*) catches every group. */
-      ::view-transition-group(*) {
-        animation-duration: 360ms;
-        animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-      }
-      ::view-transition-old(root),
-      ::view-transition-new(root) {
-        animation-duration: 220ms;
-      }
-
-      /* Per-category open animation. Uses clip-path to wipe the card in
-         from top to bottom — content stays at full size the whole time,
-         so text/buttons never look squished. No transform here — the
-         FLIP system in JS owns transform for the layout-slide. */
+      /* Open animation: just a gentle fade-in on the newly-expanded
+         card's content. Layout is INSTANT — no FLIP, no View
+         Transitions, no jitter. The keyframe lasts 220ms which is fast
+         enough to feel responsive but slow enough to be visible. */
       @keyframes areaBoxOpenIn {
-        0%   { opacity: 0; clip-path: inset(0 0 100% 0); }
-        70%  { opacity: 1; }
-        100% { opacity: 1; clip-path: inset(0 0 0 0); }
+        from { opacity: 0; }
+        to   { opacity: 1; }
       }
       .areaBox.areaBoxJustOpened {
-        animation: areaBoxOpenIn 700ms cubic-bezier(0.22, 1, 0.36, 1) both;
-      }
-      /* Symmetric close: clip-path wipes the card up from the bottom
-         while it fades out. Same no-stretch principle. */
-      @keyframes areaBoxCloseOut {
-        0%   { opacity: 1; clip-path: inset(0 0 0 0); }
-        100% { opacity: 0; clip-path: inset(0 0 100% 0); }
-      }
-      .areaBox.areaBoxJustClosing {
-        animation: areaBoxCloseOut 420ms cubic-bezier(0.4, 0, 1, 1) forwards;
-        pointer-events: none;
-      }
-      /* While a category is FLIP-sliding, suppress hover restyles on
-         every card — the moving border/background flicker as the cursor
-         passes is what reads as "vibration". */
-      .areasGrid.areaBoxFlipping .areaBox:hover {
-        border-color: var(--hairline);
-        background: var(--surface-1);
+        animation: areaBoxOpenIn 220ms ease-out both;
       }
 
       /* Chevron in the category title — points right (▶) when collapsed,
@@ -16001,10 +15965,6 @@
           // Tag the card with its area so the FLIP animation in
           // toggleCategory can re-identify the same card after render().
           section.dataset.area = String(area);
-          // Unique view-transition name so the View Transitions API can
-          // animate this exact card from old-state to new-state. Names
-          // must be valid idents — strip anything non-alphanumeric.
-          section.style.viewTransitionName = "area-" + String(area).replace(/[^a-zA-Z0-9_]/g, "_");
           // Per-category open animation: one-shot keyframe fires when the
           // section is freshly mounted with the expanded marker. The class
           // is removed after the animation so subsequent re-renders don't
@@ -16012,12 +15972,8 @@
           const catCardKey = String(p.id) + "|" + String(area);
           if (categoryJustExpanded.has(catCardKey)) {
             categoryJustExpanded.delete(catCardKey);
-            // Skip the keyframe wipe when View Transitions is doing the
-            // animation — running both would double up.
-            if (typeof document.startViewTransition !== "function") {
-              section.classList.add("areaBoxJustOpened");
-              window.setTimeout(() => section.classList.remove("areaBoxJustOpened"), 750);
-            }
+            section.classList.add("areaBoxJustOpened");
+            window.setTimeout(() => section.classList.remove("areaBoxJustOpened"), 300);
           }
 
           const title = document.createElement("div");
@@ -16145,14 +16101,10 @@
           //      stays in its old spot.
           //   4. Force reflow, then transition back to identity → cards
           //      slide from old to new position smoothly.
-          // ── View Transitions path (Chromium / Safari TP) ──
-          // The browser snapshots the entire viewport before render(),
-          // snapshots again after, and cross-fades + slides corresponding
-          // elements (matched by view-transition-name) entirely in the
-          // compositor. No JS frame work, no flicker, no scroll drift.
-          const supportsViewTransitions = typeof document.startViewTransition === "function";
-
-          // ── Manual FLIP fallback (older browsers) ──
+          // (FLIP fallback retained for completeness but unused — the
+          // simple instant-toggle path below has proven the most reliable.
+          // Background async re-renders from chat/notes fetches were
+          // aborting View Transitions and confusing FLIP timing.)
           const flipSiblingCategories = () => {
             const oldRects = new Map();
             for (const box of document.querySelectorAll(".areaBox")) {
@@ -16243,66 +16195,23 @@
             });
           };
 
+          // Simple, robust toggle:
+          //   - Layout change is INSTANT (no FLIP, no View Transitions).
+          //   - Window scroll is preserved across the render.
+          //   - The expanded card's task content gets a 200ms opacity
+          //     fade so the appearance isn't jarring — but no layout
+          //     animation, which is what caused all the jitter.
           const toggleCategory = () => {
             p.expandedCategories = p.expandedCategories ?? {};
             const willExpand = !p.expandedCategories[area];
-
-            // Preferred path: View Transitions API. The browser handles
-            // every detail — old/new snapshots, position morphs, fades,
-            // scroll preservation — in the compositor. The DOM mutation
-            // is just `flip state + render()`.
-            if (supportsViewTransitions) {
-              if (willExpand) categoryJustExpanded.add(String(p.id) + "|" + String(area));
-              const sx = window.scrollX, sy = window.scrollY;
-              const lock = () => {
-                if (window.scrollX !== sx || window.scrollY !== sy) {
-                  try { window.scrollTo({ left: sx, top: sy, behavior: "instant" }); }
-                  catch { window.scrollTo(sx, sy); }
-                }
-              };
-              const t = document.startViewTransition(() => {
-                p.expandedCategories[area] = willExpand;
-                render();
-                // Restore scroll IN the callback so the NEW snapshot
-                // (taken by the browser after this callback returns)
-                // already reflects the locked scroll position. This is
-                // the only place we can pre-empt the browser's own
-                // viewport-anchoring logic during render().
-                lock();
-              });
-              // Belt-and-braces: re-lock after the transition completes
-              // in case anything async-fires inside render's settled.
-              if (t.finished) t.finished.finally(lock);
-              return;
-            }
-
-            // Fallback path: manual FLIP + close keyframe.
-            if (willExpand) {
-              const applyFlip = flipSiblingCategories();
-              p.expandedCategories[area] = true;
-              categoryJustExpanded.add(String(p.id) + "|" + String(area));
-              withScrollLock(() => {
-                render();
-                applyFlip();
-              });
-            } else {
-              section.classList.add("areaBoxJustClosing");
-              const finish = () => {
-                section.removeEventListener("animationend", onDone);
-                const applyFlip = flipSiblingCategories();
-                p.expandedCategories[area] = false;
-                withScrollLock(() => {
-                  render();
-                  applyFlip();
-                });
-              };
-              const onDone = () => finish();
-              section.addEventListener("animationend", onDone);
-              window.setTimeout(() => {
-                if (section.classList.contains("areaBoxJustClosing")) {
-                  finish();
-                }
-              }, 800);
+            const sx = window.scrollX, sy = window.scrollY;
+            if (willExpand) categoryJustExpanded.add(String(p.id) + "|" + String(area));
+            p.expandedCategories[area] = willExpand;
+            render();
+            // Restore scroll if anything inside render() bumped it.
+            if (window.scrollX !== sx || window.scrollY !== sy) {
+              try { window.scrollTo({ left: sx, top: sy, behavior: "instant" }); }
+              catch { window.scrollTo(sx, sy); }
             }
           };
 
