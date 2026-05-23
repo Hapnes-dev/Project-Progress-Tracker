@@ -2685,6 +2685,24 @@
          looked too wide. Sibling cards may shift between rows when one
          grows; that's a known CSS Grid auto-placement effect. */
 
+      /* ── View Transitions tuning ───────────────────────────────────
+         The toggle uses document.startViewTransition() which snapshots
+         the page, runs render(), then cross-fades + morphs elements with
+         matching view-transition-name in the compositor. We just tell
+         the browser how long and how smooth.
+
+         The "root" pseudo controls the overall fade; each category card
+         gets its own named group via inline style="view-transition-name:
+         area-XXX". ::view-transition-group(*) catches every group. */
+      ::view-transition-group(*) {
+        animation-duration: 360ms;
+        animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+      }
+      ::view-transition-old(root),
+      ::view-transition-new(root) {
+        animation-duration: 220ms;
+      }
+
       /* Per-category open animation. Uses clip-path to wipe the card in
          from top to bottom — content stays at full size the whole time,
          so text/buttons never look squished. No transform here — the
@@ -15983,6 +16001,10 @@
           // Tag the card with its area so the FLIP animation in
           // toggleCategory can re-identify the same card after render().
           section.dataset.area = String(area);
+          // Unique view-transition name so the View Transitions API can
+          // animate this exact card from old-state to new-state. Names
+          // must be valid idents — strip anything non-alphanumeric.
+          section.style.viewTransitionName = "area-" + String(area).replace(/[^a-zA-Z0-9_]/g, "_");
           // Per-category open animation: one-shot keyframe fires when the
           // section is freshly mounted with the expanded marker. The class
           // is removed after the animation so subsequent re-renders don't
@@ -15990,8 +16012,12 @@
           const catCardKey = String(p.id) + "|" + String(area);
           if (categoryJustExpanded.has(catCardKey)) {
             categoryJustExpanded.delete(catCardKey);
-            section.classList.add("areaBoxJustOpened");
-            window.setTimeout(() => section.classList.remove("areaBoxJustOpened"), 750);
+            // Skip the keyframe wipe when View Transitions is doing the
+            // animation — running both would double up.
+            if (typeof document.startViewTransition !== "function") {
+              section.classList.add("areaBoxJustOpened");
+              window.setTimeout(() => section.classList.remove("areaBoxJustOpened"), 750);
+            }
           }
 
           const title = document.createElement("div");
@@ -16119,9 +16145,14 @@
           //      stays in its old spot.
           //   4. Force reflow, then transition back to identity → cards
           //      slide from old to new position smoothly.
-          // FLIP every visible category card (including the toggled one).
-          // The toggled card's own open/close animation uses ONLY clip-path
-          // + opacity, so it doesn't fight the transform applied here.
+          // ── View Transitions path (Chromium / Safari TP) ──
+          // The browser snapshots the entire viewport before render(),
+          // snapshots again after, and cross-fades + slides corresponding
+          // elements (matched by view-transition-name) entirely in the
+          // compositor. No JS frame work, no flicker, no scroll drift.
+          const supportsViewTransitions = typeof document.startViewTransition === "function";
+
+          // ── Manual FLIP fallback (older browsers) ──
           const flipSiblingCategories = () => {
             const oldRects = new Map();
             for (const box of document.querySelectorAll(".areaBox")) {
@@ -16215,8 +16246,31 @@
           const toggleCategory = () => {
             p.expandedCategories = p.expandedCategories ?? {};
             const willExpand = !p.expandedCategories[area];
+
+            // Preferred path: View Transitions API. The browser handles
+            // every detail — old/new snapshots, position morphs, fades,
+            // scroll preservation — in the compositor. The DOM mutation
+            // is just `flip state + render()`.
+            if (supportsViewTransitions) {
+              if (willExpand) categoryJustExpanded.add(String(p.id) + "|" + String(area));
+              const sx = window.scrollX, sy = window.scrollY;
+              const t = document.startViewTransition(() => {
+                p.expandedCategories[area] = willExpand;
+                render();
+              });
+              // Even with the API, restore scroll defensively in case
+              // anything inside render() nudges it.
+              t.finished.finally(() => {
+                if (window.scrollX !== sx || window.scrollY !== sy) {
+                  try { window.scrollTo({ left: sx, top: sy, behavior: "instant" }); }
+                  catch { window.scrollTo(sx, sy); }
+                }
+              });
+              return;
+            }
+
+            // Fallback path: manual FLIP + close keyframe.
             if (willExpand) {
-              // Capture old positions BEFORE state change + render.
               const applyFlip = flipSiblingCategories();
               p.expandedCategories[area] = true;
               categoryJustExpanded.add(String(p.id) + "|" + String(area));
@@ -16225,9 +16279,6 @@
                 applyFlip();
               });
             } else {
-              // Play the close-out animation on the existing section, THEN
-              // re-render to remove the expanded content. Without the delay,
-              // render() would yank the DOM before any animation could play.
               section.classList.add("areaBoxJustClosing");
               const finish = () => {
                 section.removeEventListener("animationend", onDone);
