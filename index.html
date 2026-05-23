@@ -6204,10 +6204,18 @@
         window.getRocketlaneApiKey = getSavedRocketlaneApiKey;
         window.clearRocketlaneApiKey = () => saveRocketlaneApiKey("");
       } catch {}
-      // Auto-sync cadence: every 10 minutes.
-      const ROCKETLANE_AUTO_SYNC_INTERVAL_MS = 10 * 60 * 1000;
+      // Auto-sync cadence: every 2 minutes. Matches the notification
+      // badge polling so changes other team members make in Rocketlane
+      // (status updates, due-date changes, new tasks) flow into the
+      // tracker within ~2 minutes. The cooldown below uses the same
+      // value, so back-to-back triggers (interval + visibilitychange)
+      // don't double-fire.
+      const ROCKETLANE_AUTO_SYNC_INTERVAL_MS = 2 * 60 * 1000;
       // Non-forced syncs should not run more often than the interval.
-      const ROCKETLANE_AUTO_SYNC_COOLDOWN_MS = ROCKETLANE_AUTO_SYNC_INTERVAL_MS;
+      // The cooldown is shorter than the interval so that returning to
+      // a tab that's been hidden a while triggers a fresh sync instead
+      // of waiting for the next interval tick.
+      const ROCKETLANE_AUTO_SYNC_COOLDOWN_MS = 30 * 1000;
       // Local project edits trigger a debounced forced sync.
       const ROCKETLANE_CHANGE_SYNC_DEBOUNCE_MS = 2500;
       // Keep Rocketlane UI less noisy: only show important/error messages.
@@ -6273,6 +6281,10 @@
       let rocketlaneLiveSyncTimer = /** @type {number | undefined} */ (undefined);
       let rocketlaneLiveSyncInFlight = false;
       let rocketlaneLastLiveSyncStartedAt = Date.now();
+      // Tracks whether we've already installed the visibilitychange
+      // listener so multiple startRocketlaneLiveSync() calls don't stack
+      // duplicate handlers.
+      let rocketlaneVisibilityHooked = false;
       let rocketlaneChangeSyncTimer = /** @type {number | undefined} */ (undefined);
       const rocketlanePendingChangeProjectIds = new Set(); // local project.id values
       let rocketlaneApplyingRemoteSync = false;
@@ -8760,6 +8772,17 @@
         rocketlaneLiveSyncTimer = window.setInterval(() => {
           void rocketlaneMaybeRunLiveSync();
         }, ROCKETLANE_AUTO_SYNC_INTERVAL_MS);
+        // Fire an immediate sync whenever the tab becomes visible again
+        // after being hidden — that way switching back to the tracker
+        // shows you the latest data without waiting for the next 2-min
+        // tick. The cooldown above prevents this from rapid-firing on
+        // every focus change.
+        if (!rocketlaneVisibilityHooked) {
+          document.addEventListener("visibilitychange", () => {
+            if (!document.hidden) void rocketlaneMaybeRunLiveSync();
+          });
+          rocketlaneVisibilityHooked = true;
+        }
         rocketlaneUpdateSyncButtonState();
       }
 
