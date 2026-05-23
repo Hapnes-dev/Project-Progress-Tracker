@@ -4109,13 +4109,14 @@
       .rl__mention__self,
       a.rl__mention__self,
       span.rl__mention__self {
+        /* Plain inline link — no background, no outline, no padding. */
         background: transparent;
         color: #79b4ff;
-        border-radius: 4px;
-        padding: 1px 6px 1px 4px;
         font-weight: 500;
         text-decoration: none;
-        box-shadow: 0 0 0 1px rgba(72, 132, 255, 0.45);
+        padding: 0;
+        border-radius: 0;
+        box-shadow: none;
       }
       /* Visually prepend "@" without touching the underlying text. */
       .rl__mention::before,
@@ -4125,12 +4126,11 @@
       a.rl__mention__self::before,
       span.rl__mention__self::before {
         content: "@";
-        margin-right: 1px;
       }
       .rl__mention:hover,
       a.rl__mention:hover,
       .rl__mention__self:hover,
-      a.rl__mention__self:hover { text-decoration: none; }
+      a.rl__mention__self:hover { text-decoration: underline; }
       .notifItemComment a { color: var(--accent); text-decoration: none; }
       .notifItemComment a:hover { text-decoration: underline; }
       .notifItemComment img { max-width: 100%; max-height: 80px; border-radius: 4px; }
