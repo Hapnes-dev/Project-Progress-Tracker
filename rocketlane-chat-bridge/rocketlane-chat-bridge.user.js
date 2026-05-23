@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.7.0
+// @version      1.7.1
 // @description  Bridges Rocketlane chat API to the local Project Progress Tracker, bypassing CORS.
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
@@ -228,6 +228,13 @@
   target.RocketlaneBridge = {
     isAvailable: true,
     version: "1.0.0-tampermonkey",
+
+    // Synchronous accessors — the tracker reads these at chat-panel
+    // render time to avoid the async race where mentions get composed
+    // before getApiKey() resolves. GM_getValue is itself synchronous so
+    // there's no I/O penalty.
+    get userId() { return GM_getValue("rlUserId", null); },
+    get apiKey() { return GM_getValue("rlApiKey", "") || null; },
 
     async getStatus() {
       const hasKey = !!GM_getValue("rlApiKey", "");
