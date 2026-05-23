@@ -18902,6 +18902,15 @@
           return null;
         };
         // Async fetch a project name from Rocketlane API, then cache + re-render.
+        //
+        // IMPORTANT: we ALWAYS write to the cache on resolve — either the
+        // real project name or `null` if the lookup didn't return one. The
+        // `null` sentinel is what stops the runaway re-render loop:
+        // resolveProjectName returns null for a failed lookup, and
+        // notifGroupTitle's existing fallback ("Chat: project #1234") shows
+        // up instead. Without this, every render re-triggered the fetch,
+        // every fetch re-triggered the render, and the drawer "blinked"
+        // continuously under the cursor.
         const ensureProjectName = (pid, onResolved) => {
           const key = String(pid ?? "").trim();
           if (!key || notifProjectNameCache.has(key)) return;
@@ -18911,9 +18920,12 @@
             .then((j) => {
               const proj = j?.data ?? j;
               const name = String(proj?.projectName ?? proj?.name ?? "").trim();
-              if (name) notifProjectNameCache.set(key, name);
+              notifProjectNameCache.set(key, name || null);
             })
-            .catch((err) => console.warn("[Notifications] project name lookup failed:", err))
+            .catch((err) => {
+              console.warn("[Notifications] project name lookup failed:", err);
+              notifProjectNameCache.set(key, null);
+            })
             .finally(() => {
               notifProjectNameInFlight.delete(key);
               if (typeof onResolved === "function") onResolved();
@@ -19187,10 +19199,14 @@
           }
           for (const pid of missingPids) {
             ensureProjectName(pid, () => {
-              // Only re-render if the drawer is still open and showing this list
-              if (notifDrawerEl && listEl.isConnected) {
-                renderNotifList(listEl, notifGroupsCache, notifFilter);
-              }
+              // Only re-render if (a) drawer is still open, (b) the lookup
+              // actually produced a name worth showing. If the cache value
+              // is null (lookup failed), re-rendering would just produce
+              // the same "Chat: project #1234" fallback — wasted work that
+              // appeared as flicker.
+              if (!notifDrawerEl || !listEl.isConnected) return;
+              if (notifProjectNameCache.get(pid) == null) return;
+              renderNotifList(listEl, notifGroupsCache, notifFilter);
             });
           }
         };
