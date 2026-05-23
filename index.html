@@ -13911,27 +13911,30 @@
                 p.overviewNotes = res.text;
                 resizeNotesTa();
               }
-              // Surface the sync result on the existing "RL sync:" chip
-              // instead of a separate status line near the Notes header —
-              // that chip already serves as the canonical sync indicator.
-              const rlChip = document.getElementById("rocketlaneSyncTag");
-              if (rlChip) {
-                const prevText = rlChip.textContent;
-                const prevTitle = rlChip.title;
-                const prevCls = rlChip.className;
-                rlChip.textContent = res.fieldId ? "Synced from Rocketlane" : "No notes field found";
-                rlChip.title = res.fieldId ? "Notes successfully synced" : "Project notes field not configured in Rocketlane";
-                rlChip.className = "tag" + (res.fieldId ? " good" : "");
-                window.setTimeout(() => {
-                  // Restore the original sync-tag content after a few seconds
-                  if (document.contains(rlChip)) {
-                    rlChip.textContent = prevText;
-                    rlChip.title = prevTitle;
-                    rlChip.className = prevCls;
-                  }
-                }, 2500);
+              // Briefly flash "Synced from Rocketlane" on the RL sync chip
+              // — but ONLY on successful sync. If the project doesn't have
+              // a notes field configured, just leave the chip showing its
+              // normal "RL sync: <when>" text. The chip should never become
+              // a notes-field error indicator.
+              if (res.fieldId) {
+                const rlChip = document.getElementById("rocketlaneSyncTag");
+                if (rlChip) {
+                  const prevText = rlChip.textContent;
+                  const prevTitle = rlChip.title;
+                  const prevCls = rlChip.className;
+                  rlChip.textContent = "Synced from Rocketlane";
+                  rlChip.title = "Notes successfully synced";
+                  rlChip.className = "tag good";
+                  window.setTimeout(() => {
+                    if (document.contains(rlChip)) {
+                      rlChip.textContent = prevText;
+                      rlChip.title = prevTitle;
+                      rlChip.className = prevCls;
+                    }
+                  }, 2500);
+                }
               }
-              // Keep notesStatus empty — the chip handles all sync feedback now.
+              // Keep notesStatus empty — the chip handles success feedback.
               notesStatus.textContent = "";
             } catch (e) {
               notesStatus.textContent = "Could not load from Rocketlane: " + String(e?.message ?? e).slice(0, 80);
