@@ -16184,18 +16184,24 @@
           // tiny scroll change introduced by render() (e.g. focus shift,
           // chat refresh, layout reflow) gets baked into the FLIP deltas
           // and shows up as "everything moved up a little" jitter.
+          //
+          // Uses { behavior: "instant" } so the restore doesn't get
+          // animated by any inherited scroll-behavior: smooth styling.
+          const lockScroll = (sx, sy) => {
+            try {
+              window.scrollTo({ left: sx, top: sy, behavior: "instant" });
+            } catch (_) {
+              window.scrollTo(sx, sy);
+            }
+          };
           const withScrollLock = (fn) => {
             const sx = window.scrollX, sy = window.scrollY;
             fn();
-            // Run AFTER any render-triggered scroll settles
-            if (window.scrollX !== sx || window.scrollY !== sy) {
-              window.scrollTo(sx, sy);
-            }
-            // Belt-and-braces: re-lock on the next frame too
+            if (window.scrollX !== sx || window.scrollY !== sy) lockScroll(sx, sy);
+            // Belt-and-braces: re-lock on the next frame too in case
+            // anything async-fires during the same task.
             requestAnimationFrame(() => {
-              if (window.scrollX !== sx || window.scrollY !== sy) {
-                window.scrollTo(sx, sy);
-              }
+              if (window.scrollX !== sx || window.scrollY !== sy) lockScroll(sx, sy);
             });
           };
 
