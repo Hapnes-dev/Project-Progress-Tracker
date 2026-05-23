@@ -1750,8 +1750,12 @@
         font-size: 13px;
         color: var(--text);
         word-break: break-word;
-        display: grid;
-        grid-template-rows: auto auto;
+        /* Flex column instead of grid with auto-auto rows — grid was always
+           reserving a second row even when only the title was rendered,
+           making the text container taller than necessary and shifting the
+           visible text toward the top of the task row. */
+        display: flex;
+        flex-direction: column;
         gap: 4px;
         min-width: 0;
       }
@@ -2611,7 +2615,7 @@
       .task {
         border: 1px solid var(--hairline);
         background: var(--surface-1);
-        padding: 8px 12px;
+        padding: 6px 12px;
         box-shadow: inset 0 0 0 0 transparent; /* explicit base for clean shadow transitions */
         border-radius: var(--radius);
         gap: 12px;
