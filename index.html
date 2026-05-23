@@ -5559,6 +5559,23 @@
               <button class="btn" type="button" id="btnClearSessionKey" style="white-space:nowrap">Clear</button>
             </div>
             <div class="hint" id="rlSessionKeyHint" style="margin-top:4px"></div>
+            <details style="margin-top:6px;font-size:11px;color:var(--muted2)">
+              <summary style="cursor:pointer;user-select:none">Manual capture (if Auto-fill doesn't work)</summary>
+              <div style="margin-top:6px;line-height:1.5;padding-left:6px;border-left:2px solid var(--hairline)">
+                <ol style="margin:0;padding-left:18px">
+                  <li>Open <a href="https://kiona.rocketlane.com" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">kiona.rocketlane.com</a> while logged in.</li>
+                  <li>Press <kbd>F12</kbd> → Console tab, run:
+                    <pre style="margin:4px 0;padding:6px 8px;background:var(--surface-2);border-radius:4px;font-size:11px;overflow-x:auto"><code>JSON.parse(localStorage.__api_key)</code></pre>
+                    Returns <code>["api_key", "&lt;uuid&gt;", &lt;userId&gt;, &lt;accountId&gt;]</code>.
+                  </li>
+                  <li>Copy the <code>&lt;uuid&gt;</code> (second item) — paste it into the Session key field above.</li>
+                  <li>Click <strong>Save</strong>.</li>
+                </ol>
+                <div style="margin-top:6px;opacity:.85">
+                  The key rotates occasionally; revisit Rocketlane (with the Tampermonkey bridge installed) to refresh automatically, or repeat these steps.
+                </div>
+              </div>
+            </details>
           </div>
           <div class="twoCol">
             <div style="grid-column: 1 / -1">
