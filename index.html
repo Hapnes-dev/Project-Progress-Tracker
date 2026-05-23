@@ -8325,7 +8325,26 @@
         if (err) {
           return { text: "RL sync: error", cls: "bad", title: err };
         }
-        const syncedAt = String(rocketlaneLastSyncAtByProjectId.get(localId) ?? "").trim();
+        // Prefer the recorded sync timestamp, but if the project already has
+        // Rocketlane data locally (tasks imported from RL) and we just don't
+        // have a recorded timestamp yet (e.g. fresh page load before the
+        // periodic sync fires), fall back to project.updatedAt so the chip
+        // doesn't lie with "pending" on a project that's clearly already
+        // synced at least once.
+        let syncedAt = String(rocketlaneLastSyncAtByProjectId.get(localId) ?? "").trim();
+        if (!syncedAt) {
+          const hasRlData = !!project?.rocketlaneProjectId && (() => {
+            const tba = project?.tasksByArea ?? {};
+            for (const area of Object.keys(tba)) {
+              const arr = Array.isArray(tba[area]) ? tba[area] : [];
+              if (arr.some((t) => t?.meta?.rocketlaneTaskId)) return true;
+            }
+            return false;
+          })();
+          if (hasRlData && project?.updatedAt) {
+            syncedAt = project.updatedAt;
+          }
+        }
         if (!syncedAt) return { text: "RL sync: pending", cls: "", title: "Waiting for first sync" };
         const rel = formatRelativeTimeShort(syncedAt);
         const exact = new Date(syncedAt).toLocaleString(UI_LOCALE);
