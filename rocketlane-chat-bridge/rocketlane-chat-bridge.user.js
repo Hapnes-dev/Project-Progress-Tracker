@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.5.0
+// @version      1.6.0
 // @description  Bridges Rocketlane chat API to the local Project Progress Tracker, bypassing CORS.
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
@@ -460,17 +460,44 @@
         // Rocketlane uses `linkedAttachments` to link uploaded files to a comment.
         commentMeta.linkedAttachments = linkedAtt;
       }
+      const finalContent = contentHtml != null
+        ? contentHtml
+        : (text ? plainTextToHtml(text) : "");
+      // Extract Rocketlane native @mention markers so we can attach a
+      // mentions.userMentions array. The server appears to read both the
+      // HTML and the explicit array, but in-app notifications rely on
+      // this array being present.
+      const userMentions = [];
+      try {
+        const re = /<a[^>]*\bclass="[^"]*rl__mention[^"]*"[^>]*>/g;
+        let m;
+        while ((m = re.exec(finalContent)) !== null) {
+          const tag = m[0];
+          const objId = (tag.match(/data-rocketlane-mention-object-id="(\d+)"/) || [])[1];
+          const uuid = (tag.match(/data-rocketlane-mention-identifier="([^"]+)"/) || [])[1];
+          if (objId && uuid) {
+            userMentions.push({
+              mentionedObjectId: Number(objId),
+              mentionedObjectType: "USER",
+              mentionUuid: uuid,
+              projectId: Number(projectId),
+              sourceUserId: Number(userId),
+            });
+          }
+        }
+      } catch (_) {}
       const body = {
         comment: {
           messageType: "USER_MESSAGE",
-          content: contentHtml != null
-            ? contentHtml
-            : (text ? plainTextToHtml(text) : ""),
+          content: finalContent,
           private: isPrivate,
           commentMeta,
           user: { userId: Number(userId), userType: "NATIVE" },
         },
       };
+      if (userMentions.length) {
+        body.comment.mentions = { userMentions, taskMentions: [], documentMentions: [], spaceTabMentions: [], teamMentions: [] };
+      }
       const url = TENANT_API +
         "/projects/" + encodeURIComponent(projectId) +
         "/project-conversations/" + encodeURIComponent(conversationId) +
