@@ -18969,6 +18969,70 @@
           return "";
         };
 
+        // Rocketlane stores emojis as <span class="emoji">:shortcode:</span>.
+        // Map the common shortcodes back to their Unicode characters so the
+        // preview shows 😊 instead of literal ":blush:".
+        const EMOJI_SHORTCODES = {
+          // smileys & faces
+          smile: "😄", smiley: "😃", grinning: "😀", grin: "😁", laughing: "😆",
+          satisfied: "😆", sweat_smile: "😅", rofl: "🤣", joy: "😂", slightly_smiling_face: "🙂",
+          upside_down_face: "🙃", wink: "😉", blush: "😊", innocent: "😇",
+          smiling_face_with_three_hearts: "🥰", heart_eyes: "😍", star_struck: "🤩",
+          kissing_heart: "😘", kissing: "😗", kissing_smiling_eyes: "😙", kissing_closed_eyes: "😚",
+          yum: "😋", stuck_out_tongue: "😛", stuck_out_tongue_winking_eye: "😜", zany_face: "🤪",
+          stuck_out_tongue_closed_eyes: "😝", money_mouth_face: "🤑", hugs: "🤗",
+          hand_over_mouth: "🤭", shushing_face: "🤫", thinking: "🤔", zipper_mouth_face: "🤐",
+          raised_eyebrow: "🤨", neutral_face: "😐", expressionless: "😑", no_mouth: "😶",
+          smirk: "😏", unamused: "😒", roll_eyes: "🙄", grimacing: "😬", lying_face: "🤥",
+          relieved: "😌", pensive: "😔", sleepy: "😪", drooling_face: "🤤", sleeping: "😴",
+          mask: "😷", face_with_thermometer: "🤒", face_with_head_bandage: "🤕",
+          nauseated_face: "🤢", vomiting_face: "🤮", sneezing_face: "🤧", hot_face: "🥵",
+          cold_face: "🥶", dizzy_face: "😵", exploding_head: "🤯", cowboy_hat_face: "🤠",
+          partying_face: "🥳", sunglasses: "😎", nerd_face: "🤓", monocle_face: "🧐",
+          confused: "😕", worried: "😟", slightly_frowning_face: "🙁", frowning_face: "☹️",
+          open_mouth: "😮", hushed: "😯", astonished: "😲", flushed: "😳", pleading_face: "🥺",
+          frowning: "😦", anguished: "😧", fearful: "😨", cold_sweat: "😰", disappointed_relieved: "😥",
+          cry: "😢", sob: "😭", scream: "😱", confounded: "😖", persevere: "😣",
+          disappointed: "😞", sweat: "😓", weary: "😩", tired_face: "😫", yawning_face: "🥱",
+          triumph: "😤", rage: "😡", angry: "😠", face_with_symbols_over_mouth: "🤬",
+          smiling_imp: "😈", imp: "👿", skull: "💀", skull_and_crossbones: "☠️",
+          poop: "💩", clown_face: "🤡", japanese_ogre: "👹", japanese_goblin: "👺",
+          ghost: "👻", alien: "👽", space_invader: "👾", robot: "🤖",
+          // hand gestures
+          "+1": "👍", thumbsup: "👍", "-1": "👎", thumbsdown: "👎", ok_hand: "👌",
+          pinching_hand: "🤏", victory_hand: "✌️", crossed_fingers: "🤞", love_you_gesture: "🤟",
+          metal: "🤘", call_me_hand: "🤙", point_left: "👈", point_right: "👉",
+          point_up_2: "👆", point_down: "👇", raised_hand: "✋", raised_back_of_hand: "🤚",
+          vulcan_salute: "🖖", wave: "👋", clap: "👏", raised_hands: "🙌", open_hands: "👐",
+          handshake: "🤝", pray: "🙏", muscle: "💪",
+          // hearts & love
+          heart: "❤️", orange_heart: "🧡", yellow_heart: "💛", green_heart: "💚",
+          blue_heart: "💙", purple_heart: "💜", black_heart: "🖤", white_heart: "🤍",
+          brown_heart: "🤎", broken_heart: "💔", two_hearts: "💕", revolving_hearts: "💞",
+          heartbeat: "💓", heartpulse: "💗", sparkling_heart: "💖", cupid: "💘",
+          // celebration / reactions
+          tada: "🎉", confetti_ball: "🎊", fire: "🔥", sparkles: "✨", boom: "💥",
+          star: "⭐", star2: "🌟", "100": "💯", trophy: "🏆", medal_sports: "🏅",
+          rocket: "🚀", crown: "👑", gift: "🎁", balloon: "🎈",
+          // checks & marks
+          check_mark: "✓", white_check_mark: "✅", heavy_check_mark: "✔️",
+          ballot_box_with_check: "☑️", x: "❌", negative_squared_cross_mark: "❎",
+          warning: "⚠️", no_entry: "⛔", "no_entry_sign": "🚫", exclamation: "❗",
+          heavy_exclamation_mark: "❗", question: "❓", grey_question: "❔",
+          // common objects
+          eyes: "👀", brain: "🧠", bulb: "💡", computer: "💻", keyboard: "⌨️",
+          phone: "📱", email: "📧", calendar: "📅", clock: "🕐", hourglass: "⌛",
+          coffee: "☕", beer: "🍺", pizza: "🍕", hamburger: "🍔", cookie: "🍪",
+        };
+        const decodeEmojiShortcodes = (html) => {
+          if (!html || html.indexOf("emoji") < 0) return html;
+          // Rocketlane wraps shortcodes in <span class="emoji">:code:</span>
+          return html.replace(
+            /<span\s+class="emoji">\s*:([a-z0-9_+\-]+):\s*<\/span>/gi,
+            (m, code) => EMOJI_SHORTCODES[code.toLowerCase()] || m,
+          );
+        };
+
         // Return sanitized HTML for a notification's preview content. We
         // surface the FIRST non-empty source from these meta fields:
         //   - message.content   → chat comments / mentions / reactions
@@ -18976,6 +19040,9 @@
         //   - description       → task description updates
         // The sanitizer already whitelists the rl__mention data-* attrs,
         // and CSS line-clamp in .notifItemComment caps the visual height.
+        // Emoji shortcodes are decoded BEFORE sanitization so the
+        // resulting characters are plain text (the wrapping <span class=
+        // "emoji"> is gone) — no special CSS needed downstream.
         const notifCommentHtmlFor = (n) => {
           const candidates = [
             n?.meta?.message?.content,
@@ -18984,7 +19051,7 @@
           ];
           for (const raw of candidates) {
             const html = String(raw ?? "").trim();
-            if (html) return sanitizeHtmlForChatMessage(html);
+            if (html) return sanitizeHtmlForChatMessage(decodeEmojiShortcodes(html));
           }
           return "";
         };
