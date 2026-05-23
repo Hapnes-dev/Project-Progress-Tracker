@@ -4136,14 +4136,18 @@
       .chatPanel.chatPanelFullscreen > * {
         cursor: auto;
       }
-      /* Give the chat header its own surface background in fullscreen so it
-         visually groups with the chatBody and chatCompose surfaces below it. */
+      /* Give the chat header its own opaque surface background in
+         fullscreen so it visually groups with the chatBody and chatCompose
+         surfaces below it AND the dim backdrop doesn't bleed through. */
       .chatPanel.chatPanelFullscreen .sectionTitle {
-        background: var(--surface-1);
+        background: #0f1424;
         border: 1px solid var(--hairline);
         border-radius: var(--radius-lg);
         padding: 10px 14px;
         margin: 0;
+      }
+      @media (prefers-color-scheme: light) {
+        .chatPanel.chatPanelFullscreen .sectionTitle { background: #ffffff; }
       }
       .chatPanel.chatPanelFullscreen .chatHistoryBody {
         flex: 1;
@@ -4153,6 +4157,12 @@
         max-width: 1100px;
         width: 100%;
         align-self: center;
+        /* Solid opaque surface so the dim/blurred backdrop doesn't bleed
+           through the nearly-transparent var(--surface-1). */
+        background: #0f1424;
+      }
+      @media (prefers-color-scheme: light) {
+        .chatPanel.chatPanelFullscreen .chatHistoryBody { background: #ffffff; }
       }
       .chatPanel.chatPanelFullscreen .sectionTitle {
         order: 1; /* header on top */
@@ -4165,6 +4175,11 @@
         max-width: 1100px;
         align-self: center;
         width: 100%;
+        /* Solid opaque surface — same reason as chatHistoryBody above. */
+        background: #0f1424;
+      }
+      @media (prefers-color-scheme: light) {
+        .chatPanel.chatPanelFullscreen .chatCompose { background: #ffffff; }
       }
       /* Fullscreen-mode expand button: pinned to the top-right of the overlay
          so it's always visible regardless of how the header lays out. */
