@@ -15989,6 +15989,9 @@
         for (const area of getAreasForProject(p)) {
           const section = document.createElement("div");
           section.className = "areaBox" + (area === "rocketlane_tasks" ? " rocketlaneBox" : "");
+          // Tag the card with its area so the FLIP animation in
+          // toggleCategory can re-identify the same card after render().
+          section.dataset.area = String(area);
           // Per-category open animation: one-shot keyframe fires when the
           // section is freshly mounted with the expanded marker. The class
           // is removed after the animation so subsequent re-renders don't
@@ -16115,32 +16118,81 @@
 
           // Presets removed (categories/tasks should mirror Rocketlane).
 
+          // FLIP-animate the sibling category cards so they smoothly slide
+          // to their new grid positions when one card grows or shrinks,
+          // instead of snapping. Implementation:
+          //   1. Capture every .areaBox's current rect, keyed by area.
+          //   2. Trigger render() — DOM rebuilt at new positions.
+          //   3. For each freshly-rendered card whose area existed before,
+          //      apply translate(oldX-newX, oldY-newY) so it visually
+          //      stays in its old spot.
+          //   4. Force reflow, then transition back to identity → cards
+          //      slide from old to new position smoothly.
+          const flipSiblingCategories = (excludeArea) => {
+            const oldRects = new Map();
+            for (const box of document.querySelectorAll(".areaBox")) {
+              const a = box.dataset.area;
+              if (a && a !== excludeArea) oldRects.set(a, box.getBoundingClientRect());
+            }
+            return () => {
+              for (const box of document.querySelectorAll(".areaBox")) {
+                const a = box.dataset.area;
+                if (!a || a === excludeArea) continue;
+                const oldRect = oldRects.get(a);
+                if (!oldRect) continue;
+                const newRect = box.getBoundingClientRect();
+                const dx = oldRect.left - newRect.left;
+                const dy = oldRect.top - newRect.top;
+                if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+                box.style.transition = "none";
+                box.style.transform = `translate(${dx}px, ${dy}px)`;
+                box.style.willChange = "transform";
+                // Force reflow so the browser registers the start state
+                void box.offsetWidth;
+                box.style.transition = "transform 420ms cubic-bezier(0.22, 1, 0.36, 1)";
+                box.style.transform = "";
+                box.addEventListener("transitionend", function clear() {
+                  box.style.transition = "";
+                  box.style.willChange = "";
+                  box.removeEventListener("transitionend", clear);
+                }, { once: true });
+              }
+            };
+          };
+
           const toggleCategory = () => {
             p.expandedCategories = p.expandedCategories ?? {};
             const willExpand = !p.expandedCategories[area];
             if (willExpand) {
+              // Capture old positions BEFORE state change + render.
+              // The expanding card itself is excluded — its own open
+              // animation (clip-path wipe) plays separately.
+              const applyFlip = flipSiblingCategories(String(area));
               p.expandedCategories[area] = true;
               categoryJustExpanded.add(String(p.id) + "|" + String(area));
               render();
+              applyFlip();
             } else {
               // Play the close-out animation on the existing section, THEN
               // re-render to remove the expanded content. Without the delay,
               // render() would yank the DOM before any animation could play.
               section.classList.add("areaBoxJustClosing");
-              const onDone = () => {
+              const finish = () => {
                 section.removeEventListener("animationend", onDone);
+                // Capture rects right before the closing card disappears.
+                const applyFlip = flipSiblingCategories(String(area));
                 p.expandedCategories[area] = false;
                 render();
+                applyFlip();
               };
+              const onDone = () => finish();
               section.addEventListener("animationend", onDone);
               // Safety fallback if animationend never fires (e.g. tab hidden).
               // Has to outlast the close animation (420ms) so it doesn't
               // yank the DOM mid-collapse.
               window.setTimeout(() => {
                 if (section.classList.contains("areaBoxJustClosing")) {
-                  section.removeEventListener("animationend", onDone);
-                  p.expandedCategories[area] = false;
-                  render();
+                  finish();
                 }
               }, 800);
             }
