@@ -14623,6 +14623,14 @@
           let mentionActiveIdx = 0;
           let mentionStart = -1; // index in composeInput.value where the '@' lives, or -1
 
+          // Reposition the popup on scroll/resize while it's open so it
+          // tracks the textarea (which moves as the page scrolls).
+          const repositionMentionPopup = () => {
+            if (mentionPopup && mentionStart >= 0) openMentionPopupIfNeeded();
+          };
+          window.addEventListener("scroll", repositionMentionPopup, true);
+          window.addEventListener("resize", repositionMentionPopup);
+
           const closeMentionPopup = () => {
             if (mentionPopup && mentionPopup.parentNode) {
               mentionPopup.parentNode.removeChild(mentionPopup);
