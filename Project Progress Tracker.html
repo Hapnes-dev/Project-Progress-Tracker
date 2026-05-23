@@ -17239,10 +17239,21 @@
       }
 
       function render() {
+        // Preserve scroll across every render. Background renders fired
+        // by async work (chat fetch, notes load, Rocketlane sync) used to
+        // nudge the page up/down by tens of pixels each — visible as
+        // jitter between unrelated user interactions. Re-locking the
+        // window position around the inner renders keeps the page rock
+        // steady whatever else is happening in the background.
+        const sx = window.scrollX, sy = window.scrollY;
         renderOwnerStatusOverview();
         renderList();
         renderDetail();
         rocketlaneUpdateSyncButtonState();
+        if (window.scrollX !== sx || window.scrollY !== sy) {
+          try { window.scrollTo({ left: sx, top: sy, behavior: "instant" }); }
+          catch { window.scrollTo(sx, sy); }
+        }
       }
 
       function touchProject(projectId) {
