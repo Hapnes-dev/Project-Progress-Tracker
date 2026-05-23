@@ -4725,6 +4725,33 @@
         border-radius: var(--radius-lg);
         max-height: 500px; /* explicit cap so collapse transition has a known target */
       }
+      .composeInputWrap {
+        position: relative;
+        width: 100%;
+      }
+      .composeHighlight {
+        position: absolute;
+        inset: 0;
+        padding: 8px 10px;
+        font-family: var(--sans);
+        font-size: 13px;
+        line-height: 1.5;
+        color: var(--text);
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        overflow: hidden;
+        pointer-events: none;
+        border: 1px solid transparent; /* match textarea border to keep alignment */
+        border-radius: var(--radius);
+        background: transparent;
+      }
+      .composeMention {
+        background: rgba(72, 132, 255, 0.18);
+        color: #79b4ff;
+        border-radius: 4px;
+        padding: 1px 3px;
+        font-weight: 600;
+      }
       .chatComposeInput {
         width: 100%;
         min-height: 60px;
@@ -4735,10 +4762,14 @@
         font-family: var(--sans);
         font-size: 13px;
         line-height: 1.5;
-        color: var(--text);
+        color: transparent;            /* hidden — overlay renders the text */
+        caret-color: var(--text);      /* caret still visible */
+        -webkit-text-fill-color: transparent;
         resize: vertical;
         outline: none;
+        position: relative;            /* sits on top of .composeHighlight */
       }
+      .chatComposeInput::selection { background: rgba(72, 132, 255, 0.35); color: transparent; }
       .chatComposeInput:hover { background: var(--surface-2); }
       .chatComposeInput:focus {
         background: var(--surface-2);
@@ -14550,6 +14581,10 @@
                       avatar: "", // could be populated later if needed
                     };
                   });
+                // Re-render the highlight overlay now that we know the
+                // member names — any pre-typed @Name in the textarea
+                // should get colored.
+                try { renderComposeHighlight(); } catch (_) {}
               })
               .catch((e) => console.warn("[Chat mentions] fetchProjectMembers failed:", e));
           }
@@ -14719,6 +14754,7 @@
             composeInput.setSelectionRange(newCursor, newCursor);
             composeInput.focus();
             closeMentionPopup();
+            renderComposeHighlight();
           };
 
           composeInput.addEventListener("input", updateMentionPopup);
@@ -14890,10 +14926,60 @@
           composeRow.appendChild(attachBtn);
           composeRow.appendChild(composeStatus);
           composeRow.appendChild(composeSendBtn);
-          compose.appendChild(composeInput);
+          // Wrap textarea in a relative container with a highlight overlay
+          // behind it. The overlay renders the same text with @Mentions
+          // wrapped in styled spans (blue chips). The textarea itself has
+          // transparent text color so only the caret + selection show,
+          // letting the overlay's styled text appear underneath.
+          const composeWrap = document.createElement("div");
+          composeWrap.className = "composeInputWrap";
+          const composeHighlight = document.createElement("div");
+          composeHighlight.className = "composeHighlight";
+          composeHighlight.setAttribute("aria-hidden", "true");
+          composeWrap.appendChild(composeHighlight);
+          composeWrap.appendChild(composeInput);
+          compose.appendChild(composeWrap);
           compose.appendChild(attachStrip);
           compose.appendChild(composeRow);
           compose.appendChild(fileInput);
+
+          // Sync overlay text with the textarea, wrapping @mentions in spans.
+          const escapeHtml = (s) => s
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+          const renderComposeHighlight = () => {
+            const text = composeInput.value;
+            if (!mentionMembers.length) {
+              // Trailing newline trick: ensure overlay grows to match a
+              // textarea that ends with a newline (browsers collapse it).
+              composeHighlight.textContent = text + (text.endsWith("\n") ? " " : "");
+              return;
+            }
+            // Sort longer names first so "John Smith" wins over "John".
+            const sorted = mentionMembers.slice().sort((a, b) => b.fullName.length - a.fullName.length);
+            // Build a single regex that matches "@" + any known full name,
+            // bounded so trailing punctuation/space doesn't get eaten.
+            const escapedNames = sorted.map(m => m.fullName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+            const re = new RegExp("@(?:" + escapedNames.join("|") + ")", "g");
+            let html = "";
+            let last = 0;
+            let match;
+            while ((match = re.exec(text)) !== null) {
+              html += escapeHtml(text.slice(last, match.index));
+              html += '<span class="composeMention">' + escapeHtml(match[0]) + "</span>";
+              last = match.index + match[0].length;
+            }
+            html += escapeHtml(text.slice(last));
+            if (text.endsWith("\n")) html += "&nbsp;";
+            composeHighlight.innerHTML = html;
+            // Keep overlay scroll in sync with textarea
+            composeHighlight.scrollTop = composeInput.scrollTop;
+            composeHighlight.scrollLeft = composeInput.scrollLeft;
+          };
+          composeInput.addEventListener("input", renderComposeHighlight);
+          composeInput.addEventListener("scroll", () => {
+            composeHighlight.scrollTop = composeInput.scrollTop;
+            composeHighlight.scrollLeft = composeInput.scrollLeft;
+          });
 
           // Track which kind is currently active so Send posts to the right chat.
           // Use the cached activeKind so re-renders restore the user's last tab.
