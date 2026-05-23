@@ -2687,25 +2687,29 @@
 
       /* Per-category open animation. One-shot keyframe — plays when the
          section is freshly mounted with the .areaBoxJustOpened marker.
-         Slower / more visible than the parent collapsibles so the open
-         feels deliberate when you toggle one card. */
+         Slow, unfolding feel: the card grows from the top down (scaleY
+         from top-origin) while fading in. transform-origin: top makes
+         the bottom edge slide down rather than the card stretching from
+         the middle. */
       @keyframes areaBoxOpenIn {
-        from { opacity: 0; transform: translateY(-10px) scale(0.985); }
-        to   { opacity: 1; transform: translateY(0) scale(1); }
+        0%   { opacity: 0; transform: scaleY(0.55) translateY(-14px); }
+        60%  { opacity: 1; }
+        100% { opacity: 1; transform: scaleY(1) translateY(0); }
       }
       .areaBox.areaBoxJustOpened {
-        animation: areaBoxOpenIn 600ms cubic-bezier(0.16, 1, 0.3, 1) both;
+        transform-origin: top center;
+        animation: areaBoxOpenIn 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
       }
-      /* Per-category close animation. Plays before render() removes the
-         expanded content from the DOM. Symmetric to the open but uses
-         ease-in (accelerate) so it feels like the panel is "tucking
-         away" rather than gently dropping in. */
+      /* Per-category close animation. Symmetric: the card collapses
+         upward (scaleY shrinking from top-origin) and fades. ease-in so
+         the motion feels like it's tucking away with momentum. */
       @keyframes areaBoxCloseOut {
-        from { opacity: 1; transform: translateY(0) scale(1); }
-        to   { opacity: 0; transform: translateY(-8px) scale(0.985); }
+        0%   { opacity: 1; transform: scaleY(1) translateY(0); }
+        100% { opacity: 0; transform: scaleY(0.55) translateY(-10px); }
       }
       .areaBox.areaBoxJustClosing {
-        animation: areaBoxCloseOut 320ms cubic-bezier(0.4, 0, 0.6, 1) forwards;
+        transform-origin: top center;
+        animation: areaBoxCloseOut 550ms cubic-bezier(0.5, 0, 0.75, 0) forwards;
         pointer-events: none;
       }
 
@@ -16118,14 +16122,16 @@
                 render();
               };
               section.addEventListener("animationend", onDone);
-              // Safety fallback if animationend never fires (e.g. tab hidden)
+              // Safety fallback if animationend never fires (e.g. tab hidden).
+              // Has to outlast the longest close animation (550ms) so it
+              // doesn't yank the DOM mid-collapse.
               window.setTimeout(() => {
                 if (section.classList.contains("areaBoxJustClosing")) {
                   section.removeEventListener("animationend", onDone);
                   p.expandedCategories[area] = false;
                   render();
                 }
-              }, 500);
+              }, 800);
             }
           };
 
