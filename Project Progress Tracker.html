@@ -16153,7 +16153,11 @@
                 pending++;
                 // Force reflow so the browser registers the start state
                 void box.offsetWidth;
-                box.style.transition = "transform 420ms cubic-bezier(0.22, 1, 0.36, 1)";
+                // Material "standard" easing — gentle accelerate-then-
+                // decelerate. The earlier expo-out curve had a very steep
+                // initial slope that made siblings appear to "jump" most
+                // of the way before settling, instead of smoothly sliding.
+                box.style.transition = "transform 480ms cubic-bezier(0.4, 0, 0.2, 1)";
                 box.style.transform = "translate3d(0, 0, 0)";
                 const clear = () => {
                   box.style.transition = "";
