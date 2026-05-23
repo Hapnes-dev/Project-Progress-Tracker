@@ -1750,20 +1750,14 @@
         font-size: 13px;
         color: var(--text);
         word-break: break-word;
-        /* Flex column instead of grid with auto-auto rows — grid was always
-           reserving a second row even when only the title was rendered,
-           making the text container taller than necessary and shifting the
-           visible text toward the top of the task row. */
         display: flex;
         flex-direction: column;
         gap: 4px;
         min-width: 0;
-        /* Optical centering nudge: text cap-height + descender geometry
-           makes the visible glyph mass sit slightly above the geometric
-           center of its line-box. A 2px downward shift compensates so the
-           text reads as perfectly vertically centered next to the status
-           pill and the Remove button. */
-        padding-top: 2px;
+        /* No padding nudge — the optical fix is applied at the row level
+           (.task padding-bottom adjusted slightly more than padding-top)
+           so all three grid items (status pill, text, Remove button)
+           shift together instead of just the text. */
       }
 
       .task .t .topLine {
@@ -2621,7 +2615,10 @@
       .task {
         border: 1px solid var(--hairline);
         background: var(--surface-1);
-        padding: 6px 12px;
+        /* Slightly more top padding than bottom — pushes the centered
+           grid items (status pill, text, Remove button) down 2px so the
+           row reads as visually centered instead of top-heavy. */
+        padding: 9px 12px 7px;
         box-shadow: inset 0 0 0 0 transparent; /* explicit base for clean shadow transitions */
         border-radius: var(--radius);
         gap: 12px;
