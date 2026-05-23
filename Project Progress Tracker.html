@@ -4119,12 +4119,31 @@
         position: fixed;
         inset: 0;
         z-index: 1200;
-        background: #0f1424;
-        padding: 16px 20px 12px;
+        /* Dim translucent backdrop instead of solid panel — chat content
+           floats above the rest of the page. Clicking the backdrop (outside
+           the centered chat container) exits fullscreen. */
+        background: rgba(0, 0, 0, 0.7);
+        backdrop-filter: blur(6px);
+        padding: 60px 20px 20px;
         gap: 8px;
+        cursor: pointer; /* hint that backdrop is clickable */
       }
       @media (prefers-color-scheme: light) {
-        .chatPanel.chatPanelFullscreen { background: #ffffff; }
+        .chatPanel.chatPanelFullscreen { background: rgba(0, 0, 0, 0.45); }
+      }
+      /* Centered content elements stay default cursor — only the backdrop
+         (panel itself, not its children) should look clickable. */
+      .chatPanel.chatPanelFullscreen > * {
+        cursor: auto;
+      }
+      /* Give the chat header its own surface background in fullscreen so it
+         visually groups with the chatBody and chatCompose surfaces below it. */
+      .chatPanel.chatPanelFullscreen .sectionTitle {
+        background: var(--surface-1);
+        border: 1px solid var(--hairline);
+        border-radius: var(--radius-lg);
+        padding: 10px 14px;
+        margin: 0;
       }
       .chatPanel.chatPanelFullscreen .chatHistoryBody {
         flex: 1;
@@ -14650,6 +14669,17 @@
               window.removeEventListener("popstate", exitFullscreenOnPopstate);
             }
           };
+          // Click on the dim backdrop (outside any chat content) exits
+          // fullscreen. We check ev.target === chatPanel so clicks inside
+          // the centered children (header, body, compose) don't trigger.
+          const exitFullscreenOnBackdropClick = (ev) => {
+            if (!chatIsFullscreen) return;
+            if (ev.target === chatPanel) {
+              ev.preventDefault();
+              toggleChatFullscreen();
+            }
+          };
+
           const toggleChatFullscreen = () => {
             chatIsFullscreen = !chatIsFullscreen;
             chatPanel.classList.toggle("chatPanelFullscreen", chatIsFullscreen);
@@ -14661,6 +14691,7 @@
               // Use capture phase so we beat the browser's default back-nav
               document.addEventListener("mousedown", exitFullscreenOnMouseBack, true);
               document.addEventListener("auxclick", exitFullscreenOnMouseBack, true);
+              chatPanel.addEventListener("click", exitFullscreenOnBackdropClick);
               // Push a history entry so the browser's back action targets us
               try { history.pushState({ chatFullscreen: true }, ""); } catch (_) {}
               window.addEventListener("popstate", exitFullscreenOnPopstate);
@@ -14669,6 +14700,7 @@
               document.removeEventListener("keydown", exitFullscreenOnEsc);
               document.removeEventListener("mousedown", exitFullscreenOnMouseBack, true);
               document.removeEventListener("auxclick", exitFullscreenOnMouseBack, true);
+              chatPanel.removeEventListener("click", exitFullscreenOnBackdropClick);
               window.removeEventListener("popstate", exitFullscreenOnPopstate);
               // Pop the sentinel state we pushed when opening — only if the
               // close was user-initiated (button click / Esc), not already a
