@@ -18765,27 +18765,119 @@
         // Pretty-print just the action part of a notification — NO actor name.
         // The caller is responsible for prepending the actor; that way we
         // avoid the double-naming bug from the previous version.
-        const notifVerbFor = (n) => {
+        // Format a date for the notification body.
+        //   "2026-05-18"  → "18 May"
+        //   "2026-05-18T07:00:00Z" → "18 May 09:00" (local time)
+        const fmtNotifDate = (raw) => {
+          if (!raw) return "";
+          try {
+            const d = new Date(raw);
+            if (Number.isNaN(d.getTime())) return String(raw);
+            // Date-only ("YYYY-MM-DD") gets no time component
+            const hasTime = String(raw).includes("T");
+            return d.toLocaleString("nb-NO", hasTime
+              ? { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Europe/Oslo" }
+              : { day: "2-digit", month: "short" });
+          } catch { return String(raw); }
+        };
+        // Compute Sunday of week given a Monday start date string.
+        const fmtWeekRange = (startStr) => {
+          if (!startStr) return "";
+          try {
+            const start = new Date(startStr);
+            if (Number.isNaN(start.getTime())) return String(startStr);
+            const end = new Date(start.getTime());
+            end.setDate(end.getDate() + 6);
+            return fmtNotifDate(start.toISOString().slice(0, 10)) + " – " + fmtNotifDate(end.toISOString().slice(0, 10));
+          } catch { return String(startStr); }
+        };
+        // Pull a human label out of a `from`/`to` value (statuses are
+        // {group, label}, dates are {type, value}).
+        const fromToValue = (v) => {
+          if (v == null) return "";
+          if (typeof v === "string" || typeof v === "number") return String(v);
+          if (v.label) return String(v.label);
+          if (v.value) return /^\d{4}-\d{2}-\d{2}/.test(String(v.value)) ? fmtNotifDate(v.value) : String(v.value);
+          return "";
+        };
+        // Build the action-text part of the notification (everything
+        // after the actor name) as sanitized HTML. The richer mapping
+        // here covers every systemRuleIdentifier Rocketlane sends —
+        // captured by hitting the live API and tabulating the distinct
+        // rules + meta shapes.
+        const notifVerbHtmlFor = (n) => {
           const rule = String(n?.systemRuleIdentifier ?? "");
           const event = String(n?.meta?.eventType ?? "");
-          const verbMap = {
-            NEW_TASK_PROJECT_MEMBERSHIP: "created a new task",
-            TASK_ASSIGNEE_CHANGED:       "changed the assignee",
-            TASK_STATUS_CHANGED:         "updated the task status",
-            TASK_DESCRIPTION_UPDATED:    "updated this task's description",
-            TASK_FIELD_CHANGED:          "updated this task",
-            TASK_COMMENT_ADDED:          "commented on the task",
-            TASK_MENTION:                "mentioned you",
-            NEW_COMMENT_CONVERSATION:    "sent a new message",
-            PROJECT_CHAT_NEW_MESSAGE:    "sent a new message",
-            PROJECT_CHAT_MENTION:        "mentioned you in chat",
-            MENTION_COMMENT:             "mentioned you in a comment",
-            TIME_SHEET_DUE_REMINDER:     "Reminder: Timesheet due",
-            TIME_SHEET_OVERDUE_REMINDER: "Reminder: Timesheet overdue",
-            DOCUMENT_SIGNED:             "signed a document",
-          };
-          const verb = verbMap[rule] || (event ? event.replace(/([A-Z])/g, " $1").trim().toLowerCase() : rule.toLowerCase().replace(/_/g, " "));
-          return verb;
+          const meta = n?.meta ?? {};
+          const esc = escapeForHtml;
+          const wrap = (s) => `<em style="color:var(--text);font-style:normal">${esc(s)}</em>`;
+          const label = (s) => `<strong style="font-weight:600;color:var(--text)">${esc(s)}</strong>`;
+          switch (rule) {
+            case "TIME_SHEET_OVERDUE_REMINDER":
+              return `Reminder: Timesheet <span style="color:#f43f5e">overdue</span> for the week ${label(fmtWeekRange(meta.start))}`;
+            case "TIME_SHEET_DUE_REMINDER":
+              return `Reminder: Timesheet due for the week ${label(fmtWeekRange(meta.start))}`;
+            case "APPROVED_TIME_SHEET":
+              return `approved your timesheet for week of ${label(fmtNotifDate(meta.start))}`;
+            case "REQUESTED_TIME_SHEET":
+              return `requested your timesheet for week of ${label(fmtNotifDate(meta.start))}`;
+            case "NOTIFY_THROUGH_AUTOMATION":
+              // The body of the automation note is rendered as preview;
+              // this top line just labels the event.
+              return meta.subject ? `Automation: ${wrap(meta.subject)}` : "ran an automation";
+            case "CHANGE_PROJECT_STATUS":
+              return `changed project Status from ${label(fromToValue(meta.from))} to ${label(fromToValue(meta.to))}`;
+            case "CHANGE_PROJECT_DUE_DATE":
+              return `changed project Due Date from ${label(fromToValue(meta.from))} to ${label(fromToValue(meta.to))}`;
+            case "CHANGE_PROJECT_PHASE_STATUS":
+              return `changed phase ${wrap(meta.phaseName || "")} status from ${label(fromToValue(meta.from))} to ${label(fromToValue(meta.to))}`;
+            case "CHANGE_PROJECT_PHASE_DUE_DATE":
+              return `changed phase ${wrap(meta.phaseName || "")} due date from ${label(fromToValue(meta.from))} to ${label(fromToValue(meta.to))}`;
+            case "CHANGE_PROJECT_PHASE_START_DATE":
+              return `changed phase ${wrap(meta.phaseName || "")} start date from ${label(fromToValue(meta.from))} to ${label(fromToValue(meta.to))}`;
+            case "ADDED_PROJECT_TEAM_MEMBER_ADDED_TO_OTHER_PROJECT":
+              return `added you to this project`;
+            case "ADDED_PROJECT_TEAM_MEMBER_JOINED_MY_PROJECT": {
+              const u = meta.user || {};
+              const fullName = [u.firstName, u.lastName].filter(Boolean).join(" ").trim();
+              return `added ${label(fullName || "a teammate")} to this project`;
+            }
+            case "NEW_FOLDER_ATTACHMENT":
+              return `added a file`;
+            case "NEW_TASK_PROJECT_MEMBERSHIP":
+              return meta.title ? `created task ${wrap(meta.title)}` : "created a new task";
+            case "ASSIGN_TASK":
+              return meta.title ? `assigned ${wrap(meta.title)} to you` : "assigned a task to you";
+            case "CHANGE_TASK_DESCRIPTION":
+              return `updated this task's description`;
+            case "TASK_ASSIGNEE_CHANGED":  return "changed the assignee";
+            case "TASK_STATUS_CHANGED":    return "updated the task status";
+            case "TASK_FIELD_CHANGED":     return "updated this task";
+            case "TASK_COMMENT_ADDED":     return "commented on the task";
+            case "TASK_MENTION":           return "mentioned you";
+            case "MENTION_COMMENT":        return "mentioned you in a comment";
+            case "NEW_COMMENT_CONVERSATION":
+            case "PROJECT_CHAT_NEW_MESSAGE":
+              return "sent a new message";
+            case "PROJECT_CHAT_MENTION":   return "mentioned you in chat";
+            case "REACT_COMMENT_USER":     return `reacted ${wrap(meta.reaction || "")} to a message`;
+            case "TASK_START_DATE_REMINDER_ON_ASSIGNEE_ADD": return `Reminder: task starts ${label(fmtNotifDate(meta.at))}`;
+            case "TASK_DUE_DATE_REMINDER_ON_ASSIGNEE_ADD":   return `Reminder: task due ${label(fmtNotifDate(meta.at))}`;
+            case "PROJECT_HOURS_THRESHOLD_REACHED":
+              return `Project reached ${label(meta.thresholdPercentage + "%")} of ${label(meta.projectHours + "h")} budget`;
+            case "TIME_OFF_CREATED":
+              return `requested time off ${label(fmtNotifDate(meta.timeOffStart))} → ${label(fmtNotifDate(meta.timeOffEnd))}`;
+            case "DOCUMENT_SIGNED":        return "signed a document";
+          }
+          // Fallback: best-effort humanization of unknown rules.
+          const verb = event ? event.replace(/([A-Z])/g, " $1").trim().toLowerCase() : rule.toLowerCase().replace(/_/g, " ");
+          return esc(verb);
+        };
+        // Plain-text version of the verb for accessibility/tooltips.
+        const notifVerbFor = (n) => {
+          const html = notifVerbHtmlFor(n);
+          // Strip tags for the plain-text fallback
+          return html.replace(/<[^>]+>/g, "");
         };
         // Resolve a project name from (1) the cache, (2) local state, or
         // (3) returns null — caller is responsible for kicking off a fetch.
@@ -18856,14 +18948,24 @@
           return "";
         };
 
-        // Return sanitized HTML for a notification's comment so the preview
-        // keeps Rocketlane formatting (mention chips, line breaks, links).
-        // The sanitizer already whitelists the rl__mention data-* attrs.
-        // CSS line-clamp in .notifItemComment handles the visual cap.
+        // Return sanitized HTML for a notification's preview content. We
+        // surface the FIRST non-empty source from these meta fields:
+        //   - message.content   → chat comments / mentions / reactions
+        //   - note              → automation messages, time-off notes
+        //   - description       → task description updates
+        // The sanitizer already whitelists the rl__mention data-* attrs,
+        // and CSS line-clamp in .notifItemComment caps the visual height.
         const notifCommentHtmlFor = (n) => {
-          const html = String(n?.meta?.message?.content ?? "").trim();
-          if (!html) return "";
-          return sanitizeHtmlForChatMessage(html);
+          const candidates = [
+            n?.meta?.message?.content,
+            n?.meta?.note,
+            n?.meta?.description,
+          ];
+          for (const raw of candidates) {
+            const html = String(raw ?? "").trim();
+            if (html) return sanitizeHtmlForChatMessage(html);
+          }
+          return "";
         };
         // Plain-text fallback (used for the tooltip and for screen readers).
         const notifCommentTextFor = (n) => {
@@ -18989,11 +19091,18 @@
               text.className = "notifItemText";
               const actorName = (String(by?.firstName ?? "").trim() + " " + String(by?.lastName ?? "").trim()).trim()
                 || String(by?.userName ?? by?.emailId ?? "Someone");
-              const verb = notifVerbFor(n);
+              const verbHtml = notifVerbHtmlFor(n);
               const strong = document.createElement("strong");
               strong.textContent = actorName + " ";
               text.appendChild(strong);
-              text.appendChild(document.createTextNode(verb));
+              // Verb HTML may contain inline <em>/<strong>/<span> markers
+              // for status from/to, week ranges, etc. Inject as innerHTML
+              // since the content is built from a controlled template
+              // (no user-supplied raw HTML — every variable is escaped
+              // through escapeForHtml() inside notifVerbHtmlFor).
+              const verbSpan = document.createElement("span");
+              verbSpan.innerHTML = verbHtml;
+              text.appendChild(verbSpan);
               // If a task/conversation title is in meta, append it as a faint link
               const titleHint = String(n?.meta?.title ?? "").trim();
               if (titleHint && titleHint !== notifGroupTitle(group)) {
