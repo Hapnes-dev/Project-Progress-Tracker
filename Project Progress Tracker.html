@@ -1040,6 +1040,26 @@
         line-height: 1.5;
       }
 
+      /* Compact toolbar row of project link buttons (Zendesk / Oneflow /
+         Younium / HubSpot / Rocketlane). Mirrors the .btn style used by
+         "🚀 Rocketlane", "📁 Files", "📦 Order info" in the project header. */
+      .projectLinksRow {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 14px 0 6px;
+      }
+      .projectLinkBtn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        text-decoration: none !important;
+      }
+      .projectLinkIcon { font-size: 14px; line-height: 1; }
+      .projectLinkLabel { font-weight: 600; }
+      .projectLinkArrow { opacity: 0.55; font-size: 11px; margin-left: 2px; }
+      .projectLinkBtn:hover .projectLinkArrow { opacity: 1; }
+
       .zendeskLink {
         display: block;
         font-size: 12px;
@@ -13651,158 +13671,39 @@
         const picWrap = document.createElement("div");
         picWrap.style.marginTop = "14px";
 
-        // Zendesk ticket link (shown if provided)
-        const zendeskRaw = p.overviewUrl?.trim();
-        if (zendeskRaw) {
-          const zLabel = document.createElement("div");
-          zLabel.className = "small";
-          zLabel.style.color = "var(--muted)";
-          zLabel.style.marginBottom = "6px";
-          zLabel.textContent = "Zendesk ticket";
-
-          const zHref = toHttpUrl(zendeskRaw);
-          if (zHref) {
-            const zLink = document.createElement("a");
-            zLink.className = "zendeskLink";
-            zLink.href = zHref;
-            zLink.target = "_blank";
-            zLink.rel = "noopener noreferrer";
-            zLink.textContent = zendeskRaw;
-            zLink.title = zendeskRaw;
-            picWrap.appendChild(zLabel);
-            picWrap.appendChild(zLink);
-          } else {
-            const zText = document.createElement("div");
-            zText.className = "zendeskLink";
-            zText.textContent = zendeskRaw;
-            zText.title = zendeskRaw;
-            picWrap.appendChild(zLabel);
-            picWrap.appendChild(zText);
+        // Project links — rendered as a compact toolbar row of .btn buttons
+        // (matching the style of "🚀 Rocketlane", "📁 Files", "📦 Order info"
+        // in the project header). Each button opens its URL in a new tab.
+        // Full URL appears as a tooltip on hover.
+        const linkDefs = [
+          { url: p.overviewUrl,    icon: "🎫", label: "Zendesk" },
+          { url: p.oneflowUrl,     icon: "📝", label: "Oneflow" },
+          { url: p.youniumUrl,     icon: "💼", label: "Younium" },
+          { url: p.hubspotUrl,     icon: "🟧", label: "HubSpot" },
+          { url: p.rocketlaneUrl,  icon: "🚀", label: "Rocketlane" },
+        ];
+        const renderableLinks = linkDefs
+          .map((d) => ({ ...d, raw: String(d.url ?? "").trim() }))
+          .filter((d) => d.raw);
+        if (renderableLinks.length) {
+          const linkRow = document.createElement("div");
+          linkRow.className = "projectLinksRow";
+          for (const def of renderableLinks) {
+            const href = toHttpUrl(def.raw);
+            const el = href ? document.createElement("a") : document.createElement("span");
+            el.className = "btn projectLinkBtn";
+            if (href) {
+              el.href = href;
+              el.target = "_blank";
+              el.rel = "noopener noreferrer";
+            }
+            el.title = def.raw;
+            el.innerHTML = '<span class="projectLinkIcon">' + def.icon + '</span> ' +
+              '<span class="projectLinkLabel">' + def.label + '</span>' +
+              (href ? '<span class="projectLinkArrow" aria-hidden="true">↗</span>' : '');
+            linkRow.appendChild(el);
           }
-        }
-
-        // Oneflow link (shown if provided)
-        const oneflowRaw = p.oneflowUrl?.trim();
-        if (oneflowRaw) {
-          const oLabel = document.createElement("div");
-          oLabel.className = "small";
-          oLabel.style.color = "var(--muted)";
-          oLabel.style.marginTop = zendeskRaw ? "14px" : "0";
-          oLabel.style.marginBottom = "6px";
-          oLabel.textContent = "Oneflow";
-
-          const oHref = toHttpUrl(oneflowRaw);
-          if (oHref) {
-            const oLink = document.createElement("a");
-            oLink.className = "zendeskLink";
-            oLink.href = oHref;
-            oLink.target = "_blank";
-            oLink.rel = "noopener noreferrer";
-            oLink.textContent = oneflowRaw;
-            oLink.title = oneflowRaw;
-            picWrap.appendChild(oLabel);
-            picWrap.appendChild(oLink);
-          } else {
-            const oText = document.createElement("div");
-            oText.className = "zendeskLink";
-            oText.textContent = oneflowRaw;
-            oText.title = oneflowRaw;
-            picWrap.appendChild(oLabel);
-            picWrap.appendChild(oText);
-          }
-        }
-
-        // Younium link (shown if provided)
-        const youniumRaw = p.youniumUrl?.trim();
-        if (youniumRaw) {
-          const yLabel = document.createElement("div");
-          yLabel.className = "small";
-          yLabel.style.color = "var(--muted)";
-          yLabel.style.marginTop = zendeskRaw || oneflowRaw ? "14px" : "0";
-          yLabel.style.marginBottom = "6px";
-          yLabel.textContent = "Younium";
-
-          const yHref = toHttpUrl(youniumRaw);
-          if (yHref) {
-            const yLink = document.createElement("a");
-            yLink.className = "zendeskLink";
-            yLink.href = yHref;
-            yLink.target = "_blank";
-            yLink.rel = "noopener noreferrer";
-            yLink.textContent = youniumRaw;
-            yLink.title = youniumRaw;
-            picWrap.appendChild(yLabel);
-            picWrap.appendChild(yLink);
-          } else {
-            const yText = document.createElement("div");
-            yText.className = "zendeskLink";
-            yText.textContent = youniumRaw;
-            yText.title = youniumRaw;
-            picWrap.appendChild(yLabel);
-            picWrap.appendChild(yText);
-          }
-        }
-
-        // HubSpot link (shown if provided)
-        const hubspotRaw = p.hubspotUrl?.trim();
-        if (hubspotRaw) {
-          const hLabel = document.createElement("div");
-          hLabel.className = "small";
-          hLabel.style.color = "var(--muted)";
-          hLabel.style.marginTop = zendeskRaw || oneflowRaw || youniumRaw ? "14px" : "0";
-          hLabel.style.marginBottom = "6px";
-          hLabel.textContent = "HubSpot";
-
-          const hHref = toHttpUrl(hubspotRaw);
-          if (hHref) {
-            const hLink = document.createElement("a");
-            hLink.className = "zendeskLink";
-            hLink.href = hHref;
-            hLink.target = "_blank";
-            hLink.rel = "noopener noreferrer";
-            hLink.textContent = hubspotRaw;
-            hLink.title = hubspotRaw;
-            picWrap.appendChild(hLabel);
-            picWrap.appendChild(hLink);
-          } else {
-            const hText = document.createElement("div");
-            hText.className = "zendeskLink";
-            hText.textContent = hubspotRaw;
-            hText.title = hubspotRaw;
-            picWrap.appendChild(hLabel);
-            picWrap.appendChild(hText);
-          }
-        }
-
-        // Rocketlane link (shown if provided)
-        const rocketlaneRaw = p.rocketlaneUrl?.trim();
-        if (rocketlaneRaw) {
-          const rLabel = document.createElement("div");
-          rLabel.className = "small";
-          rLabel.style.color = "var(--muted)";
-          rLabel.style.marginTop = zendeskRaw || oneflowRaw || youniumRaw || hubspotRaw ? "14px" : "0";
-          rLabel.style.marginBottom = "6px";
-          rLabel.textContent = "Rocketlane";
-
-          const rHref = toHttpUrl(rocketlaneRaw);
-          if (rHref) {
-            const rLink = document.createElement("a");
-            rLink.className = "zendeskLink";
-            rLink.href = rHref;
-            rLink.target = "_blank";
-            rLink.rel = "noopener noreferrer";
-            rLink.textContent = rocketlaneRaw;
-            rLink.title = rocketlaneRaw;
-            picWrap.appendChild(rLabel);
-            picWrap.appendChild(rLink);
-          } else {
-            const rText = document.createElement("div");
-            rText.className = "zendeskLink";
-            rText.textContent = rocketlaneRaw;
-            rText.title = rocketlaneRaw;
-            picWrap.appendChild(rLabel);
-            picWrap.appendChild(rText);
-          }
+          picWrap.appendChild(linkRow);
         }
 
         // Notes header (single textarea, synced with Rocketlane Project notes field)
