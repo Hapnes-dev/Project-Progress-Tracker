@@ -1040,22 +1040,18 @@
         line-height: 1.5;
       }
 
-      /* @-mention autocomplete popup inside the chat compose box. */
-      .chatCompose {
-        position: relative; /* anchor for absolutely-positioned mentionPopup */
-      }
+      /* @-mention autocomplete popup. Lives in document.body so the
+         compose box's overflow:hidden (used for collapse animation)
+         can't clip it. Positioned via JS using viewport coordinates. */
       .mentionPopup {
-        position: absolute;
-        bottom: calc(100% + 4px);
-        left: 0;
-        right: 0;
+        position: fixed;
         max-height: 240px;
         overflow-y: auto;
         background: #0f1424;
         border: 1px solid var(--hairline-strong);
         border-radius: var(--radius-lg);
         box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
-        z-index: 1100;
+        z-index: 1500;
         padding: 4px;
       }
       @media (prefers-color-scheme: light) {
@@ -14608,7 +14604,25 @@
             if (!mentionPopup) {
               mentionPopup = document.createElement("div");
               mentionPopup.className = "mentionPopup";
-              compose.appendChild(mentionPopup);
+              // Append to body so the compose box's overflow:hidden clip
+              // (used by the collapse animation) doesn't hide the popup.
+              document.body.appendChild(mentionPopup);
+            }
+            // Position above the textarea using viewport coordinates
+            const rect = composeInput.getBoundingClientRect();
+            mentionPopup.style.left = rect.left + "px";
+            mentionPopup.style.width = rect.width + "px";
+            // Default: place above the textarea. If there isn't room above
+            // (e.g. compose is near top of viewport), flip below.
+            const popupHeight = 240;
+            if (rect.top >= popupHeight + 12) {
+              mentionPopup.style.top = (rect.top - popupHeight - 6) + "px";
+              mentionPopup.style.bottom = "auto";
+              mentionPopup.style.maxHeight = popupHeight + "px";
+            } else {
+              mentionPopup.style.top = (rect.bottom + 6) + "px";
+              mentionPopup.style.bottom = "auto";
+              mentionPopup.style.maxHeight = (window.innerHeight - rect.bottom - 24) + "px";
             }
           };
 
