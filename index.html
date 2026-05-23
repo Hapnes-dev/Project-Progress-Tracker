@@ -2685,31 +2685,42 @@
          looked too wide. Sibling cards may shift between rows when one
          grows; that's a known CSS Grid auto-placement effect. */
 
-      /* Per-category open animation. One-shot keyframe — plays when the
-         section is freshly mounted with the .areaBoxJustOpened marker.
-         Slow, unfolding feel: the card grows from the top down (scaleY
-         from top-origin) while fading in. transform-origin: top makes
-         the bottom edge slide down rather than the card stretching from
-         the middle. */
+      /* Per-category open animation. Uses clip-path to wipe the card in
+         from top to bottom — content stays at full size the whole time,
+         so text/buttons never look squished. The clip-path reveal pairs
+         with a slight opacity fade and a small drop for momentum. */
       @keyframes areaBoxOpenIn {
-        0%   { opacity: 0; transform: scaleY(0.55) translateY(-14px); }
-        60%  { opacity: 1; }
-        100% { opacity: 1; transform: scaleY(1) translateY(0); }
+        0% {
+          opacity: 0;
+          clip-path: inset(0 0 100% 0);
+          transform: translateY(-6px);
+        }
+        70% { opacity: 1; }
+        100% {
+          opacity: 1;
+          clip-path: inset(0 0 0 0);
+          transform: translateY(0);
+        }
       }
       .areaBox.areaBoxJustOpened {
-        transform-origin: top center;
-        animation: areaBoxOpenIn 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+        animation: areaBoxOpenIn 700ms cubic-bezier(0.22, 1, 0.36, 1) both;
       }
-      /* Per-category close animation. Symmetric: the card collapses
-         upward (scaleY shrinking from top-origin) and fades. ease-in so
-         the motion feels like it's tucking away with momentum. */
+      /* Symmetric close: clip-path wipes the card up from the bottom
+         while it fades out. Same no-stretch principle. */
       @keyframes areaBoxCloseOut {
-        0%   { opacity: 1; transform: scaleY(1) translateY(0); }
-        100% { opacity: 0; transform: scaleY(0.55) translateY(-10px); }
+        0% {
+          opacity: 1;
+          clip-path: inset(0 0 0 0);
+          transform: translateY(0);
+        }
+        100% {
+          opacity: 0;
+          clip-path: inset(0 0 100% 0);
+          transform: translateY(-4px);
+        }
       }
       .areaBox.areaBoxJustClosing {
-        transform-origin: top center;
-        animation: areaBoxCloseOut 550ms cubic-bezier(0.5, 0, 0.75, 0) forwards;
+        animation: areaBoxCloseOut 420ms cubic-bezier(0.4, 0, 1, 1) forwards;
         pointer-events: none;
       }
 
@@ -16123,8 +16134,8 @@
               };
               section.addEventListener("animationend", onDone);
               // Safety fallback if animationend never fires (e.g. tab hidden).
-              // Has to outlast the longest close animation (550ms) so it
-              // doesn't yank the DOM mid-collapse.
+              // Has to outlast the close animation (420ms) so it doesn't
+              // yank the DOM mid-collapse.
               window.setTimeout(() => {
                 if (section.classList.contains("areaBoxJustClosing")) {
                   section.removeEventListener("animationend", onDone);
