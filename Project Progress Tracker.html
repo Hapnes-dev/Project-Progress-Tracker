@@ -4097,20 +4097,32 @@
       /* Collapse <p>/<br> margins so the preview reads as a single block */
       .notifItemComment p { margin: 0; }
       .notifItemComment p + p { margin-top: 2px; }
-      /* @mention chip — matches Rocketlane native look */
-      .notifItemComment .rl__mention,
-      .notifItemComment a.rl__mention {
-        background: rgba(72, 132, 255, 0.18);
-        color: #79b4ff;
-        border-radius: 3px;
+      /* @mention chip — exact Rocketlane native colors (captured from
+         kiona.rocketlane.com). Global rules so the same chip styling
+         shows up everywhere a Rocketlane mention is rendered: chat
+         history bodies, notification previews, etc.
+            - normal mention: bg #E5F6FF (light blue),   text #0043CE
+            - self-mention:   bg #E8DAFF (light lavender), text #0043CE */
+      .rl__mention,
+      a.rl__mention,
+      span.rl__mention {
+        background: rgb(229, 246, 255);
+        color: rgb(0, 67, 206);
+        border-radius: 1px;
         padding: 0 2px;
         text-decoration: none;
+        font-weight: 400;
       }
-      .notifItemComment .rl__mention__self,
-      .notifItemComment a.rl__mention__self {
-        background: rgba(255, 196, 72, 0.22);
-        color: #f5c061;
+      .rl__mention__self,
+      a.rl__mention__self,
+      span.rl__mention__self {
+        background: rgb(232, 218, 255);
+        color: rgb(0, 67, 206);
       }
+      .rl__mention:hover,
+      a.rl__mention:hover,
+      .rl__mention__self:hover,
+      a.rl__mention__self:hover { text-decoration: none; }
       .notifItemComment a { color: var(--accent); text-decoration: none; }
       .notifItemComment a:hover { text-decoration: underline; }
       .notifItemComment img { max-width: 100%; max-height: 80px; border-radius: 4px; }
@@ -4771,12 +4783,13 @@
       }
       /* IMPORTANT: any property that changes glyph width (padding, bold,
          letter-spacing, border, margin) will desync the overlay from the
-         textarea — caret + chars will drift. Keep this purely visual. */
+         textarea — caret + chars will drift. Keep this purely visual.
+         Colors match Rocketlane's native chat mention styling so the
+         "preview" while typing looks identical to what gets sent. */
       .composeMention {
-        background: rgba(72, 132, 255, 0.22);
-        color: #79b4ff;
-        border-radius: 3px;
-        box-shadow: 0 0 0 1px rgba(72, 132, 255, 0.35);
+        background: rgb(229, 246, 255);
+        color: rgb(0, 67, 206);
+        border-radius: 1px;
       }
       .chatComposeInput {
         width: 100%;
