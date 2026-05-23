@@ -3345,14 +3345,42 @@
         position: fixed;
         inset: 0;
         z-index: 1200;
-        background: #0f1424;
+        /* Dim translucent backdrop — clicking the backdrop area outside the
+           centered notes content exits fullscreen (handler in JS). */
+        background: rgba(0, 0, 0, 0.7);
+        backdrop-filter: blur(6px);
         display: flex;
         flex-direction: column;
-        padding: 16px 20px 16px;
+        padding: 60px 20px 20px;
         gap: 8px;
+        cursor: pointer;
       }
       @media (prefers-color-scheme: light) {
-        .notesFullscreenOverlay { background: #ffffff; }
+        .notesFullscreenOverlay { background: rgba(0, 0, 0, 0.45); }
+      }
+      /* Centered content keeps default cursor — only the backdrop signals "click to close". */
+      .notesFullscreenOverlay > * { cursor: auto; }
+      /* Opaque content surfaces so the dim+blur backdrop doesn't bleed
+         through nearly-transparent var(--surface-1). */
+      .notesFullscreenOverlay .notesFullscreenHead,
+      .notesFullscreenOverlay .projectNotesTextarea.notesFullscreen {
+        background: #0f1424;
+      }
+      @media (prefers-color-scheme: light) {
+        .notesFullscreenOverlay .notesFullscreenHead,
+        .notesFullscreenOverlay .projectNotesTextarea.notesFullscreen {
+          background: #ffffff;
+        }
+      }
+      .notesFullscreenOverlay .notesFullscreenHead {
+        border: 1px solid var(--hairline);
+        border-radius: var(--radius-lg);
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--hairline); /* keep visual style */
+      }
+      .notesFullscreenOverlay .projectNotesTextarea.notesFullscreen {
+        border: 1px solid var(--hairline);
+        border-radius: var(--radius-lg);
       }
       .notesFullscreenHead {
         max-width: 1100px;
@@ -13905,6 +13933,13 @@
             notesOrigNextSibling = notesTa.nextSibling;
             notesFsOverlay.appendChild(head);
             notesFsOverlay.appendChild(notesTa);
+            // Click on the dim backdrop (not on any child) exits fullscreen.
+            notesFsOverlay.addEventListener("click", (ev) => {
+              if (ev.target === notesFsOverlay) {
+                ev.preventDefault();
+                toggleNotesFullscreen();
+              }
+            });
             document.body.appendChild(notesFsOverlay);
 
             document.addEventListener("keydown", notesFsEscKey);
