@@ -6067,6 +6067,28 @@
       const rocketlaneTaskDescriptionSyncTokens = new Map(); // rocketlaneTaskId -> number
       const rocketlaneTaskDescriptionLastSent = new Map(); // rocketlaneTaskId -> string
       const rocketlaneLastSyncAtByProjectId = new Map(); // local project.id -> ISO
+      // Persistence so the "RL sync: <when>" chip survives page reloads.
+      // Without this, every reload shows "RL sync: pending" until the next
+      // sync timer fires (up to 10 min later), even though the data is fresh.
+      const RL_SYNC_AT_KEY = "progress_tracker_rl_sync_at_v1";
+      (function loadRlSyncAt() {
+        try {
+          const raw = localStorage.getItem(RL_SYNC_AT_KEY);
+          if (!raw) return;
+          const obj = JSON.parse(raw);
+          if (obj && typeof obj === "object") {
+            for (const [k, v] of Object.entries(obj)) {
+              if (typeof v === "string" && v) rocketlaneLastSyncAtByProjectId.set(k, v);
+            }
+          }
+        } catch (_) { /* ignore corrupt prefs */ }
+      })();
+      function persistRlSyncAt() {
+        try {
+          const obj = Object.fromEntries(rocketlaneLastSyncAtByProjectId);
+          localStorage.setItem(RL_SYNC_AT_KEY, JSON.stringify(obj));
+        } catch (_) { /* localStorage full — silently skip */ }
+      }
       const rocketlaneLastSyncErrorByProjectId = new Map(); // local project.id -> error text
       let rocketlaneLiveSyncTimer = /** @type {number | undefined} */ (undefined);
       let rocketlaneLiveSyncInFlight = false;
@@ -8452,6 +8474,7 @@
             rocketlaneLastSyncAtByProjectId.set(localId, syncedAt);
             rocketlaneLastSyncErrorByProjectId.delete(localId);
           }
+          persistRlSyncAt();
 
           const taskChanges =
             Number(result?.tasksAdded ?? 0) + Number(result?.tasksUpdated ?? 0) + Number(result?.tasksRemoved ?? 0);
@@ -8485,6 +8508,7 @@
             rocketlaneLastSyncAtByProjectId.set(localId, syncedAt);
             rocketlaneLastSyncErrorByProjectId.set(localId, msg);
           }
+          persistRlSyncAt();
           if (!silent) rocketlaneShowMessage("Rocketlane: " + msg, "error");
           return { skipped: false, error: msg };
         } finally {
