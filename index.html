@@ -5128,7 +5128,11 @@
         <section class="panel" aria-label="Selected project details">
           <div class="hd">
             <h2 id="detailTitle">Select a project</h2>
-            <div style="display: flex; gap: 10px; flex-wrap: wrap">
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center">
+              <!-- Project URL link buttons (Zendesk / Oneflow / Younium / HubSpot
+                   / Rocketlane URL) are inserted into this span by renderDetail
+                   based on which URLs the selected project has filled in. -->
+              <span id="detailDynamicLinks" style="display: contents"></span>
               <button
                 class="btn"
                 id="btnOpenRocketlaneProject"
@@ -12558,6 +12562,7 @@
         btnDelete: document.getElementById("btnDelete"),
         btnOpenRocketlaneFiles: document.getElementById("btnOpenRocketlaneFiles"),
         btnOpenRocketlaneProject: document.getElementById("btnOpenRocketlaneProject"),
+        detailDynamicLinks: document.getElementById("detailDynamicLinks"),
         btnShowOrderInfo: document.getElementById("btnShowOrderInfo"),
         search: document.getElementById("search"),
         sort: document.getElementById("sort"),
@@ -13543,6 +13548,7 @@
           els.detailTitle.textContent = "Select a project";
           els.detailBody.innerHTML =
             '<p class="hint">Pick a project on the left. Each area has its own checklist; completion updates the overall progress.</p>';
+          if (els.detailDynamicLinks) els.detailDynamicLinks.innerHTML = "";
           return;
         }
 
@@ -13671,25 +13677,23 @@
         const picWrap = document.createElement("div");
         picWrap.style.marginTop = "14px";
 
-        // Project links — rendered as a compact toolbar row of .btn buttons
-        // (matching the style of "🚀 Rocketlane", "📁 Files", "📦 Order info"
-        // in the project header). Each button opens its URL in a new tab.
-        // Full URL appears as a tooltip on hover.
-        const linkDefs = [
-          { url: p.overviewUrl,    icon: "🎫", label: "Zendesk" },
-          { url: p.oneflowUrl,     icon: "📝", label: "Oneflow" },
-          { url: p.youniumUrl,     icon: "💼", label: "Younium" },
-          { url: p.hubspotUrl,     icon: "🟧", label: "HubSpot" },
-          { url: p.rocketlaneUrl,  icon: "🚀", label: "Rocketlane" },
-        ];
-        const renderableLinks = linkDefs
-          .map((d) => ({ ...d, raw: String(d.url ?? "").trim() }))
-          .filter((d) => d.raw);
-        if (renderableLinks.length) {
-          const linkRow = document.createElement("div");
-          linkRow.className = "projectLinksRow";
-          for (const def of renderableLinks) {
-            const href = toHttpUrl(def.raw);
+        // Project URL link buttons (Zendesk / Oneflow / Younium / HubSpot /
+         // Rocketlane URL) — rendered into the detail panel's toolbar header
+         // so they sit alongside the existing 🚀 Rocketlane / 📁 Files /
+         // 📦 Order info / Edit / Younium / Delete buttons.
+        if (els.detailDynamicLinks) {
+          els.detailDynamicLinks.innerHTML = "";
+          const linkDefs = [
+            { url: p.overviewUrl,    icon: "🎫", label: "Zendesk" },
+            { url: p.oneflowUrl,     icon: "📝", label: "Oneflow" },
+            { url: p.youniumUrl,     icon: "💼", label: "Younium" },
+            { url: p.hubspotUrl,     icon: "🟧", label: "HubSpot" },
+            { url: p.rocketlaneUrl,  icon: "🚀", label: "Rocketlane" },
+          ];
+          for (const def of linkDefs) {
+            const raw = String(def.url ?? "").trim();
+            if (!raw) continue;
+            const href = toHttpUrl(raw);
             const el = href ? document.createElement("a") : document.createElement("span");
             el.className = "btn projectLinkBtn";
             if (href) {
@@ -13697,13 +13701,12 @@
               el.target = "_blank";
               el.rel = "noopener noreferrer";
             }
-            el.title = def.raw;
+            el.title = raw;
             el.innerHTML = '<span class="projectLinkIcon">' + def.icon + '</span> ' +
               '<span class="projectLinkLabel">' + def.label + '</span>' +
               (href ? '<span class="projectLinkArrow" aria-hidden="true">↗</span>' : '');
-            linkRow.appendChild(el);
+            els.detailDynamicLinks.appendChild(el);
           }
-          picWrap.appendChild(linkRow);
         }
 
         // Notes header (single textarea, synced with Rocketlane Project notes field)
