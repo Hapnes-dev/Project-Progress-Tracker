@@ -5013,6 +5013,16 @@
             <div style="display: flex; gap: 10px; flex-wrap: wrap">
               <button
                 class="btn"
+                id="btnOpenRocketlaneProject"
+                type="button"
+                title="Open this project in Rocketlane"
+                disabled
+                style="display: none"
+              >
+                🚀 Rocketlane
+              </button>
+              <button
+                class="btn"
                 id="btnOpenRocketlaneFiles"
                 type="button"
                 title="Open this project's files in Rocketlane"
@@ -12429,6 +12439,7 @@
         btnImportYouniumData: document.getElementById("btnImportYouniumData"),
         btnDelete: document.getElementById("btnDelete"),
         btnOpenRocketlaneFiles: document.getElementById("btnOpenRocketlaneFiles"),
+        btnOpenRocketlaneProject: document.getElementById("btnOpenRocketlaneProject"),
         btnShowOrderInfo: document.getElementById("btnShowOrderInfo"),
         search: document.getElementById("search"),
         sort: document.getElementById("sort"),
@@ -13381,6 +13392,19 @@
             els.btnOpenRocketlaneFiles.disabled = true;
             els.btnOpenRocketlaneFiles.style.display = "none";
             delete els.btnOpenRocketlaneFiles.dataset.rlProjectId;
+          }
+        }
+        // Show "🚀 Rocketlane" link to the project page when linked.
+        if (els.btnOpenRocketlaneProject) {
+          const rlPid = String(p?.rocketlaneProjectId ?? "").trim();
+          if (rlPid) {
+            els.btnOpenRocketlaneProject.disabled = false;
+            els.btnOpenRocketlaneProject.style.display = "";
+            els.btnOpenRocketlaneProject.dataset.rlProjectId = rlPid;
+          } else {
+            els.btnOpenRocketlaneProject.disabled = true;
+            els.btnOpenRocketlaneProject.style.display = "none";
+            delete els.btnOpenRocketlaneProject.dataset.rlProjectId;
           }
         }
         // Show "📦 Order info" only when project is linked to Rocketlane.
@@ -18384,6 +18408,18 @@
         const p = getSelectedProject();
         if (p) openDlgEdit(p);
       });
+
+      // Rocketlane project link — opens the selected project's Rocketlane
+      // page in a new tab. Uses the same kiona.rocketlane.com tenant as the
+      // Files button; change the host here if your tenant differs.
+      if (els.btnOpenRocketlaneProject) {
+        els.btnOpenRocketlaneProject.addEventListener("click", () => {
+          const rlPid = els.btnOpenRocketlaneProject.dataset.rlProjectId;
+          if (!rlPid) return;
+          const url = "https://kiona.rocketlane.com/projects/" + encodeURIComponent(rlPid) + "/";
+          window.open(url, "_blank", "noopener,noreferrer");
+        });
+      }
       if (els.btnImportYouniumData) {
         els.btnImportYouniumData.addEventListener("click", openDlgYouniumImport);
       }
