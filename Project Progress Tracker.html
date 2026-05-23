@@ -4795,9 +4795,10 @@
          Colors match Rocketlane's native chat mention styling so the
          "preview" while typing looks identical to what gets sent. */
       .composeMention {
-        background: rgb(229, 246, 255);
-        color: rgb(0, 67, 206);
-        border-radius: 1px;
+        /* No background — width-changing properties (padding/border)
+           would desync the overlay from the textarea below. Color only. */
+        background: transparent;
+        color: #79b4ff;
       }
       .chatComposeInput {
         width: 100%;
