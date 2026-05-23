@@ -2598,15 +2598,15 @@
         pointer-events: none;
       }
 
-      /* Chevron in the category title — points down when collapsed,
-         flips up when the section is expanded. The class
-         .areaBoxExpanded is added in renderDetail when expandedCategories
-         is true for this area. */
+      /* Chevron in the category title — points right (▶) when collapsed,
+         rotates 90° clockwise so it points down (▼) when the section is
+         expanded. The class .areaBoxExpanded is added in renderDetail when
+         expandedCategories is true for this area. */
       .areaBoxCollapseBtn {
         transition: transform 240ms cubic-bezier(0.16, 1, 0.3, 1);
       }
       .areaBox.areaBoxExpanded .areaBoxCollapseBtn {
-        transform: rotate(180deg);
+        transform: rotate(90deg);
       }
 
       /* Task rows — subtle hairline border, status communicated by tinted fill.
@@ -4173,11 +4173,10 @@
       .chatCollapseBtn {
         font-size: 12px;
         line-height: 1;
-        transition: transform 240ms cubic-bezier(0.16, 1, 0.3, 1);
       }
-      .chatPanel.chatPanelCollapsed .chatCollapseBtn {
-        transform: rotate(-90deg);
-      }
+      /* The chevron glyph itself is swapped between ▶ (collapsed) and ▼
+         (expanded) via JS textContent — no CSS transform needed, and
+         keeping one would double-rotate the swapped character. */
 
       /* Generic collapsible-section chevron button — used in Notes and
          Categories headers. Visually matches the chat collapse button. */
@@ -14005,7 +14004,7 @@
         } catch (_) {}
         const updateNotesCollapseUI = () => {
           notesSection.classList.toggle("collapsed", notesIsCollapsedLocal);
-          notesCollapseBtn.textContent = notesIsCollapsedLocal ? "▼" : "▲";
+          notesCollapseBtn.textContent = notesIsCollapsedLocal ? "▶" : "▼";
           notesHeader.title = notesIsCollapsedLocal ? "Show notes" : "Hide notes";
         };
         updateNotesCollapseUI();
@@ -14604,7 +14603,7 @@
           } catch (_) {}
           const updateCollapseUI = () => {
             chatPanel.classList.toggle("chatPanelCollapsed", chatIsCollapsed);
-            collapseBtn.textContent = chatIsCollapsed ? "▼" : "▲";
+            collapseBtn.textContent = chatIsCollapsed ? "▶" : "▼";
             collapseBtn.title = chatIsCollapsed ? "Show chat" : "Hide chat";
           };
           updateCollapseUI();
@@ -15327,7 +15326,7 @@
           catCardCollapseBtn.type = "button";
           catCardCollapseBtn.className = "sectionCollapseBtn areaBoxCollapseBtn";
           catCardCollapseBtn.setAttribute("aria-label", "Toggle " + labelForArea(area, p));
-          catCardCollapseBtn.textContent = "▼";  // will be flipped to ▲ via CSS when expanded
+          catCardCollapseBtn.textContent = "▶";  // points right when collapsed; rotates 90° via CSS when expanded → points down
           catCardCollapseBtn.addEventListener("click", (e) => {
             e.stopPropagation();
             toggleCategory();
@@ -16452,7 +16451,7 @@
         } catch (_) {}
         const updateCatCollapseUI = () => {
           catSection.classList.toggle("collapsed", catIsCollapsedLocal);
-          catCollapseBtn.textContent = catIsCollapsedLocal ? "▼" : "▲";
+          catCollapseBtn.textContent = catIsCollapsedLocal ? "▶" : "▼";
           catTools.title = catIsCollapsedLocal ? "Show categories" : "Hide categories";
         };
         updateCatCollapseUI();
