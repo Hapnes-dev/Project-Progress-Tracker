@@ -4109,17 +4109,17 @@
       .rl__mention__self,
       a.rl__mention__self,
       span.rl__mention__self {
-        background: rgba(72, 132, 255, 0.18);
+        background: transparent;
         color: #79b4ff;
-        border-radius: 4px;
-        padding: 1px 6px 1px 4px;
-        text-decoration: none;
+        padding: 0;
         font-weight: 500;
-        font-size: 0.95em;
-        box-shadow: 0 0 0 1px rgba(72, 132, 255, 0.32);
-        display: inline;
+        text-decoration: underline;
+        text-decoration-thickness: 1px;
+        text-underline-offset: 2px;
       }
-      /* Visually prepend "@" without touching the underlying text. */
+      /* Visually prepend "@" without touching the underlying text. The
+         pseudo-element inherits the underline from its parent, so the
+         line continues seamlessly across @ + name. */
       .rl__mention::before,
       a.rl__mention::before,
       span.rl__mention::before,
@@ -4127,13 +4127,11 @@
       a.rl__mention__self::before,
       span.rl__mention__self::before {
         content: "@";
-        margin-right: 1px;
-        opacity: 0.95;
       }
       .rl__mention:hover,
       a.rl__mention:hover,
       .rl__mention__self:hover,
-      a.rl__mention__self:hover { text-decoration: none; }
+      a.rl__mention__self:hover { text-decoration: underline; }
       .notifItemComment a { color: var(--accent); text-decoration: none; }
       .notifItemComment a:hover { text-decoration: underline; }
       .notifItemComment img { max-width: 100%; max-height: 80px; border-radius: 4px; }
