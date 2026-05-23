@@ -5264,14 +5264,11 @@
             />
           </div>
           <div>
-            <label class="small" for="fRocketlaneUrl">Rocketlane link</label>
-            <input
-              class="input"
-              id="fRocketlaneUrl"
-              placeholder="Paste Rocketlane link (or keep empty)"
-              inputmode="url"
-            />
-            <label class="small" for="fRocketlaneProjectId" style="margin-top: 10px; display: block">
+            <!-- Rocketlane link input removed — derived automatically from
+                 the Rocketlane projectId below. Keep a hidden input so all
+                 the existing form-handling code still finds an element. -->
+            <input type="hidden" id="fRocketlaneUrl" />
+            <label class="small" for="fRocketlaneProjectId">
               Rocketlane projectId (optional)
             </label>
             <input class="input" id="fRocketlaneProjectId" placeholder="e.g. 201" inputmode="numeric" />
@@ -19550,8 +19547,14 @@
         const oneflowUrl = (els.fOneflowUrl?.value ?? "").trim();
         const youniumUrl = (els.fYouniumUrl?.value ?? "").trim();
         const hubspotUrl = (els.fHubspotUrl?.value ?? "").trim();
-        const rocketlaneUrl = els.fRocketlaneUrl.value.trim();
         const rocketlaneProjectId = (els.fRocketlaneProjectId?.value ?? "").trim();
+        // The Rocketlane link field was removed from the UI — the link is
+        // auto-derived from the projectId. Pattern: kiona.rocketlane.com/projects/<id>/
+        // If projectId is empty, fall back to whatever (typically empty) was in
+        // the hidden input so existing data isn't accidentally wiped.
+        const rocketlaneUrl = rocketlaneProjectId
+          ? "https://kiona.rocketlane.com/projects/" + rocketlaneProjectId + "/"
+          : (els.fRocketlaneUrl?.value ?? "").trim();
 
         if (dlgMode === "new") {
           const p = /** @type {Project} */ ({
