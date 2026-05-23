@@ -18809,7 +18809,9 @@
           const rule = String(n?.systemRuleIdentifier ?? "");
           const event = String(n?.meta?.eventType ?? "");
           const meta = n?.meta ?? {};
-          const esc = escapeForHtml;
+          // Use the module-level escapeHtml (the in-scope `escapeForHtml`
+          // lives in the chat compose closure, not visible here).
+          const esc = escapeHtml;
           const wrap = (s) => `<em style="color:var(--text);font-style:normal">${esc(s)}</em>`;
           const label = (s) => `<strong style="font-weight:600;color:var(--text)">${esc(s)}</strong>`;
           switch (rule) {
