@@ -3987,6 +3987,13 @@
       }
       .notifGroup:hover { border-color: var(--hairline-strong); }
       .notifGroup.unread { border-left: 3px solid var(--accent); }
+      /* Preserve the unread accent on the left when hovering — otherwise
+         `border-color: ...` on hover overrides all four sides including
+         the accent, which reads as a "blink" each time the cursor enters
+         the card. Repeat the left override with the accent color. */
+      .notifGroup.unread:hover {
+        border-color: var(--hairline-strong) var(--hairline-strong) var(--hairline-strong) var(--accent);
+      }
       .notifGroupHead {
         display: flex;
         align-items: flex-start;
