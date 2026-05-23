@@ -1093,16 +1093,15 @@
       }
       .mentionName {
         font-weight: 600;
-        flex: 0 1 auto;
-        min-width: 0;
+        /* Name has highest priority — never shrink it. */
+        flex: 0 0 auto;
         white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
       }
       .mentionEmail {
         font-size: 11px;
         color: var(--muted2);
-        flex: 1 1 auto;
+        /* Email absorbs leftover room and truncates first if needed. */
+        flex: 1 1 0;
         min-width: 0;
         white-space: nowrap;
         overflow: hidden;
@@ -14723,7 +14722,7 @@
             return { top, left, lineHeight: parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2 };
           };
 
-          const POPUP_W = 360;
+          const POPUP_W = 420;
           const POPUP_H = 240;
 
           const openMentionPopupIfNeeded = () => {
