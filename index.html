@@ -4099,30 +4099,41 @@
       .notifItemComment p + p { margin-top: 2px; }
       /* @mention chip — TRACKER display only.
          The HTML we *send* still includes class="rl__mention__self" so
-         Rocketlane renders self-mentions with its native lavender chip
-         (see kiona.rocketlane.com's own CSS). But inside the tracker we
-         use a single unified light-blue + underline style for *every*
-         rl__mention regardless of self-vs-other — matches the look the
-         tracker had before we adopted Rocketlane's color split. */
+         Rocketlane renders self-mentions with its native lavender chip.
+         Inside the tracker we use a dark-themed pill with a light-blue
+         accent, and prepend "@" via ::before so the original sent text
+         (bare name, no @) stays exactly what Rocketlane expects. */
       .rl__mention,
       a.rl__mention,
       span.rl__mention,
       .rl__mention__self,
       a.rl__mention__self,
       span.rl__mention__self {
-        background: rgb(229, 246, 255);
-        color: rgb(0, 67, 206);
-        border-radius: 1px;
-        padding: 0 2px;
-        text-decoration: underline;
-        text-decoration-thickness: 1px;
-        text-underline-offset: 2px;
-        font-weight: 400;
+        background: rgba(72, 132, 255, 0.18);
+        color: #79b4ff;
+        border-radius: 4px;
+        padding: 1px 6px 1px 4px;
+        text-decoration: none;
+        font-weight: 500;
+        font-size: 0.95em;
+        box-shadow: 0 0 0 1px rgba(72, 132, 255, 0.32);
+        display: inline;
+      }
+      /* Visually prepend "@" without touching the underlying text. */
+      .rl__mention::before,
+      a.rl__mention::before,
+      span.rl__mention::before,
+      .rl__mention__self::before,
+      a.rl__mention__self::before,
+      span.rl__mention__self::before {
+        content: "@";
+        margin-right: 1px;
+        opacity: 0.95;
       }
       .rl__mention:hover,
       a.rl__mention:hover,
       .rl__mention__self:hover,
-      a.rl__mention__self:hover { text-decoration: underline; }
+      a.rl__mention__self:hover { text-decoration: none; }
       .notifItemComment a { color: var(--accent); text-decoration: none; }
       .notifItemComment a:hover { text-decoration: underline; }
       .notifItemComment img { max-width: 100%; max-height: 80px; border-radius: 4px; }
