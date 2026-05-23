@@ -4103,8 +4103,29 @@
         -webkit-line-clamp: 4;
         -webkit-box-orient: vertical;
         overflow: hidden;
-        white-space: pre-wrap;
+        word-wrap: break-word;
+        overflow-wrap: anywhere;
       }
+      /* Collapse <p>/<br> margins so the preview reads as a single block */
+      .notifItemComment p { margin: 0; }
+      .notifItemComment p + p { margin-top: 2px; }
+      /* @mention chip — matches Rocketlane native look */
+      .notifItemComment .rl__mention,
+      .notifItemComment a.rl__mention {
+        background: rgba(72, 132, 255, 0.18);
+        color: #79b4ff;
+        border-radius: 3px;
+        padding: 0 2px;
+        text-decoration: none;
+      }
+      .notifItemComment .rl__mention__self,
+      .notifItemComment a.rl__mention__self {
+        background: rgba(255, 196, 72, 0.22);
+        color: #f5c061;
+      }
+      .notifItemComment a { color: var(--accent); text-decoration: none; }
+      .notifItemComment a:hover { text-decoration: underline; }
+      .notifItemComment img { max-width: 100%; max-height: 80px; border-radius: 4px; }
       .notifItemWhen {
         font-size: 11px;
         color: var(--muted2);
@@ -18668,14 +18689,21 @@
           return "";
         };
 
-        // Extract plain text from a notification's comment HTML. Caps at 240
-        // chars + ellipsis so the drawer doesn't blow up on big messages.
+        // Return sanitized HTML for a notification's comment so the preview
+        // keeps Rocketlane formatting (mention chips, line breaks, links).
+        // The sanitizer already whitelists the rl__mention data-* attrs.
+        // CSS line-clamp in .notifItemComment handles the visual cap.
+        const notifCommentHtmlFor = (n) => {
+          const html = String(n?.meta?.message?.content ?? "").trim();
+          if (!html) return "";
+          return sanitizeHtmlForChatMessage(html);
+        };
+        // Plain-text fallback (used for the tooltip and for screen readers).
         const notifCommentTextFor = (n) => {
           const html = String(n?.meta?.message?.content ?? "").trim();
           if (!html) return "";
           const doc = new DOMParser().parseFromString(html, "text/html");
           let text = (doc.body.textContent || "").trim();
-          if (!text) return "";
           if (text.length > 240) text = text.slice(0, 237).trim() + "…";
           return text;
         };
@@ -18813,12 +18841,17 @@
               }
               body.appendChild(text);
               // If this is a chat comment, render the actual message body
-              // as a faint preview line under the actor+verb.
-              const commentText = notifCommentTextFor(n);
-              if (commentText) {
+              // as a faint preview line under the actor+verb. Render as
+              // HTML so the @mention chip / line breaks / links survive;
+              // the sanitizer above strips anything dangerous.
+              const commentHtml = notifCommentHtmlFor(n);
+              if (commentHtml) {
                 const preview = document.createElement("div");
                 preview.className = "notifItemComment";
-                preview.textContent = commentText;
+                preview.innerHTML = commentHtml;
+                // Plain-text version goes on the tooltip
+                const fallback = notifCommentTextFor(n);
+                if (fallback) preview.title = fallback;
                 body.appendChild(preview);
               }
               item.appendChild(body);
@@ -18877,12 +18910,49 @@
           }
         };
 
+        // Fetch the union of "All" notifications and "Mentions" notifications.
+        // Rocketlane's server-side filter is not a superset — chat mention
+        // events only come back with filter=Mentions — so we merge them and
+        // dedupe by id to get the full picture in one cache.
+        const fetchAllNotifGroups = async (bridge) => {
+          const calls = [
+            bridge.fetchNotificationGroups({ filter: "All",      status: "New", count: 30, groupSize: 10 }),
+            bridge.fetchNotificationGroups({ filter: "Mentions", status: "New", count: 30, groupSize: 10 }),
+          ];
+          const [a, b] = await Promise.all(calls.map((p) => p.catch(() => [])));
+          // Merge groups keyed by group.key.uri (or uuid). Within a group,
+          // dedupe notifications by id.
+          const byKey = new Map();
+          const keyOf = (g) => String(g?.key?.uri ?? g?.key?.uuid ?? Math.random());
+          for (const list of [a, b]) {
+            for (const g of (list || [])) {
+              const k = keyOf(g);
+              if (!byKey.has(k)) { byKey.set(k, { ...g, notifications: [...(g.notifications || [])] }); continue; }
+              const existing = byKey.get(k);
+              const seen = new Set(existing.notifications.map((n) => n.id));
+              for (const n of (g.notifications || [])) {
+                if (!seen.has(n.id)) existing.notifications.push(n);
+              }
+            }
+          }
+          // Sort each group's notifications by timestamp desc
+          for (const g of byKey.values()) {
+            g.notifications.sort((x, y) => Number(y?.timestamp || 0) - Number(x?.timestamp || 0));
+          }
+          // Sort groups by newest notification desc
+          return Array.from(byKey.values()).sort((x, y) => {
+            const xt = Math.max(0, ...(x.notifications || []).map((n) => Number(n?.timestamp || 0)));
+            const yt = Math.max(0, ...(y.notifications || []).map((n) => Number(n?.timestamp || 0)));
+            return yt - xt;
+          });
+        };
+
         const refreshNotifBadge = async () => {
           const bridge = window.RocketlaneBridge;
           if (!bridge?.fetchNotificationGroups || !bridge?.getNotificationLastSeen) return;
           try {
             const [groups, seen] = await Promise.all([
-              bridge.fetchNotificationGroups(),
+              fetchAllNotifGroups(bridge),
               bridge.getNotificationLastSeen(),
             ]);
             notifGroupsCache = groups;
@@ -19021,7 +19091,7 @@
           try {
             await ensureMyUserId();
             const [groups, seen] = await Promise.all([
-              bridge.fetchNotificationGroups(),
+              fetchAllNotifGroups(bridge),
               bridge.getNotificationLastSeen(),
             ]);
             notifGroupsCache = groups;

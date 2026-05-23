@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.6.0
+// @version      1.7.0
 // @description  Bridges Rocketlane chat API to the local Project Progress Tracker, bypassing CORS.
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
@@ -343,11 +343,30 @@
      * Fetch the user's notification groups. The response is an array of
      *   { key, task, notifications: [...] }
      * where each notification has timestamp, systemRuleIdentifier, meta, etc.
-     * Filtering (All / Assigned to me / Mentions / Team) is client-side —
-     * the endpoint returns the full list either way.
+     *
+     * Earlier versions called the endpoint with no params, which made the
+     * server return a default subset that quietly excluded chat-mention
+     * events. Capture from Rocketlane's own UI shows the call passes
+     * status/count/groupSize/filter/exclusions explicitly — we now do too.
+     *
+     * @param {object} [opts]
+     * @param {"All"|"AssignedToMe"|"Mentions"|"Team"} [opts.filter="All"]
+     * @param {"New"|"Read"} [opts.status="New"]
+     * @param {number} [opts.count=20]      Max groups to return
+     * @param {number} [opts.groupSize=8]   Max notifications per group
+     * @param {number} [opts.start]         Cursor (epoch micros) for pagination
+     * @param {string} [opts.exclusions=""] CSV of rule IDs to exclude
      */
-    async fetchNotificationGroups() {
-      const data = await gmFetch(TENANT_API + "/notifications/groups");
+    async fetchNotificationGroups(opts) {
+      const o = opts || {};
+      const params = new URLSearchParams();
+      params.set("status",     String(o.status     ?? "New"));
+      params.set("count",      String(o.count      ?? 20));
+      params.set("groupSize",  String(o.groupSize  ?? 8));
+      params.set("filter",     String(o.filter     ?? "All"));
+      params.set("exclusions", String(o.exclusions ?? ""));
+      if (o.start != null) params.set("start", String(o.start));
+      const data = await gmFetch(TENANT_API + "/notifications/groups?" + params.toString());
       return Array.isArray(data) ? data : Object.values(data || {});
     },
 
