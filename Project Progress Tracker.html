@@ -4788,6 +4788,15 @@
         position: relative;            /* sits on top of .composeHighlight */
       }
       .chatComposeInput::selection { background: rgba(72, 132, 255, 0.35); color: transparent; }
+      /* The transparent text-fill above also hides the placeholder. Re-show
+         it explicitly with the normal muted color. */
+      .chatComposeInput::placeholder {
+        color: var(--muted2);
+        -webkit-text-fill-color: var(--muted2);
+        opacity: 1;
+      }
+      .chatComposeInput::-webkit-input-placeholder { color: var(--muted2); -webkit-text-fill-color: var(--muted2); }
+      .chatComposeInput::-moz-placeholder { color: var(--muted2); opacity: 1; }
       /* Hover/focus background lives on the wrap so the highlight overlay
          (sibling under the textarea) stays visible. */
       .composeInputWrap { border-radius: var(--radius); transition: background 120ms ease, border-color 120ms ease; }
