@@ -16163,9 +16163,16 @@
                 box.style.transition = "transform 480ms cubic-bezier(0.4, 0, 0.2, 1)";
                 box.style.transform = "translate3d(0, 0, 0)";
                 const clear = () => {
+                  // Only clear properties that have no visual effect at
+                  // their default. We INTENTIONALLY leave transform set
+                  // to translate3d(0,0,0) — it's identity (zero visual
+                  // displacement) but keeps the GPU compositing layer
+                  // alive, preventing the sub-pixel layout recompute
+                  // flicker that fires when you remove an inline
+                  // transform property.
                   box.style.transition = "";
                   box.style.willChange = "";
-                  box.style.transform = "";
+                  // (do not clear box.style.transform)
                   box.removeEventListener("transitionend", clear);
                   tick();
                 };
