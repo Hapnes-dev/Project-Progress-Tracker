@@ -4097,32 +4097,32 @@
       /* Collapse <p>/<br> margins so the preview reads as a single block */
       .notifItemComment p { margin: 0; }
       .notifItemComment p + p { margin-top: 2px; }
-      /* @mention chip — exact Rocketlane native colors (captured from
-         kiona.rocketlane.com). Global rules so the same chip styling
-         shows up everywhere a Rocketlane mention is rendered: chat
-         history bodies, notification previews, etc.
-            - normal mention: bg #E5F6FF (light blue),   text #0043CE
-            - self-mention:   bg #E8DAFF (light lavender), text #0043CE */
+      /* @mention chip — TRACKER display only.
+         The HTML we *send* still includes class="rl__mention__self" so
+         Rocketlane renders self-mentions with its native lavender chip
+         (see kiona.rocketlane.com's own CSS). But inside the tracker we
+         use a single unified light-blue + underline style for *every*
+         rl__mention regardless of self-vs-other — matches the look the
+         tracker had before we adopted Rocketlane's color split. */
       .rl__mention,
       a.rl__mention,
-      span.rl__mention {
+      span.rl__mention,
+      .rl__mention__self,
+      a.rl__mention__self,
+      span.rl__mention__self {
         background: rgb(229, 246, 255);
         color: rgb(0, 67, 206);
         border-radius: 1px;
         padding: 0 2px;
-        text-decoration: none;
+        text-decoration: underline;
+        text-decoration-thickness: 1px;
+        text-underline-offset: 2px;
         font-weight: 400;
-      }
-      .rl__mention__self,
-      a.rl__mention__self,
-      span.rl__mention__self {
-        background: rgb(232, 218, 255);
-        color: rgb(0, 67, 206);
       }
       .rl__mention:hover,
       a.rl__mention:hover,
       .rl__mention__self:hover,
-      a.rl__mention__self:hover { text-decoration: none; }
+      a.rl__mention__self:hover { text-decoration: underline; }
       .notifItemComment a { color: var(--accent); text-decoration: none; }
       .notifItemComment a:hover { text-decoration: underline; }
       .notifItemComment img { max-width: 100%; max-height: 80px; border-radius: 4px; }
