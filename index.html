@@ -1055,10 +1055,19 @@
         gap: 6px;
         text-decoration: none !important;
       }
-      .projectLinkIcon { font-size: 14px; line-height: 1; }
+      .projectLinkIcon {
+        width: 16px;
+        height: 16px;
+        display: block;
+        object-fit: contain;
+        border-radius: 3px;
+        background: #ffffff;
+        padding: 1px;
+        /* White background under the favicon is mostly to keep dark-themed
+           favicons (Zendesk's monochrome, etc.) readable on the dark button
+           surface. 1px padding gives the icon a tiny visual border. */
+      }
       .projectLinkLabel { font-weight: 600; }
-      .projectLinkArrow { opacity: 0.55; font-size: 11px; margin-left: 2px; }
-      .projectLinkBtn:hover .projectLinkArrow { opacity: 1; }
 
       .zendeskLink {
         display: block;
@@ -13678,17 +13687,19 @@
         picWrap.style.marginTop = "14px";
 
         // Project URL link buttons (Zendesk / Oneflow / Younium / HubSpot /
-         // Rocketlane URL) — rendered into the detail panel's toolbar header
-         // so they sit alongside the existing 🚀 Rocketlane / 📁 Files /
-         // 📦 Order info / Edit / Younium / Delete buttons.
+        // Rocketlane URL) — rendered into the detail panel's toolbar header.
+        // Real product favicons via Google's favicon service so each button
+        // shows the actual brand mark instead of an emoji approximation.
         if (els.detailDynamicLinks) {
           els.detailDynamicLinks.innerHTML = "";
+          const faviconFor = (host) =>
+            "https://www.google.com/s2/favicons?domain=" + host + "&sz=32";
           const linkDefs = [
-            { url: p.overviewUrl,    icon: "🎫", label: "Zendesk" },
-            { url: p.oneflowUrl,     icon: "📝", label: "Oneflow" },
-            { url: p.youniumUrl,     icon: "💼", label: "Younium" },
-            { url: p.hubspotUrl,     icon: "🟧", label: "HubSpot" },
-            { url: p.rocketlaneUrl,  icon: "🚀", label: "Rocketlane" },
+            { url: p.overviewUrl,    icon: faviconFor("zendesk.com"),    label: "Zendesk" },
+            { url: p.oneflowUrl,     icon: faviconFor("oneflow.com"),    label: "Oneflow" },
+            { url: p.youniumUrl,     icon: faviconFor("younium.com"),    label: "Younium" },
+            { url: p.hubspotUrl,     icon: faviconFor("hubspot.com"),    label: "HubSpot" },
+            { url: p.rocketlaneUrl,  icon: faviconFor("rocketlane.com"), label: "Rocketlane" },
           ];
           for (const def of linkDefs) {
             const raw = String(def.url ?? "").trim();
@@ -13702,9 +13713,19 @@
               el.rel = "noopener noreferrer";
             }
             el.title = raw;
-            el.innerHTML = '<span class="projectLinkIcon">' + def.icon + '</span> ' +
-              '<span class="projectLinkLabel">' + def.label + '</span>' +
-              (href ? '<span class="projectLinkArrow" aria-hidden="true">↗</span>' : '');
+            const img = document.createElement("img");
+            img.className = "projectLinkIcon";
+            img.src = def.icon;
+            img.alt = "";
+            img.width = 16;
+            img.height = 16;
+            img.loading = "lazy";
+            img.decoding = "async";
+            const lbl = document.createElement("span");
+            lbl.className = "projectLinkLabel";
+            lbl.textContent = def.label;
+            el.appendChild(img);
+            el.appendChild(lbl);
             els.detailDynamicLinks.appendChild(el);
           }
         }
