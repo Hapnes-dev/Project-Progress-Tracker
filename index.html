@@ -1040,6 +1040,76 @@
         line-height: 1.5;
       }
 
+      /* @-mention autocomplete popup inside the chat compose box. */
+      .chatCompose {
+        position: relative; /* anchor for absolutely-positioned mentionPopup */
+      }
+      .mentionPopup {
+        position: absolute;
+        bottom: calc(100% + 4px);
+        left: 0;
+        right: 0;
+        max-height: 240px;
+        overflow-y: auto;
+        background: #0f1424;
+        border: 1px solid var(--hairline-strong);
+        border-radius: var(--radius-lg);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+        z-index: 1100;
+        padding: 4px;
+      }
+      @media (prefers-color-scheme: light) {
+        .mentionPopup { background: #ffffff; }
+      }
+      .mentionItem {
+        appearance: none;
+        background: transparent;
+        border: none;
+        font: inherit;
+        color: var(--text);
+        width: 100%;
+        text-align: left;
+        padding: 8px 10px;
+        border-radius: 6px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 13px;
+        transition: background 80ms ease;
+      }
+      .mentionItem:hover,
+      .mentionItem.active { background: var(--accent-soft); color: var(--accent); }
+      .mentionItem.mentionEmpty { color: var(--muted2); font-style: italic; cursor: default; }
+      .mentionItem.mentionEmpty:hover { background: transparent; color: var(--muted2); }
+      .mentionAvatar {
+        width: 26px;
+        height: 26px;
+        border-radius: 999px;
+        background: linear-gradient(135deg, var(--accent), #6366f1);
+        color: #fff;
+        font-weight: 700;
+        font-size: 11px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      .mentionName { font-weight: 600; flex: 1; min-width: 0; }
+      .mentionEmail { font-size: 11px; color: var(--muted2); }
+
+      /* Inline @-mention pill rendered inside chat message bodies. */
+      .chatMsgBody .mention {
+        display: inline;
+        padding: 0 4px;
+        margin: 0 1px;
+        border-radius: 4px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-weight: 600;
+        white-space: nowrap;
+      }
+
       /* Compact toolbar row of project link buttons (Zendesk / Oneflow /
          Younium / HubSpot / Rocketlane). Mirrors the .btn style used by
          "🚀 Rocketlane", "📁 Files", "📦 Order info" in the project header. */
@@ -7449,7 +7519,11 @@
           "ul", "ol", "li", "a", "img",
           "code", "pre", "blockquote",
         ]);
-        const ALLOWED_ATTRS = new Set(["href", "target", "rel", "src", "alt", "title", "width", "height"]);
+        const ALLOWED_ATTRS = new Set([
+          "href", "target", "rel", "src", "alt", "title", "width", "height",
+          // @-mention markup attributes (rendered with class="mention")
+          "class", "data-userid", "data-username",
+        ]);
         const SAFE_URL = /^(?:https?:|mailto:|tel:)/i;
         // Whitelist of hosts the chat can pull images from. Anything else is
         // stripped to prevent loading 3rd-party trackers via injected <img>.
@@ -14442,8 +14516,210 @@
           compose.className = "chatCompose";
           const composeInput = document.createElement("textarea");
           composeInput.className = "chatComposeInput";
-          composeInput.placeholder = "Write a message — type text or insert an image (Ctrl+V to paste, 📎 to attach). Enter sends, Shift+Enter for new line.";
+          composeInput.placeholder = "Write a message — type @ to mention. Ctrl+V to paste, 📎 to attach. Enter sends, Shift+Enter for new line.";
           composeInput.rows = 2;
+
+          // ─────────────────────────────────────────────────────────
+          // @-mention picker
+          // Loads project members in the background. When the user types
+          // '@' followed by characters, a dropdown appears with matching
+          // members. Pick with click / Arrow+Enter; cancel with Esc.
+          // On selection: inserts plain text '@First Last' into the
+          // textarea. Send-time post-processing turns the text into the
+          // mention HTML markup Rocketlane expects.
+          // ─────────────────────────────────────────────────────────
+          /** @type {Array<{userId:number,firstName:string,lastName:string,fullName:string,emailId:string,initials:string,avatar:string}>} */
+          let mentionMembers = [];
+          // Fetch members in the background (don't block compose rendering).
+          if (window.RocketlaneBridge?.fetchProjectMembers && rlProjectIdForNotes) {
+            window.RocketlaneBridge.fetchProjectMembers(rlProjectIdForNotes)
+              .then((res) => {
+                const users = Array.isArray(res?.userList) ? res.userList
+                  : Array.isArray(res?.members) ? res.members.map((m) => m.user).filter(Boolean)
+                  : [];
+                mentionMembers = users
+                  .filter((u) => u && u.userId)
+                  .map((u) => {
+                    const first = String(u.firstName ?? "").trim();
+                    const last = String(u.lastName ?? "").trim();
+                    const fullName = (first + " " + last).trim() || u.userName || u.emailId || "Unknown";
+                    const initials = ((first.charAt(0) || "") + (last.charAt(0) || "")).toUpperCase() || "?";
+                    return {
+                      userId: u.userId,
+                      firstName: first,
+                      lastName: last,
+                      fullName,
+                      emailId: String(u.emailId ?? ""),
+                      initials,
+                      avatar: "", // could be populated later if needed
+                    };
+                  });
+              })
+              .catch((e) => console.warn("[Chat mentions] fetchProjectMembers failed:", e));
+          }
+
+          // Lazy-create the popup once
+          let mentionPopup = null;
+          let mentionItems = []; // currently visible filtered matches
+          let mentionActiveIdx = 0;
+          let mentionStart = -1; // index in composeInput.value where the '@' lives, or -1
+
+          const closeMentionPopup = () => {
+            if (mentionPopup && mentionPopup.parentNode) {
+              mentionPopup.parentNode.removeChild(mentionPopup);
+            }
+            mentionPopup = null;
+            mentionItems = [];
+            mentionActiveIdx = 0;
+            mentionStart = -1;
+          };
+
+          const renderMentionItems = () => {
+            if (!mentionPopup) return;
+            mentionPopup.innerHTML = "";
+            if (!mentionItems.length) {
+              const empty = document.createElement("div");
+              empty.className = "mentionItem mentionEmpty";
+              empty.textContent = "No matching members";
+              mentionPopup.appendChild(empty);
+              return;
+            }
+            mentionItems.forEach((m, i) => {
+              const row = document.createElement("button");
+              row.type = "button";
+              row.className = "mentionItem" + (i === mentionActiveIdx ? " active" : "");
+              row.tabIndex = -1;
+              row.innerHTML = '<span class="mentionAvatar">' + m.initials + '</span>' +
+                '<span class="mentionName">' + escapeForHtml(m.fullName) + '</span>' +
+                (m.emailId ? '<span class="mentionEmail">' + escapeForHtml(m.emailId) + '</span>' : '');
+              row.addEventListener("mousedown", (e) => {
+                // Use mousedown to fire BEFORE textarea blur eats the click
+                e.preventDefault();
+                applyMention(m);
+              });
+              mentionPopup.appendChild(row);
+            });
+          };
+
+          const escapeForHtml = (s) =>
+            String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+          const openMentionPopupIfNeeded = () => {
+            if (!mentionPopup) {
+              mentionPopup = document.createElement("div");
+              mentionPopup.className = "mentionPopup";
+              compose.appendChild(mentionPopup);
+            }
+          };
+
+          const updateMentionPopup = () => {
+            const val = composeInput.value;
+            const cursor = composeInput.selectionStart || 0;
+            // Find the nearest '@' before cursor that isn't part of an email-like token.
+            // Walk backwards from cursor; allow letters/digits/_ in the typed query.
+            let atIdx = -1;
+            for (let i = cursor - 1; i >= 0; i--) {
+              const ch = val.charAt(i);
+              if (ch === "@") {
+                // Must be at start or preceded by whitespace / start of line
+                const prev = i > 0 ? val.charAt(i - 1) : " ";
+                if (/\s/.test(prev) || i === 0) atIdx = i;
+                break;
+              }
+              // Stop if we hit whitespace or newline (mention queries don't cross words)
+              if (/\s/.test(ch)) break;
+            }
+            if (atIdx < 0) { closeMentionPopup(); return; }
+            const query = val.slice(atIdx + 1, cursor).toLowerCase();
+            // Substring match across firstName, lastName, or fullName
+            const matches = mentionMembers.filter((m) => {
+              if (!query) return true;
+              return m.fullName.toLowerCase().includes(query) ||
+                     m.firstName.toLowerCase().includes(query) ||
+                     m.lastName.toLowerCase().includes(query);
+            }).slice(0, 8);
+            if (!matches.length && !query) { closeMentionPopup(); return; }
+            mentionStart = atIdx;
+            mentionItems = matches;
+            mentionActiveIdx = 0;
+            openMentionPopupIfNeeded();
+            renderMentionItems();
+          };
+
+          const applyMention = (m) => {
+            if (mentionStart < 0) return;
+            const val = composeInput.value;
+            const cursor = composeInput.selectionStart || 0;
+            const before = val.slice(0, mentionStart);
+            const after = val.slice(cursor);
+            // Insert literal '@First Last ' (plain text). Send-time logic
+            // will convert this into the Rocketlane mention HTML.
+            const insert = "@" + m.fullName + " ";
+            composeInput.value = before + insert + after;
+            const newCursor = (before + insert).length;
+            composeInput.setSelectionRange(newCursor, newCursor);
+            composeInput.focus();
+            closeMentionPopup();
+          };
+
+          composeInput.addEventListener("input", updateMentionPopup);
+          composeInput.addEventListener("click", updateMentionPopup);
+          composeInput.addEventListener("keyup", (e) => {
+            // Arrow / Enter / Esc are handled separately on keydown
+            if (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "Enter" || e.key === "Escape") return;
+            updateMentionPopup();
+          });
+          composeInput.addEventListener("keydown", (e) => {
+            if (!mentionPopup || !mentionItems.length) return;
+            if (e.key === "ArrowDown") {
+              e.preventDefault();
+              mentionActiveIdx = (mentionActiveIdx + 1) % mentionItems.length;
+              renderMentionItems();
+            } else if (e.key === "ArrowUp") {
+              e.preventDefault();
+              mentionActiveIdx = (mentionActiveIdx - 1 + mentionItems.length) % mentionItems.length;
+              renderMentionItems();
+            } else if (e.key === "Enter" && !e.shiftKey) {
+              // Pick the active match instead of sending the message
+              e.preventDefault();
+              e.stopPropagation();
+              const m = mentionItems[mentionActiveIdx];
+              if (m) applyMention(m);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              closeMentionPopup();
+            } else if (e.key === "Tab") {
+              e.preventDefault();
+              const m = mentionItems[mentionActiveIdx];
+              if (m) applyMention(m);
+            }
+          });
+          composeInput.addEventListener("blur", () => {
+            // Defer close so a click inside the popup can register first
+            window.setTimeout(closeMentionPopup, 150);
+          });
+
+          // Converts plain '@First Last' text into Rocketlane mention markup.
+          // Best-effort guess at the format Rocketlane recognizes — if it
+          // turns out to need a different tag/attribute, change this one
+          // function and everything follows.
+          const convertMentionsToHtml = (plain) => {
+            if (!plain || !mentionMembers.length) return escapeForHtml(plain);
+            // Build regex from member names, longest first so "Thomas Kvalvåg Håpnes" wins over "Thomas".
+            const sorted = mentionMembers.slice().sort((a, b) => b.fullName.length - a.fullName.length);
+            // Escape regex-special chars in names (some have unicode chars but no metas)
+            const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            let escaped = escapeForHtml(plain);
+            for (const m of sorted) {
+              const nameEsc = escapeForHtml(m.fullName);
+              const pattern = new RegExp("@" + escRe(nameEsc) + "(?![\\w])", "g");
+              const tag =
+                '<span class="mention" data-userid="' + m.userId + '" data-username="' + escapeForHtml(m.emailId || m.fullName) + '">@' +
+                nameEsc + "</span>";
+              escaped = escaped.replace(pattern, tag);
+            }
+            return escaped;
+          };
 
           // Hidden file input + visible paperclip button that triggers it
           const fileInput = document.createElement("input");
@@ -14618,11 +14894,22 @@
               }
 
               composeStatus.textContent = "Posting comment…";
+              // If the message contains '@<member name>' patterns, render
+              // them as Rocketlane mention markup. Otherwise let the bridge
+              // do its normal plaintext→HTML conversion.
+              const mentionHtml = messageText && mentionMembers.length
+                ? "<p>" + convertMentionsToHtml(messageText).replace(/\n{2,}/g, "</p><p>").replace(/\n/g, "<br>") + "</p>"
+                : null;
+              const hasMention = mentionHtml && /class="mention"/.test(mentionHtml);
               await window.RocketlaneBridge.postChatComment(
                 rlProjectIdForNotes,
                 convId,
                 messageText,
-                { private: wantPrivate, linkedAttachments: linkedAttachmentIds.length ? linkedAttachmentIds : undefined },
+                {
+                  private: wantPrivate,
+                  linkedAttachments: linkedAttachmentIds.length ? linkedAttachmentIds : undefined,
+                  contentHtml: hasMention ? mentionHtml : undefined,
+                },
               );
               composeInput.value = "";
               pendingFiles.length = 0;

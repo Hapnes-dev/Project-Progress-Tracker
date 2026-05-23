@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.4.0
+// @version      1.5.0
 // @description  Bridges Rocketlane chat API to the local Project Progress Tracker, bypassing CORS.
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
@@ -413,6 +413,19 @@
       return out;
     },
 
+    /**
+     * Fetch the list of users + teams that are members of a Rocketlane
+     * project. Used by the chat compose box's @-mention picker so only
+     * actual project members appear in the dropdown.
+     * Returns the response shape:
+     *   { userList: [...], teamList: [...], members: [...], ... }
+     */
+    async fetchProjectMembers(projectId) {
+      return await gmFetch(
+        TENANT_API + "/projects/" + encodeURIComponent(projectId) + "/members"
+      );
+    },
+
     async fetchProjectAttachments(projectId) {
       const data = await gmFetch(
         TENANT_API + "/attachments/project/" + encodeURIComponent(projectId)
@@ -431,7 +444,11 @@
     async postChatComment(projectId, conversationId, plainText, opts) {
       const text = String(plainText || "").trim();
       const linkedAtt = (opts && Array.isArray(opts.linkedAttachments)) ? opts.linkedAttachments : [];
-      if (!text && !linkedAtt.length) throw new Error("Empty message (no text and no attachments)");
+      // Callers can pass pre-rendered HTML (used by @-mention support so
+      // the <span class="mention">...</span> markup isn't escaped). If
+      // provided, it's used verbatim and overrides the plainText path.
+      const contentHtml = opts && typeof opts.contentHtml === "string" ? opts.contentHtml : null;
+      if (!text && !linkedAtt.length && !contentHtml) throw new Error("Empty message (no text and no attachments)");
       const isPrivate = !!(opts && opts.private);
       const userId = GM_getValue("rlUserId", 0);
       if (!userId) {
@@ -446,7 +463,9 @@
       const body = {
         comment: {
           messageType: "USER_MESSAGE",
-          content: text ? plainTextToHtml(text) : "",
+          content: contentHtml != null
+            ? contentHtml
+            : (text ? plainTextToHtml(text) : ""),
           private: isPrivate,
           commentMeta,
           user: { userId: Number(userId), userType: "NATIVE" },
