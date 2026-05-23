@@ -4770,11 +4770,16 @@
         position: relative;            /* sits on top of .composeHighlight */
       }
       .chatComposeInput::selection { background: rgba(72, 132, 255, 0.35); color: transparent; }
-      .chatComposeInput:hover { background: var(--surface-2); }
-      .chatComposeInput:focus {
+      /* Hover/focus background lives on the wrap so the highlight overlay
+         (sibling under the textarea) stays visible. */
+      .composeInputWrap { border-radius: var(--radius); transition: background 120ms ease, border-color 120ms ease; }
+      .composeInputWrap:hover { background: var(--surface-2); }
+      .composeInputWrap:focus-within {
         background: var(--surface-2);
-        border-color: var(--accent-stroke);
+        box-shadow: 0 0 0 1px var(--accent-stroke) inset;
       }
+      .chatComposeInput:hover,
+      .chatComposeInput:focus { background: transparent; border-color: transparent; }
       .chatComposeRow {
         display: flex;
         align-items: center;
