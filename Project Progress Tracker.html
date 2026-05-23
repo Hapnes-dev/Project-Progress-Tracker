@@ -13817,14 +13817,14 @@
         notesCollapseBtn.type = "button";
         notesCollapseBtn.className = "sectionCollapseBtn";
         notesCollapseBtn.setAttribute("aria-label", "Toggle notes");
-        const notesHeaderLabel = document.createElement("div");
-        notesHeaderLabel.className = "small";
+        // Match the chat history header style (.sectionTitle h3) for visual
+        // consistency across the three collapsible-section headers.
+        const notesHeaderLabel = document.createElement("h3");
         notesHeaderLabel.textContent = "Notes";
-        notesHeaderLabel.style.fontWeight = "600";
-        notesHeaderLabel.style.fontSize = "12px";
-        notesHeaderLabel.style.textTransform = "uppercase";
-        notesHeaderLabel.style.letterSpacing = "0.06em";
-        notesHeaderLabel.style.color = "var(--muted)";
+        notesHeaderLabel.style.margin = "0";
+        notesHeaderLabel.style.fontSize = "13px";
+        notesHeaderLabel.style.fontWeight = "700";
+        notesHeaderLabel.style.letterSpacing = "0.01em";
         notesHeader.appendChild(notesCollapseBtn);
         notesHeader.appendChild(notesHeaderLabel);
 
@@ -15175,7 +15175,8 @@
         catCollapseBtn.setAttribute("aria-label", "Toggle categories");
         const catH = document.createElement("h3");
         catH.textContent = "Categories";
-        catH.style.fontSize = "14px";
+        // Inherit .sectionTitle h3 default (13px / 700 / 0.01em letter-spacing)
+        // — matches chat history + Notes for a single header style.
         catH.style.display = "flex";
         catH.style.alignItems = "center";
         catH.style.gap = "8px";
