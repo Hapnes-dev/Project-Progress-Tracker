@@ -14950,16 +14950,22 @@
             return `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-${(8+Math.floor(Math.random()*4)).toString(16)}${h.slice(17,20)}-${h.slice(20,32)}`;
           };
 
-          // The current logged-in userId (from the bridge's stored session)
-          // — used to mark mentions-of-self with the rl__mention__self class.
-          const myUserId = (() => {
-            try {
-              const raw = localStorage.__api_key;
-              if (!raw) return null;
-              const arr = JSON.parse(raw);
-              return Array.isArray(arr) ? arr[2] : null;
-            } catch { return null; }
-          })();
+          // The current logged-in userId. The tracker runs on a different
+          // origin than kiona.rocketlane.com, so its localStorage doesn't
+          // contain Rocketlane's session — we have to ask the Tampermonkey
+          // bridge, which stores it via GM_setValue. The lookup is async,
+          // so we kick it off in the background and cache the result in
+          // a `let`. convertMentionsToHtml reads from this variable each
+          // time, so once the value lands every subsequent mention insert
+          // gets the rl__mention__self class correctly.
+          let myUserId = null;
+          if (window.RocketlaneBridge?.getApiKey) {
+            window.RocketlaneBridge.getApiKey()
+              .then((info) => {
+                if (info?.userId) myUserId = Number(info.userId) || null;
+              })
+              .catch((err) => console.warn("[Mentions] getApiKey failed:", err));
+          }
 
           // Build Rocketlane's native mention HTML format. Discovered by
           // capturing a real Rocketlane chat POST: an <a> with
