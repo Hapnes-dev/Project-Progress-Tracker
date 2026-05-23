@@ -14728,17 +14728,23 @@
             if (left < 8) left = 8;
             mentionPopup.style.width = POPUP_W + "px";
             mentionPopup.style.left = left + "px";
-            // Place above the caret line if there's room, otherwise below
-            const aboveTop = caretTop - POPUP_H - 4;
-            const belowTop = caretTop + caret.lineHeight + 4;
-            if (aboveTop >= 8) {
-              mentionPopup.style.top = aboveTop + "px";
-              mentionPopup.style.maxHeight = POPUP_H + "px";
+            // Anchor by BOTTOM edge when placing above the caret so the
+            // popup sits flush right above the typing line regardless of
+            // how few items it ends up rendering. (Anchoring by top with
+            // max-height leaves a big visual gap when the list is short.)
+            const spaceAbove = caretTop - 8;
+            const spaceBelow = window.innerHeight - (caretTop + caret.lineHeight) - 8;
+            if (spaceAbove >= 80 || spaceAbove >= spaceBelow) {
+              // Above: anchor bottom just above the caret
+              mentionPopup.style.top = "auto";
+              mentionPopup.style.bottom = (window.innerHeight - caretTop + 2) + "px";
+              mentionPopup.style.maxHeight = Math.min(POPUP_H, spaceAbove) + "px";
             } else {
-              mentionPopup.style.top = belowTop + "px";
-              mentionPopup.style.maxHeight = Math.min(POPUP_H, window.innerHeight - belowTop - 8) + "px";
+              // Below: anchor top just below the caret line
+              mentionPopup.style.top = (caretTop + caret.lineHeight + 2) + "px";
+              mentionPopup.style.bottom = "auto";
+              mentionPopup.style.maxHeight = Math.min(POPUP_H, spaceBelow) + "px";
             }
-            mentionPopup.style.bottom = "auto";
           };
 
           const updateMentionPopup = () => {
