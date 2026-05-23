@@ -14739,16 +14739,20 @@
               mentionActiveIdx = (mentionActiveIdx - 1 + mentionItems.length) % mentionItems.length;
               renderMentionItems();
             } else if (e.key === "Enter" && !e.shiftKey) {
-              // Pick the active match instead of sending the message
+              // Pick the active match instead of sending the message.
+              // Use stopImmediatePropagation so the sibling send-on-Enter
+              // listener on the same textarea does NOT also fire.
               e.preventDefault();
-              e.stopPropagation();
+              e.stopImmediatePropagation();
               const m = mentionItems[mentionActiveIdx];
               if (m) applyMention(m);
             } else if (e.key === "Escape") {
               e.preventDefault();
+              e.stopImmediatePropagation();
               closeMentionPopup();
             } else if (e.key === "Tab") {
               e.preventDefault();
+              e.stopImmediatePropagation();
               const m = mentionItems[mentionActiveIdx];
               if (m) applyMention(m);
             }
