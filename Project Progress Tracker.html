@@ -8997,32 +8997,45 @@
         if (!auth) return { skipped: true, reason: "missing_api_key" };
 
         const PAGE_SIZE = 100; // Rocketlane caps the projects list at 100
-        const MAX_PAGES = 20;
+        const MAX_PAGES = 50;  // safety cap; tenant currently has ~11 pages
         const MEMBER_FETCH_CHUNK = 5;
 
         /** @type {Record<string, {firstName:string,lastName:string,fullName:string,total:number,inProgress:number}>} */
         const byUserId = {};
-        let pageToken = "";
-        let pages = 0;
+        let pageNum = 0;
         let activeCount = 0;
         try {
           // Step 1: collect all active projects across pages.
+          //
+          // IMPORTANT: The tenant /projects endpoint paginates via
+          // `?page=N` (1-indexed), NOT via `pageToken`. The list
+          // response is a bare JSON array with no pagination metadata,
+          // so we walk pages 1..N until we get an empty page.
+          //
+          // PowerShell-verified: ~1088 projects across 11 pages, of
+          // which ~366 are active (not Completed/Cancelled/Closed).
           /** @type {any[]} */
           const activeProjects = [];
-          while (pages < MAX_PAGES) {
-            pages += 1;
-            const params = { pageSize: PAGE_SIZE };
-            if (pageToken) params.pageToken = pageToken;
-            const json = await rocketlaneFetchJson("/projects", params);
-            const { data, pagination } = rocketlaneUnwrapList(json);
-            for (const pr of (data || [])) {
+          const seenIds = new Set();
+          while (pageNum < MAX_PAGES) {
+            pageNum += 1;
+            const json = await rocketlaneFetchJson("/projects", {
+              pageSize: PAGE_SIZE,
+              page: pageNum,
+            });
+            const { data } = rocketlaneUnwrapList(json);
+            if (!Array.isArray(data) || data.length === 0) break;
+            // Defensive: if the same page repeats (server ignored
+            // `page` param), stop to avoid infinite loop.
+            const firstId = String(data[0]?.projectId ?? "");
+            if (firstId && seenIds.has(firstId) && pageNum > 1) break;
+            if (firstId) seenIds.add(firstId);
+            for (const pr of data) {
               if (pr?.deleted || pr?.archived) continue;
               if (!rocketlaneProjectIsActiveForWorkload(pr)) continue;
               activeProjects.push(pr);
             }
-            const next = rocketlanePaginationNextToken(pagination);
-            if (!next) break;
-            pageToken = next;
+            if (data.length < PAGE_SIZE) break; // last page
           }
           activeCount = activeProjects.length;
 
