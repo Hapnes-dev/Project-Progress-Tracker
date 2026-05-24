@@ -6661,10 +6661,23 @@
           try {
             return await window.RocketlaneBridge.apiRequest(method, fullPath, body);
           } catch (err) {
-            // If bridge fails (e.g. no api-key yet), fall through to
-            // direct fetch — that path will give a clearer error to
-            // surface in the UI.
-            console.warn("[Rocketlane API via bridge] failed, falling back:", err);
+            // ONLY fall back on infrastructure failures (no api-key
+            // captured, network down, timeout). HTTP errors from the
+            // server are LEGITIMATE responses that the caller needs to
+            // see — for example, rocketlaneCreateTaskInRocketlane tries
+            // ~40 body shapes and treats 4xx as "try the next shape."
+            // Falling back to direct-fetch on every HTTP 400 silently
+            // double-fails and exhausts all body shapes without success.
+            const msg = String(err?.message ?? err ?? "");
+            const isHttpError = /^HTTP\s+\d{3}:/i.test(msg);
+            if (isHttpError) {
+              // Real server response — surface it to the caller.
+              throw err;
+            }
+            // True bridge failure (no key, GM not available, etc.) —
+            // fall through to direct fetch so the user gets a clearer
+            // "set up your session key" error from that path.
+            console.warn("[Rocketlane API via bridge] infra failure, falling back:", err);
           }
         } else if (window.RocketlaneBridge && method !== "GET") {
           // Bridge IS installed but doesn't expose apiRequest yet —
