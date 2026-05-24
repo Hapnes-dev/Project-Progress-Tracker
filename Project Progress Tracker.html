@@ -16839,15 +16839,21 @@
               del.textContent = "Remove";
               del.addEventListener("click", () => {
                 const rlTaskId = String(t?.meta?.rocketlaneTaskId ?? "").trim();
+                // Local task objects use `text` (not `name`) for the
+                // display label — same field the rename prompt seeds.
+                // Fall back through every known shape just in case.
+                const taskLabel = String(
+                  t?.text ?? t?.name ?? t?.taskName ?? "(unnamed)"
+                ).trim() || "(unnamed)";
                 // Two distinct prompts depending on whether the task is
                 // linked to Rocketlane. Linked tasks DO propagate the
                 // delete upstream (with a strong warning); local-only
                 // tasks just drop the row.
                 const msg = rlTaskId
-                  ? "⚠ DELETE task '" + (t.name || "(unnamed)") + "' from Rocketlane?\n\n" +
+                  ? "⚠ DELETE task '" + taskLabel + "' from Rocketlane?\n\n" +
                     "This removes the task BOTH from this tracker AND from Rocketlane itself. " +
                     "Other team members will lose access to it. This action cannot be undone."
-                  : "Remove task '" + (t.name || "(unnamed)") + "' from this tracker?";
+                  : "Remove task '" + taskLabel + "' from this tracker?";
                 if (!confirm(msg)) return;
                 removeTask(p.id, area, t.id);
               });
