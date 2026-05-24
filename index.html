@@ -5338,6 +5338,16 @@
               >
                 📦 Order info
               </button>
+              <button
+                class="btn"
+                id="btnOpenPang"
+                type="button"
+                title="Open this plant in Pang"
+                disabled
+                style="display: none"
+              >
+                ☄️ PANG
+              </button>
               <button class="btn" id="btnEdit" type="button" disabled>Edit</button>
               <button class="btn danger" id="btnDelete" type="button" disabled>Delete</button>
             </div>
@@ -12816,6 +12826,7 @@
         btnOpenRocketlaneProject: document.getElementById("btnOpenRocketlaneProject"),
         detailDynamicLinks: document.getElementById("detailDynamicLinks"),
         btnShowOrderInfo: document.getElementById("btnShowOrderInfo"),
+        btnOpenPang: document.getElementById("btnOpenPang"),
         search: document.getElementById("search"),
         sort: document.getElementById("sort"),
         filter: document.getElementById("filter"),
@@ -13793,6 +13804,22 @@
             els.btnShowOrderInfo.disabled = true;
             els.btnShowOrderInfo.style.display = "none";
             delete els.btnShowOrderInfo.dataset.rlProjectId;
+          }
+        }
+        // Show "☄️ PANG" only when the project name starts with a
+        // numeric plant id (same condition as the title's Pang link).
+        if (els.btnOpenPang) {
+          const plantMatch = String(p?.name ?? "").match(/^\s*(\d+)\b/);
+          if (plantMatch) {
+            const plantId = plantMatch[1];
+            els.btnOpenPang.disabled = false;
+            els.btnOpenPang.style.display = "";
+            els.btnOpenPang.dataset.plantId = plantId;
+            els.btnOpenPang.title = "Open plant " + plantId + " in Pang";
+          } else {
+            els.btnOpenPang.disabled = true;
+            els.btnOpenPang.style.display = "none";
+            delete els.btnOpenPang.dataset.plantId;
           }
         }
 
@@ -19573,6 +19600,18 @@
           const rlPid = els.btnOpenRocketlaneProject.dataset.rlProjectId;
           if (!rlPid) return;
           const url = "https://kiona.rocketlane.com/projects/" + encodeURIComponent(rlPid) + "/";
+          window.open(url, "_blank", "noopener,noreferrer");
+        });
+      }
+      // PANG plant link — opens the plant page (same URL pattern as the
+      // title link in renderDetail). The plant id is taken from the
+      // leading number in the project name and stashed on the button's
+      // dataset when shown.
+      if (els.btnOpenPang) {
+        els.btnOpenPang.addEventListener("click", () => {
+          const plantId = els.btnOpenPang.dataset.plantId;
+          if (!plantId) return;
+          const url = "http://pang.iwmac.local/pang.qxs?plant_id=" + encodeURIComponent(plantId);
           window.open(url, "_blank", "noopener,noreferrer");
         });
       }
