@@ -14419,11 +14419,16 @@
 
           const chatBody = document.createElement("div");
           chatBody.className = "chatHistoryBody";
-          // Track scroll position per active kind so we can restore it after
-          // a detail re-render (which destroys and recreates this element).
+          // Track scroll position per active kind so we can restore it
+          // after a detail re-render (which destroys and recreates this
+          // element). Also snapshot scrollHeight alongside — the next
+          // restore uses it to detect "was scrolled to bottom" and snap
+          // to the NEW bottom if more messages have arrived.
           chatBody.addEventListener("scroll", () => {
             const k = cache.activeKind || "private";
             cache.scrollByKind[k] = chatBody.scrollTop;
+            if (!cache._lastScrollHeightByKind) cache._lastScrollHeightByKind = {};
+            cache._lastScrollHeightByKind[k] = chatBody.scrollHeight;
           });
           const chatStatus = document.createElement("div");
           chatStatus.className = "chatHistoryStatus";
@@ -14638,16 +14643,33 @@
               chatBody.appendChild(row);
             }
 
-            // Fresh fetches scroll to the latest message; cache replays
-            // get their scrollTop restored AFTER the renderDetail swap
-            // (see renderDetail post-swap block) so the chatBody is live
-            // in the DOM and scrollHeight is accurate.
-            if (chatBody.classList.contains("justLoaded")) {
-              requestAnimationFrame(() => {
+            // Restore the user's scroll position AFTER messages are
+            // appended (scrollHeight is only accurate now). Three cases:
+            //   1. Fresh fetch (justLoaded class) → snap to newest msg.
+            //   2. Cached replay AND user was previously near the bottom
+            //      → snap to new bottom (so newly-arrived messages from
+            //      auto-sync stay in view).
+            //   3. Cached replay AND user had scrolled up to read older
+            //      messages → restore that exact scrollTop.
+            // The "near bottom" threshold (40px) handles cases where the
+            // saved scroll wasn't a perfect scrollHeight match.
+            requestAnimationFrame(() => {
+              const k = cache.activeKind || "private";
+              const saved = cache.scrollByKind?.[k];
+              const justLoaded = chatBody.classList.contains("justLoaded");
+              const stickyBottom =
+                typeof saved === "number" &&
+                cache._lastScrollHeightByKind?.[k] != null &&
+                saved + chatBody.clientHeight >= cache._lastScrollHeightByKind[k] - 40;
+              if (justLoaded || stickyBottom || saved == null) {
                 chatBody.scrollTop = chatBody.scrollHeight;
-                cache.scrollByKind[cache.activeKind || "private"] = chatBody.scrollTop;
-              });
-            }
+              } else {
+                chatBody.scrollTop = Math.min(saved, chatBody.scrollHeight);
+              }
+              cache.scrollByKind[k] = chatBody.scrollTop;
+              if (!cache._lastScrollHeightByKind) cache._lastScrollHeightByKind = {};
+              cache._lastScrollHeightByKind[k] = chatBody.scrollHeight;
+            });
           };
 
           const loadKind = async (kind) => {
