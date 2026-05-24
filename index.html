@@ -8785,10 +8785,31 @@
        * @param {{ force?: boolean }} [options]
        */
       async function rocketlaneMaybeRunLiveSync(options) {
-        if (document.hidden) return { skipped: true, reason: "document_hidden" };
-        if (!getRocketlaneApiKey()) return { skipped: true, reason: "missing_api_key" };
-        return await rocketlaneSyncLinkedProjectsNow({ silent: true, force: !!options?.force });
+        if (document.hidden) {
+          rlSyncStats.note("skip: document_hidden");
+          return { skipped: true, reason: "document_hidden" };
+        }
+        if (!getRocketlaneApiKey()) {
+          rlSyncStats.note("skip: missing_api_key");
+          return { skipped: true, reason: "missing_api_key" };
+        }
+        const result = await rocketlaneSyncLinkedProjectsNow({ silent: true, force: !!options?.force });
+        rlSyncStats.note("ran: " + (result?.reason || (result?.skipped ? "skipped" : "success")));
+        return result;
       }
+      // Diagnostic: window.__rlSyncStats exposes the recent auto-sync
+      // history so you can open DevTools and see what's happening on
+      // each 2-min tick. Outcomes recorded: document_hidden,
+      // missing_api_key, dialog_open, cooldown, in_flight, success, etc.
+      const rlSyncStats = {
+        ticks: /** @type {{t:string, msg:string}[]} */ ([]),
+        note(msg) {
+          this.ticks.push({ t: new Date().toLocaleTimeString("nb-NO"), msg });
+          if (this.ticks.length > 30) this.ticks.shift();
+          console.log("[RL auto-sync]", msg);
+        },
+      };
+      try { window.__rlSyncStats = rlSyncStats; } catch (_) {}
 
       /**
        * Queue live sync when a local linked project changes.
