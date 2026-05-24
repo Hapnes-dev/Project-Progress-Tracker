@@ -10240,6 +10240,13 @@
         if (assigneeVariants.length) {
           const a = assigneeVariants[0];
           bodies = [
+            // CORRECT projectPhase shape WITH assignees first — Rocketlane
+            // silently accepts the legacy `phase` field below (returns 201
+            // but creates a phaseless task), so we must try the verified
+            // shape before any legacy fallback that includes assignees.
+            { taskName: name, project: { projectId: pidV }, projectPhase: { projectPhaseId: phaseIdV }, startDate, dueDate, type: "Task", assignees: a },
+            { taskName: name, project: projectRef, projectPhase: { projectPhaseId: phaseIdV }, startDate, dueDate, type: "Task", assignees: a },
+            // Legacy assignee shapes (kept for compat)
             { taskName: name, project: projectRef, phase: phaseRef, startDate, dueDate, type: "Task", assignees: a },
             { taskName: name, projectId: pidV, phaseId: phaseIdV, startDate, dueDate, type: "Task", assignees: a },
             ...bodies,
