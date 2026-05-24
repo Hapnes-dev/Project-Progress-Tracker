@@ -8955,32 +8955,60 @@
       // by rocketlaneFetchTeamWorkload on each successful run.
       try { window.__rlTeam = teamWorkloadCache; } catch (_) {}
 
-      // True for any project status that isn't terminal (closed/finished/
-      // archived/cancelled etc.). Tenant Rocketlane uses label strings
-      // and numeric group codes; we accept either and treat unknowns as
-      // active by default (safer to over-count than under-count).
-      function rocketlaneProjectIsInProgress(remoteProject) {
-        const statusObj = remoteProject?.status ?? remoteProject?.projectStatus ?? null;
-        const label = String(statusObj?.label ?? statusObj?.name ?? statusObj ?? "").trim().toLowerCase();
+      // Read a project's status label from the custom fields array.
+      // Rocketlane stores it as fields[i] where fieldName === "Status",
+      // and the human label sits in metaFieldValue.label (e.g.
+      // "In progress", "Completed", "Cancelled", "Proposed", ...).
+      function rocketlaneProjectStatusLabel(remoteProject) {
+        const fields = Array.isArray(remoteProject?.fields) ? remoteProject.fields : [];
+        for (const f of fields) {
+          if (String(f?.fieldName ?? "").toLowerCase() === "status") {
+            return String((f?.metaFieldValue || {}).label ?? "").trim();
+          }
+        }
+        return "";
+      }
+      // Terminal statuses excluded from team-workload counts.
+      // The user's request was "never include completed" — we extend to
+      // Cancelled because cancelled is also non-active (no one is
+      // working on it). Adjust this regex if you want to count
+      // cancelled projects as workload.
+      const TEAM_WORKLOAD_EXCLUDE_STATUS_RE = /^(completed|cancelled|closed)$/i;
+      function rocketlaneProjectIsActiveForWorkload(remoteProject) {
+        const label = rocketlaneProjectStatusLabel(remoteProject);
         if (!label) return true; // unknown → assume active
-        if (/closed|finished|complete|cancel|archiv/.test(label)) return false;
-        return true;
+        return !TEAM_WORKLOAD_EXCLUDE_STATUS_RE.test(label);
+      }
+      function rocketlaneProjectIsInProgress(remoteProject) {
+        const label = rocketlaneProjectStatusLabel(remoteProject).toLowerCase();
+        return label === "in progress" || label === "in_progress";
       }
 
-      // Fetch all Rocketlane projects, aggregate by owner userId.
-      // Uses the bridge route (rocketlaneFetchJson → rocketlaneRequestJson
-      // → bridge.apiRequest), so it works the same from github.io / file://.
+      // Fetch all Rocketlane projects, then for each ACTIVE project
+      // (status is not Completed / Cancelled / Closed), pull its team
+      // member list. Aggregate by member userId so each teammate's
+      // counts reflect every active project where they're a member —
+      // not just projects they own.
+      //
+      // Concurrency: serial chunked at MEMBER_FETCH_CHUNK so we don't
+      // hammer the API with N parallel requests.
       async function rocketlaneFetchTeamWorkload() {
         const auth = getRocketlaneAuth();
         if (!auth) return { skipped: true, reason: "missing_api_key" };
 
-        const PAGE_SIZE = 200;
-        const MAX_PAGES = 50;
+        const PAGE_SIZE = 100; // Rocketlane caps the projects list at 100
+        const MAX_PAGES = 20;
+        const MEMBER_FETCH_CHUNK = 5;
+
         /** @type {Record<string, {firstName:string,lastName:string,fullName:string,total:number,inProgress:number}>} */
         const byUserId = {};
         let pageToken = "";
         let pages = 0;
+        let activeCount = 0;
         try {
+          // Step 1: collect all active projects across pages.
+          /** @type {any[]} */
+          const activeProjects = [];
           while (pages < MAX_PAGES) {
             pages += 1;
             const params = { pageSize: PAGE_SIZE };
@@ -8988,21 +9016,48 @@
             const json = await rocketlaneFetchJson("/projects", params);
             const { data, pagination } = rocketlaneUnwrapList(json);
             for (const pr of (data || [])) {
-              const uid = String(rocketlaneProjectOwnerUserId(pr) ?? "").trim();
-              if (!uid) continue;
-              if (!byUserId[uid]) {
-                const ownerObj = rocketlaneProjectOwnerObj(pr) || {};
-                const firstName = String(ownerObj.firstName ?? "").trim();
-                const lastName  = String(ownerObj.lastName ?? "").trim();
-                const fullName  = rocketlaneProjectOwnerName(pr) || [firstName, lastName].filter(Boolean).join(" ") || "User #" + uid;
-                byUserId[uid] = { firstName, lastName, fullName, total: 0, inProgress: 0 };
-              }
-              byUserId[uid].total += 1;
-              if (rocketlaneProjectIsInProgress(pr)) byUserId[uid].inProgress += 1;
+              if (pr?.deleted || pr?.archived) continue;
+              if (!rocketlaneProjectIsActiveForWorkload(pr)) continue;
+              activeProjects.push(pr);
             }
             const next = rocketlanePaginationNextToken(pagination);
             if (!next) break;
             pageToken = next;
+          }
+          activeCount = activeProjects.length;
+
+          // Step 2: fetch members for each active project (chunked).
+          for (let i = 0; i < activeProjects.length; i += MEMBER_FETCH_CHUNK) {
+            const chunk = activeProjects.slice(i, i + MEMBER_FETCH_CHUNK);
+            await Promise.all(chunk.map(async (pr) => {
+              const pid = String(pr?.projectId ?? "").trim();
+              if (!pid) return;
+              let mem = null;
+              try {
+                mem = await rocketlaneFetchJson("/projects/" + encodeURIComponent(pid) + "/members");
+              } catch (e) {
+                console.debug("[TeamWorkload] members fetch failed for", pid, e?.message ?? e);
+                return;
+              }
+              const userList = Array.isArray(mem?.userList) ? mem.userList : [];
+              const inProg = rocketlaneProjectIsInProgress(pr);
+              for (const u of userList) {
+                const uid = String(u?.userId ?? "").trim();
+                if (!uid) continue;
+                // Only count internal users (NATIVE userType). External
+                // customers / partners don't get a workload row.
+                const userType = String(u?.userType ?? "").toUpperCase();
+                if (userType && userType !== "NATIVE") continue;
+                if (!byUserId[uid]) {
+                  const firstName = String(u?.firstName ?? "").trim();
+                  const lastName  = String(u?.lastName ?? "").trim();
+                  const fullName  = [firstName, lastName].filter(Boolean).join(" ").trim() || ("User #" + uid);
+                  byUserId[uid] = { firstName, lastName, fullName, total: 0, inProgress: 0 };
+                }
+                byUserId[uid].total += 1;
+                if (inProg) byUserId[uid].inProgress += 1;
+              }
+            }));
           }
         } catch (e) {
           console.warn("[TeamWorkload] fetch failed:", e);
@@ -9012,10 +9067,10 @@
         teamWorkloadCache = payload;
         try { window.__rlTeam = payload; } catch (_) {}
         saveTeamWorkloadToStorage(payload);
-        console.log("[TeamWorkload] fetched", Object.keys(byUserId).length, "owners over", pages, "page(s)");
+        console.log("[TeamWorkload] fetched", Object.keys(byUserId).length, "team members across", activeCount, "active projects");
         // Trigger UI refresh
         try { renderOwnerStatusOverview(); } catch (_) {}
-        return { ok: true, count: Object.keys(byUserId).length };
+        return { ok: true, members: Object.keys(byUserId).length, activeProjects: activeCount };
       }
 
       /**
