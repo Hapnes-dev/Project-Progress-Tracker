@@ -16838,7 +16838,17 @@
               del.type = "button";
               del.textContent = "Remove";
               del.addEventListener("click", () => {
-                if (!confirm("Remove this task from this view?\n\nThe task will remain in Rocketlane — only the local copy is removed.")) return;
+                const rlTaskId = String(t?.meta?.rocketlaneTaskId ?? "").trim();
+                // Two distinct prompts depending on whether the task is
+                // linked to Rocketlane. Linked tasks DO propagate the
+                // delete upstream (with a strong warning); local-only
+                // tasks just drop the row.
+                const msg = rlTaskId
+                  ? "⚠ DELETE task '" + (t.name || "(unnamed)") + "' from Rocketlane?\n\n" +
+                    "This removes the task BOTH from this tracker AND from Rocketlane itself. " +
+                    "Other team members will lose access to it. This action cannot be undone."
+                  : "Remove task '" + (t.name || "(unnamed)") + "' from this tracker?";
+                if (!confirm(msg)) return;
                 removeTask(p.id, area, t.id);
               });
 
@@ -17953,20 +17963,31 @@
         const list = p.tasksByArea?.[area] ?? [];
         const target = list.find((x) => x.id === taskId);
         if (!target) return;
-        // Local-only delete. Never propagate the removal to Rocketlane.
-        // The Rocketlane task (if linked) stays intact upstream; only our
-        // local mirror drops the row.
         const rlTaskId = String(target?.meta?.rocketlaneTaskId ?? "").trim();
+        // Local removal — drop the row from this tracker's state.
         p.tasksByArea[area] = list.filter((x) => x.id !== taskId);
         touchProjectLocal(projectId);
         saveState(state);
         render();
+        // Clear any in-flight sync state for this task so a fresh
+        // import later starts clean.
         if (rlTaskId) {
-          // Forget any in-flight sync state for this task so subsequent syncs
-          // start clean if it's re-imported later.
           rocketlanePrivateNoteLastSent.delete(rlTaskId);
           rocketlaneTaskDescriptionLastSent.delete(rlTaskId);
-          showLoadMessage("Task removed from this view (still exists in Rocketlane).");
+          // Propagate the delete to Rocketlane. The user already confirmed
+          // the upstream delete via the warning prompt in the click
+          // handler. Fire-and-forget — if it fails the local removal
+          // still stands, and the task will reappear on next sync.
+          rocketlaneDeleteTask(rlTaskId)
+            .then(() => showLoadMessage("Task deleted from Rocketlane."))
+            .catch((err) => {
+              console.warn("[removeTask] Rocketlane delete failed:", err);
+              showLoadMessage(
+                "Removed locally, but Rocketlane delete failed: " +
+                  String(err?.message ?? err) +
+                  ". The task may reappear on next sync.",
+              );
+            });
         }
       }
 
