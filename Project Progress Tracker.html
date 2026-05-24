@@ -8920,6 +8920,98 @@
         }
       }
 
+      // ──────────────────────────────────────────────────────────────────
+      // Team workload — shared view of every Rocketlane teammate's project
+      // counts (total + in-progress), keyed by Rocketlane userId.
+      //
+      // Single source of truth: Rocketlane itself. We page through ALL
+      // projects (not just yours), extract each project's owner, and
+      // aggregate. Everyone's tracker sees the same numbers because
+      // they all read from the same Rocketlane API.
+      //
+      // Persisted to localStorage as `progress_tracker_team_workload_v1`
+      // so the chip count survives reloads while the fetcher updates
+      // in the background.
+      // ──────────────────────────────────────────────────────────────────
+      const TEAM_WORKLOAD_STORAGE = "progress_tracker_team_workload_v1";
+      function loadTeamWorkloadFromStorage() {
+        try {
+          const raw = localStorage.getItem(TEAM_WORKLOAD_STORAGE);
+          if (!raw) return null;
+          const parsed = JSON.parse(raw);
+          if (!parsed || typeof parsed !== "object") return null;
+          return parsed; // { byUserId: {...}, fetchedAt: ISO }
+        } catch { return null; }
+      }
+      function saveTeamWorkloadToStorage(payload) {
+        try { localStorage.setItem(TEAM_WORKLOAD_STORAGE, JSON.stringify(payload)); }
+        catch (e) { console.warn("[TeamWorkload] persist failed:", e); }
+      }
+      // In-memory cache that powers the Owner Workload Overview.
+      // Shape: { byUserId: { [userId]: { firstName, lastName, fullName, total, inProgress } }, fetchedAt }
+      let teamWorkloadCache = loadTeamWorkloadFromStorage() || { byUserId: {}, fetchedAt: null };
+
+      // True for any project status that isn't terminal (closed/finished/
+      // archived/cancelled etc.). Tenant Rocketlane uses label strings
+      // and numeric group codes; we accept either and treat unknowns as
+      // active by default (safer to over-count than under-count).
+      function rocketlaneProjectIsInProgress(remoteProject) {
+        const statusObj = remoteProject?.status ?? remoteProject?.projectStatus ?? null;
+        const label = String(statusObj?.label ?? statusObj?.name ?? statusObj ?? "").trim().toLowerCase();
+        if (!label) return true; // unknown → assume active
+        if (/closed|finished|complete|cancel|archiv/.test(label)) return false;
+        return true;
+      }
+
+      // Fetch all Rocketlane projects, aggregate by owner userId.
+      // Uses the bridge route (rocketlaneFetchJson → rocketlaneRequestJson
+      // → bridge.apiRequest), so it works the same from github.io / file://.
+      async function rocketlaneFetchTeamWorkload() {
+        const auth = getRocketlaneAuth();
+        if (!auth) return { skipped: true, reason: "missing_api_key" };
+
+        const PAGE_SIZE = 200;
+        const MAX_PAGES = 50;
+        /** @type {Record<string, {firstName:string,lastName:string,fullName:string,total:number,inProgress:number}>} */
+        const byUserId = {};
+        let pageToken = "";
+        let pages = 0;
+        try {
+          while (pages < MAX_PAGES) {
+            pages += 1;
+            const params = { pageSize: PAGE_SIZE };
+            if (pageToken) params.pageToken = pageToken;
+            const json = await rocketlaneFetchJson("/projects", params);
+            const { data, pagination } = rocketlaneUnwrapList(json);
+            for (const pr of (data || [])) {
+              const uid = String(rocketlaneProjectOwnerUserId(pr) ?? "").trim();
+              if (!uid) continue;
+              if (!byUserId[uid]) {
+                const ownerObj = rocketlaneProjectOwnerObj(pr) || {};
+                const firstName = String(ownerObj.firstName ?? "").trim();
+                const lastName  = String(ownerObj.lastName ?? "").trim();
+                const fullName  = rocketlaneProjectOwnerName(pr) || [firstName, lastName].filter(Boolean).join(" ") || "User #" + uid;
+                byUserId[uid] = { firstName, lastName, fullName, total: 0, inProgress: 0 };
+              }
+              byUserId[uid].total += 1;
+              if (rocketlaneProjectIsInProgress(pr)) byUserId[uid].inProgress += 1;
+            }
+            const next = rocketlanePaginationNextToken(pagination);
+            if (!next) break;
+            pageToken = next;
+          }
+        } catch (e) {
+          console.warn("[TeamWorkload] fetch failed:", e);
+          return { skipped: true, reason: "fetch_error", error: String(e?.message ?? e) };
+        }
+        const payload = { byUserId, fetchedAt: new Date().toISOString() };
+        teamWorkloadCache = payload;
+        saveTeamWorkloadToStorage(payload);
+        // Trigger UI refresh
+        try { renderOwnerStatusOverview(); } catch (_) {}
+        return { ok: true, count: Object.keys(byUserId).length };
+      }
+
       /**
        * @param {{ force?: boolean }} [options]
        */
@@ -8953,6 +9045,10 @@
         }
         const result = await rocketlaneSyncLinkedProjectsNow({ silent: true, force: !!options?.force });
         rlSyncStats.note("ran: " + (result?.reason || (result?.skipped ? "skipped" : "success")));
+        // Team workload refresh — runs alongside the per-user sync on the
+        // same 5-min cadence. Doesn't block the user-facing sync result.
+        // Errors are logged in fetchTeamWorkload itself.
+        void rocketlaneFetchTeamWorkload();
         return result;
       }
       // Diagnostic: window.__rlSyncStats exposes the recent auto-sync
@@ -13568,6 +13664,49 @@
               };
             } else if (loadValue) {
               byOwner[ownerKey].load = loadValue;
+            }
+          }
+        }
+
+        // Merge in team workload from Rocketlane — every teammate who
+        // owns at least one project appears here, even if you haven't
+        // imported any of their projects locally. Their totals come
+        // straight from Rocketlane (single source of truth).
+        const team = teamWorkloadCache?.byUserId;
+        if (team && typeof team === "object") {
+          for (const userId of Object.keys(team)) {
+            const t = team[userId];
+            if (!t || !t.total) continue;
+            const ownerKey = normalizeOwnerGroupKey(t.fullName || ("User #" + userId));
+            if (!byOwner[ownerKey]) {
+              // Teammate with zero local projects in YOUR tracker — show
+              // them as a "remote-only" row sourced from Rocketlane.
+              byOwner[ownerKey] = {
+                ownerKey,
+                load: null,
+                projectCount: t.total,
+                activeCount: t.inProgress,
+                taskInProgressCount: t.inProgress,
+                taskInProgressRefs: [],
+                taskWaitingPartnerCount: 0,
+                taskWaitingPartnerRefs: [],
+                taskBlockedCount: 0,
+                taskBlockedRefs: [],
+                needAssistanceCount: 0,
+                needAssistanceRefs: [],
+                remoteOnly: true,
+              };
+            } else {
+              // Owner you already see locally — use Rocketlane's count
+              // ONLY if it's higher than what we already have locally
+              // (means they own projects you haven't imported). Don't
+              // overwrite local counts with smaller remote values.
+              if (t.total > byOwner[ownerKey].projectCount) {
+                byOwner[ownerKey].projectCount = t.total;
+              }
+              if (t.inProgress > byOwner[ownerKey].taskInProgressCount) {
+                byOwner[ownerKey].taskInProgressCount = t.inProgress;
+              }
             }
           }
         }
