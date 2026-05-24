@@ -9884,11 +9884,16 @@
 
       /** @returns {string} */
       function rocketlanePhaseId(phase) {
+        // Field names vary between the public API (phaseId) and the
+        // tenant API hit through the Tampermonkey bridge
+        // (projectPhaseId). Try every shape we've observed.
         const v =
+          phase?.projectPhaseId ??
           phase?.phaseId ??
           phase?.phaseID ??
           phase?.id ??
           phase?.phase_id ??
+          phase?.projectPhaseID ??
           phase?.phaseId?.value ??
           phase?.phaseID?.value ??
           phase?.value ??
@@ -9897,7 +9902,15 @@
       }
       /** @returns {string} */
       function rocketlanePhaseName(phase) {
-        return String(phase?.phaseName ?? phase?.name ?? phase?.phase_name ?? phase ?? "").trim();
+        // Tenant API returns projectPhaseName; public API uses phaseName.
+        return String(
+          phase?.projectPhaseName ??
+          phase?.phaseName ??
+          phase?.name ??
+          phase?.phase_name ??
+          phase ??
+          ""
+        ).trim();
       }
 
       /** Coerce numeric ids to numbers (Rocketlane is sometimes strict). @param {any} v @returns {string | number} */
