@@ -6637,6 +6637,36 @@
       }
 
       async function rocketlaneRequestJson(method, path, params, body) {
+        // Prefer the Tampermonkey bridge — it routes through
+        // GM_xmlhttpRequest against the TENANT API host
+        // (kiona.api.rocketlane.com) which is the only host where the
+        // captured session key actually works. The tracker's own
+        // fetch() targets the PUBLIC API host (api.rocketlane.com)
+        // which doesn't accept session keys and blocks CORS from
+        // github.io anyway — that's why task create / delete / phase
+        // calls were silently failing before.
+        if (window.RocketlaneBridge?.apiRequest && typeof window.RocketlaneBridge.apiRequest === "function") {
+          // Resolve query params into the path so the bridge sees the
+          // final URL (its impl just concatenates path onto TENANT_API).
+          let fullPath = path;
+          if (params) {
+            const search = new URLSearchParams();
+            for (const [k, v] of Object.entries(params)) {
+              if (v === undefined || v === null || v === "") continue;
+              search.set(k, String(v));
+            }
+            const qs = search.toString();
+            if (qs) fullPath += (fullPath.includes("?") ? "&" : "?") + qs;
+          }
+          try {
+            return await window.RocketlaneBridge.apiRequest(method, fullPath, body);
+          } catch (err) {
+            // If bridge fails (e.g. no api-key yet), fall through to
+            // direct fetch — that path will give a clearer error to
+            // surface in the UI.
+            console.warn("[Rocketlane API via bridge] failed, falling back:", err);
+          }
+        }
         return await rocketlaneRequestJsonImpl(method, path, params, body, false);
       }
       async function rocketlaneRequestJsonImpl(method, path, params, body, isRetry) {

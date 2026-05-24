@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.7.1
+// @version      1.8.0
 // @description  Bridges Rocketlane chat API to the local Project Progress Tracker, bypassing CORS.
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
@@ -76,6 +76,50 @@
 
   // Don't double-install if the script ran on a frame or got injected twice.
   if (target.RocketlaneBridge) return;
+
+  /**
+   * Generic CORS-bypassing HTTP call to the Rocketlane tenant API.
+   * Used by both the named helpers (gmFetch / gmPost) below AND exposed
+   * directly on the bridge as `apiRequest(method, path, body)` so the
+   * tracker can call any endpoint without us needing to add a wrapper
+   * for each one. The tracker prefers this over its own fetch() because
+   * tenant endpoints don't whitelist github.io / file:// origins.
+   *
+   * @param {string} method    "GET" | "POST" | "PUT" | "DELETE" | "PATCH"
+   * @param {string} path      Either an absolute URL or a path; if a path,
+   *                           it's resolved against the tenant base.
+   * @param {object} [body]    Parsed-JSON body for POST/PUT/PATCH.
+   * @returns {Promise<any>}   Parsed JSON response (null if empty body).
+   */
+  function gmRequest(method, path, body) {
+    return new Promise((resolve, reject) => {
+      const apiKey = GM_getValue("rlApiKey", "");
+      if (!apiKey) {
+        reject(new Error("No Rocketlane api-key captured yet. Open https://kiona.rocketlane.com once while logged in."));
+        return;
+      }
+      const url = /^https?:/i.test(path) ? path : (TENANT_API + path);
+      const headers = { "api-key": apiKey, accept: "application/json" };
+      const init = { method, url, headers, timeout: 20000,
+        onload: (res) => {
+          if (res.status < 200 || res.status >= 300) {
+            reject(new Error("HTTP " + res.status + ": " + (res.responseText || "").slice(0, 300)));
+            return;
+          }
+          if (!res.responseText) { resolve(null); return; }
+          try { resolve(JSON.parse(res.responseText)); }
+          catch { resolve(null); } // some endpoints return non-JSON success
+        },
+        onerror: () => reject(new Error("Network error reaching Rocketlane API")),
+        ontimeout: () => reject(new Error("Rocketlane API timed out")),
+      };
+      if (body !== undefined && body !== null) {
+        headers["content-type"] = "application/json";
+        init.data = typeof body === "string" ? body : JSON.stringify(body);
+      }
+      GM_xmlhttpRequest(init);
+    });
+  }
 
   function gmFetch(url) {
     return new Promise((resolve, reject) => {
@@ -235,6 +279,25 @@
     // there's no I/O penalty.
     get userId() { return GM_getValue("rlUserId", null); },
     get apiKey() { return GM_getValue("rlApiKey", "") || null; },
+
+    /**
+     * Generic Rocketlane API call routed through GM_xmlhttpRequest so it
+     * bypasses CORS. The tracker uses this for ANY tenant-API endpoint
+     * (task create, phase list, task delete, project update, …) because
+     * its own fetch() can't reach kiona.api.rocketlane.com from
+     * github.io / file:// origins.
+     *
+     *   await bridge.apiRequest("POST", "/tasks", { taskName: "x", … });
+     *   await bridge.apiRequest("GET",  "/projects/123/phases");
+     *   await bridge.apiRequest("DELETE", "/tasks/456");
+     *
+     * @param {string} method
+     * @param {string} path   Path relative to /api/v1, or full URL.
+     * @param {object} [body] JSON body for non-GET requests.
+     */
+    async apiRequest(method, path, body) {
+      return await gmRequest(method, path, body);
+    },
 
     async getStatus() {
       const hasKey = !!GM_getValue("rlApiKey", "");
