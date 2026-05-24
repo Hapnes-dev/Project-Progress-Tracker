@@ -6666,6 +6666,21 @@
             // surface in the UI.
             console.warn("[Rocketlane API via bridge] failed, falling back:", err);
           }
+        } else if (window.RocketlaneBridge && method !== "GET") {
+          // Bridge IS installed but doesn't expose apiRequest yet —
+          // meaning it's a pre-1.8 version. Non-GET requests will hit
+          // the public-api host fallback which doesn't accept session
+          // keys, and silently fail. Loudly warn the user instead.
+          if (!window.__rlBridgeUpgradeWarned) {
+            window.__rlBridgeUpgradeWarned = true;
+            const msg =
+              "Rocketlane bridge needs an update.\n\n" +
+              "Open Tampermonkey dashboard → 'Rocketlane Chat Bridge' → " +
+              "click 'Last update' column to pull the latest version (1.8.0+).\n\n" +
+              "Without this, task create / delete / status changes won't reach Rocketlane.";
+            console.warn("[Rocketlane API]", msg);
+            try { alert(msg); } catch (_) {}
+          }
         }
         return await rocketlaneRequestJsonImpl(method, path, params, body, false);
       }
