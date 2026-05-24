@@ -8776,18 +8776,26 @@
 
       /**
        * Pull changes from Rocketlane into already linked local projects.
-       * @param {{ silent?: boolean, force?: boolean }} [options]
+       * @param {{ silent?: boolean, force?: boolean, onlyProjectId?: string }} [options]
+       *   - onlyProjectId: if set, restricts the sync to that single local
+       *     project. Used by the per-project "RL sync" chip click handler
+       *     so a manual sync of one project doesn't fan out to every
+       *     linked project in state.
        */
       async function rocketlaneSyncLinkedProjectsNow(options) {
         const silent = !!options?.silent;
         const force = !!options?.force;
+        const onlyId = String(options?.onlyProjectId ?? "").trim();
         if (isJsonRequired()) {
           return { skipped: true, reason: "json_required" };
         }
         if (els?.dlgRocketlane?.open && !force) {
           return { skipped: true, reason: "dialog_open" };
         }
-        const linked = rocketlaneLinkedProjectsInState();
+        const allLinked = rocketlaneLinkedProjectsInState();
+        const linked = onlyId
+          ? allLinked.filter((p) => String(p?.id ?? "") === onlyId)
+          : allLinked;
         if (!linked.length) {
           if (!silent) rocketlaneShowMessage("No linked Rocketlane projects to sync.", "info");
           rocketlaneUpdateSyncButtonState();
@@ -14210,7 +14218,36 @@
           const quietCls = ROCKETLANE_QUIET_UI ? " rlSyncQuiet" : "";
           rlSyncTag.className = "tag" + (syncInfo.cls ? " " + syncInfo.cls : "") + quietCls;
           rlSyncTag.textContent = syncInfo.text;
-          rlSyncTag.title = String(syncInfo.title ?? "");
+          rlSyncTag.title = (syncInfo.title ? String(syncInfo.title) + " — " : "") + "Click to sync this project from Rocketlane now";
+          // Click → manual single-project sync. Bypasses the cooldown
+          // (force: true), only syncs THIS project's rlPid, and shows
+          // visible feedback during the run.
+          rlSyncTag.style.cursor = "pointer";
+          rlSyncTag.dataset.localProjectId = p.id;
+          rlSyncTag.addEventListener("click", async (ev) => {
+            ev.stopPropagation();
+            if (rocketlaneLiveSyncInFlight) return; // double-click safety
+            const orig = rlSyncTag.textContent;
+            rlSyncTag.textContent = "RL syncing…";
+            try {
+              const res = await rocketlaneSyncLinkedProjectsNow({
+                silent: false,
+                force: true,
+                onlyProjectId: p.id,
+              });
+              if (res && res.skipped) {
+                rlSyncTag.textContent = "RL sync skipped: " + String(res.reason || "unknown");
+                window.setTimeout(() => refreshRocketlaneSyncTagInPlace(), 1500);
+              }
+              // Otherwise the sync's own success path updates the
+              // chip via refreshRocketlaneSyncTagInPlace() called
+              // from rocketlaneUpdateSyncButtonState().
+            } catch (err) {
+              rlSyncTag.textContent = "RL sync: failed";
+              console.warn("[RL manual sync] failed:", err);
+              window.setTimeout(() => refreshRocketlaneSyncTagInPlace(), 2500);
+            }
+          });
           meta.appendChild(rlSyncTag);
         }
 
