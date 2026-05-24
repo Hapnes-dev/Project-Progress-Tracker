@@ -86,6 +86,30 @@
   // @grant unsafeWindow), or plain window when it isn't.
   const target = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
 
+  // SECURITY: gate the bridge expose to specifically the tracker page.
+  //
+  // The @match list above includes `file:///*` so the bridge works when
+  // the user runs the tracker as a local file. Without this in-page
+  // check, ANY local HTML file would receive `window.RocketlaneBridge`
+  // and could call `apiRequest(...)` against the user's Rocketlane
+  // tenant using the captured api-key.
+  //
+  // We require the page to declare itself as the tracker via a
+  // dedicated meta tag — anything else gets nothing.
+  //
+  // GitHub Pages and any other https-served tracker copies match by
+  // @match URL alone (already narrowly scoped). file:// must opt-in.
+  if (location.protocol === "file:") {
+    const marker = document.querySelector(
+      'meta[name="rocketlane-tracker"][content="hapnes-dev/Project-Progress-Tracker"]'
+    );
+    if (!marker) {
+      // Not the tracker — silently bail. Doesn't break anything for
+      // the user; they just won't see RocketlaneBridge on this page.
+      return;
+    }
+  }
+
   // Don't double-install if the script ran on a frame or got injected twice.
   if (target.RocketlaneBridge) return;
 

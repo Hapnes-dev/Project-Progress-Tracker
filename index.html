@@ -3,6 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- SECURITY: identifies this page as the legitimate tracker so the
+         Tampermonkey bridge can scope its window.RocketlaneBridge expose
+         to ONLY this file when running on file:// (otherwise any local
+         HTML the user opens would receive bridge access to the user's
+         Rocketlane tenant). The bridge looks for this exact content
+         string before publishing on file:// URLs. -->
+    <meta name="rocketlane-tracker" content="hapnes-dev/Project-Progress-Tracker" />
     <title>Project Progress Tracker</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%236ee7ff'/%3E%3Cstop offset='1' stop-color='%2334d399'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='32' cy='32' r='28' fill='none' stroke='url(%23g)' stroke-width='5' stroke-linecap='round' stroke-dasharray='132 44' transform='rotate(-90 32 32)'/%3E%3Cpath fill='%2334d399' d='M28 34l-6-6 2.8-2.8L28 28.4l10.2-10.2L41 21 28 34z'/%3E%3C/svg%3E" />
     <style>
@@ -6364,18 +6371,20 @@
           const bridgeKey = String(rawKey ?? "").trim();
           if (!bridgeKey) {
             // Diagnostic: this is THE failure mode for "missing_api_key"
-            // when the bridge IS published. Log enough info to tell
-            // whether bridgeRef is missing, the getter returned null, or
-            // the value is empty-but-defined.
+            // when the bridge IS published. SECURITY: never log raw
+            // credential bytes — even partial prefixes reduce entropy
+            // and may appear in shared screenshots / bug reports. Log
+            // only structural facts (presence, type, length, version).
             if (!window.__rlAuthDebugLogged) {
               window.__rlAuthDebugLogged = true;
               console.warn("[Auth] tryAutoSyncSessionKeyFromBridge — empty key", {
                 bridgeRefType: typeof bridgeRef,
                 bridgeRefKeys: bridgeRef ? Object.keys(bridgeRef).slice(0, 20) : null,
                 rawKeyType: typeof rawKey,
-                rawKey: rawKey == null ? rawKey : String(rawKey).slice(0, 8) + "…",
+                rawKeyPresent: rawKey != null,
+                rawKeyLength: rawKey == null ? null : String(rawKey).length,
                 bridgeVersion: bridgeRef?.version,
-                bridgeUserId: bridgeRef?.userId,
+                hasBridgeUserId: bridgeRef?.userId != null,
               });
             }
             return "";
@@ -6914,7 +6923,7 @@
             diag.push({ path: a.path, status: "ok", count: list.length, topKeys, sampleKeys: list[0] ? Object.keys(list[0]).slice(0, 10) : [] });
             if (list.length) {
               window.__rlChatDebug.discover = diag;
-              console.log("rl-chat-discover", diag);
+              console.debug("rl-chat-discover", diag);
               return { list, endpoint: a.path };
             }
           } catch (e) {
@@ -6922,7 +6931,7 @@
           }
         }
         window.__rlChatDebug.discover = diag;
-        console.log("rl-chat-discover", diag);
+        console.debug("rl-chat-discover", diag);
         return { list: [], endpoint: "" };
       }
 
@@ -6968,13 +6977,13 @@
             diag.push({ path, status: "ok", count: list.length, topKeys, sampleKeys: list[0] ? Object.keys(list[0]).slice(0, 10) : [] });
             if (list.length) {
               window.__rlChatDebug.messages = diag;
-              console.log("rl-chat-messages", diag);
+              console.debug("rl-chat-messages", diag);
               return { messages: list, endpoint: path };
             }
             // Even on empty, remember we hit something valid
             if (Array.isArray(list)) {
               window.__rlChatDebug.messages = diag;
-              console.log("rl-chat-messages", diag);
+              console.debug("rl-chat-messages", diag);
               return { messages: [], endpoint: path };
             }
           } catch (e) {
@@ -6982,7 +6991,7 @@
           }
         }
         window.__rlChatDebug.messages = diag;
-        console.log("rl-chat-messages", diag);
+        console.debug("rl-chat-messages", diag);
         return { messages: [], endpoint: "" };
       }
 
@@ -15162,7 +15171,10 @@
               row.type = "button";
               row.className = "mentionItem" + (i === mentionActiveIdx ? " active" : "");
               row.tabIndex = -1;
-              row.innerHTML = '<span class="mentionAvatar">' + m.initials + '</span>' +
+              // SECURITY: escape EVERY interpolated value. m.initials is
+              // usually 1-2 chars derived from the user's first/last
+              // name, but a name starting with "<" would inject HTML.
+              row.innerHTML = '<span class="mentionAvatar">' + escapeForHtml(m.initials) + '</span>' +
                 '<span class="mentionName">' + escapeForHtml(m.fullName) + '</span>' +
                 (m.emailId ? '<span class="mentionEmail">' + escapeForHtml(m.emailId) + '</span>' : '');
               row.addEventListener("mousedown", (e) => {
@@ -15380,11 +15392,14 @@
             window.RocketlaneBridge.getApiKey()
               .then((info) => {
                 if (info?.userId) myUserId = Number(info.userId) || null;
-                console.log("[Mentions] resolved myUserId via async getApiKey:", myUserId, "bridge version:", window.RocketlaneBridge?.version);
+                // SECURITY: don't log the actual userId — it identifies
+                // the Rocketlane user in any shared screenshot or
+                // recording. Log presence only.
+                console.log("[Mentions] resolved myUserId via async getApiKey:", myUserId != null, "bridge version:", window.RocketlaneBridge?.version);
               })
               .catch((err) => console.warn("[Mentions] getApiKey failed:", err));
           } else {
-            console.log("[Mentions] myUserId (sync):", myUserId, "bridge version:", window.RocketlaneBridge?.version);
+            console.log("[Mentions] myUserId (sync) ready:", myUserId != null, "bridge version:", window.RocketlaneBridge?.version);
           }
 
           // Build Rocketlane's native mention HTML format. Discovered by
