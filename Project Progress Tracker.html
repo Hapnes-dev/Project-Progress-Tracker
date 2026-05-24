@@ -6704,6 +6704,32 @@
           try {
             return await window.RocketlaneBridge.apiRequest(method, fullPath, body);
           } catch (err) {
+            const msg = String(err?.message ?? err ?? "");
+            const isHttpError = /^HTTP\s+\d{3}:/i.test(msg);
+            const is401 = /^HTTP\s+401\b/i.test(msg);
+
+            // Auto-renew path: a 401 from the bridge means the captured
+            // api-key expired. The bridge has a captureNow() loop that
+            // polls Rocketlane every 5 min if you have a Rocketlane tab
+            // open, so we ask it to refresh and retry ONCE. If the user
+            // doesn't have Rocketlane open, this still surfaces a
+            // clearer error than the raw 401.
+            if (is401 && !options?._rlRetried) {
+              try {
+                const info = await window.RocketlaneBridge.getApiKey?.();
+                const k = String(info?.apiKey ?? "").trim();
+                if (k) {
+                  saveSessionKey(k);
+                  console.log("[Rocketlane API] 401 — re-pulled api-key from bridge, retrying once");
+                  return await window.RocketlaneBridge.apiRequest(method, fullPath, body);
+                }
+              } catch (_) {}
+              // Surface a clear actionable error
+              throw new Error(
+                "HTTP 401: Rocketlane session expired. Visit https://kiona.rocketlane.com once while logged in — the bridge will auto-capture a fresh key."
+              );
+            }
+
             // ONLY fall back on infrastructure failures (no api-key
             // captured, network down, timeout). HTTP errors from the
             // server are LEGITIMATE responses that the caller needs to
@@ -6711,12 +6737,7 @@
             // ~40 body shapes and treats 4xx as "try the next shape."
             // Falling back to direct-fetch on every HTTP 400 silently
             // double-fails and exhausts all body shapes without success.
-            const msg = String(err?.message ?? err ?? "");
-            const isHttpError = /^HTTP\s+\d{3}:/i.test(msg);
-            if (isHttpError) {
-              // Real server response — surface it to the caller.
-              throw err;
-            }
+            if (isHttpError) throw err;
             // True bridge failure (no key, GM not available, etc.) —
             // fall through to direct fetch so the user gets a clearer
             // "set up your session key" error from that path.
@@ -8890,9 +8911,28 @@
           rlSyncStats.note("skip: document_hidden");
           return { skipped: true, reason: "document_hidden" };
         }
+        // If the sync auth check returns nothing but the bridge is
+        // present, try pulling the key via the ASYNC bridge.getApiKey()
+        // method as a fallback — it's more reliable than the sync
+        // getter when running across userscript/page world boundaries.
         if (!getRocketlaneApiKey()) {
-          rlSyncStats.note("skip: missing_api_key");
-          return { skipped: true, reason: "missing_api_key" };
+          const bridge = window.RocketlaneBridge;
+          if (bridge && typeof bridge.getApiKey === "function") {
+            try {
+              const info = await bridge.getApiKey();
+              const k = String(info?.apiKey ?? "").trim();
+              if (k) {
+                saveSessionKey(k);
+                rlSyncStats.note("pulled key from bridge async");
+              }
+            } catch (e) {
+              rlSyncStats.note("bridge.getApiKey threw: " + String(e?.message ?? e));
+            }
+          }
+          if (!getRocketlaneApiKey()) {
+            rlSyncStats.note("skip: missing_api_key");
+            return { skipped: true, reason: "missing_api_key" };
+          }
         }
         const result = await rocketlaneSyncLinkedProjectsNow({ silent: true, force: !!options?.force });
         rlSyncStats.note("ran: " + (result?.reason || (result?.skipped ? "skipped" : "success")));
