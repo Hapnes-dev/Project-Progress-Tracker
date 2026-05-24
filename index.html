@@ -5372,6 +5372,16 @@
                   style="vertical-align: -3px; margin-right: 4px"
                 />PANG
               </button>
+              <button
+                class="btn"
+                id="btnOpenBaf"
+                type="button"
+                title="Search this plant in BAF (user database)"
+                disabled
+                style="display: none"
+              >
+                📇 BAF
+              </button>
               <button class="btn" id="btnEdit" type="button" disabled>Edit</button>
               <button class="btn danger" id="btnDelete" type="button" disabled>Delete</button>
             </div>
@@ -12851,6 +12861,7 @@
         detailDynamicLinks: document.getElementById("detailDynamicLinks"),
         btnShowOrderInfo: document.getElementById("btnShowOrderInfo"),
         btnOpenPang: document.getElementById("btnOpenPang"),
+        btnOpenBaf: document.getElementById("btnOpenBaf"),
         search: document.getElementById("search"),
         sort: document.getElementById("sort"),
         filter: document.getElementById("filter"),
@@ -13830,20 +13841,35 @@
             delete els.btnShowOrderInfo.dataset.rlProjectId;
           }
         }
-        // Show "☄️ PANG" only when the project name starts with a
+        // Show "PANG" + "BAF" only when the project name starts with a
         // numeric plant id (same condition as the title's Pang link).
-        if (els.btnOpenPang) {
+        // PANG → internal automation page;  BAF → user database lookup.
+        {
           const plantMatch = String(p?.name ?? "").match(/^\s*(\d+)\b/);
-          if (plantMatch) {
-            const plantId = plantMatch[1];
-            els.btnOpenPang.disabled = false;
-            els.btnOpenPang.style.display = "";
-            els.btnOpenPang.dataset.plantId = plantId;
-            els.btnOpenPang.title = "Open plant " + plantId + " in Pang";
-          } else {
-            els.btnOpenPang.disabled = true;
-            els.btnOpenPang.style.display = "none";
-            delete els.btnOpenPang.dataset.plantId;
+          const plantId = plantMatch ? plantMatch[1] : "";
+          if (els.btnOpenPang) {
+            if (plantId) {
+              els.btnOpenPang.disabled = false;
+              els.btnOpenPang.style.display = "";
+              els.btnOpenPang.dataset.plantId = plantId;
+              els.btnOpenPang.title = "Open plant " + plantId + " in Pang";
+            } else {
+              els.btnOpenPang.disabled = true;
+              els.btnOpenPang.style.display = "none";
+              delete els.btnOpenPang.dataset.plantId;
+            }
+          }
+          if (els.btnOpenBaf) {
+            if (plantId) {
+              els.btnOpenBaf.disabled = false;
+              els.btnOpenBaf.style.display = "";
+              els.btnOpenBaf.dataset.plantId = plantId;
+              els.btnOpenBaf.title = "Search plant " + plantId + " in BAF";
+            } else {
+              els.btnOpenBaf.disabled = true;
+              els.btnOpenBaf.style.display = "none";
+              delete els.btnOpenBaf.dataset.plantId;
+            }
           }
         }
 
@@ -19636,6 +19662,18 @@
           const plantId = els.btnOpenPang.dataset.plantId;
           if (!plantId) return;
           const url = "http://pang.iwmac.local/pang.qxs?plant_id=" + encodeURIComponent(plantId);
+          window.open(url, "_blank", "noopener,noreferrer");
+        });
+      }
+      // BAF user-database lookup — searches the internal BAF system for
+      // the same plant id. Mirrors the PANG button's behaviour: id is
+      // stashed in dataset on render, click opens the search URL in a
+      // new tab. Available whenever the project name has a numeric prefix.
+      if (els.btnOpenBaf) {
+        els.btnOpenBaf.addEventListener("click", () => {
+          const plantId = els.btnOpenBaf.dataset.plantId;
+          if (!plantId) return;
+          const url = "http://internal.iwmac.local/baf.qxs?search=" + encodeURIComponent(plantId);
           window.open(url, "_blank", "noopener,noreferrer");
         });
       }
