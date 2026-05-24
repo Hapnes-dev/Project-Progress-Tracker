@@ -1148,6 +1148,14 @@
            favicons (Zendesk's monochrome, etc.) readable on the dark button
            surface. 1px padding gives the icon a tiny visual border. */
       }
+      /* Pang icon already has its own bright orange/yellow palette — the
+         white card under it makes it look like a sticker on a square
+         label. Opt out: transparent background, zero padding. */
+      #pangIcon.projectLinkIcon {
+        background: transparent;
+        padding: 0;
+        border-radius: 0;
+      }
       .projectLinkLabel { font-weight: 600; }
 
       .zendeskLink {
