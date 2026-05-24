@@ -5346,7 +5346,19 @@
                 disabled
                 style="display: none"
               >
-                ☄️ PANG
+                <!-- pangIcon's src is a data URI of the real tools.iwmac.local
+                     favicon (set later via JS or directly in src=""). Until a
+                     real icon is pasted in, the alt text falls back to ☄️ so
+                     the button still reads. -->
+                <img
+                  id="pangIcon"
+                  class="projectLinkIcon"
+                  src=""
+                  alt="☄️"
+                  width="16"
+                  height="16"
+                  style="vertical-align: -3px; margin-right: 4px"
+                />PANG
               </button>
               <button class="btn" id="btnEdit" type="button" disabled>Edit</button>
               <button class="btn danger" id="btnDelete" type="button" disabled>Delete</button>
