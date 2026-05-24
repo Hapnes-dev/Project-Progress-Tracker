@@ -8950,6 +8950,10 @@
       // In-memory cache that powers the Owner Workload Overview.
       // Shape: { byUserId: { [userId]: { firstName, lastName, fullName, total, inProgress } }, fetchedAt }
       let teamWorkloadCache = loadTeamWorkloadFromStorage() || { byUserId: {}, fetchedAt: null };
+      // Diagnostic: expose to window so you can inspect the current
+      // cached team data in DevTools (e.g. "window.__rlTeam"). Updated
+      // by rocketlaneFetchTeamWorkload on each successful run.
+      try { window.__rlTeam = teamWorkloadCache; } catch (_) {}
 
       // True for any project status that isn't terminal (closed/finished/
       // archived/cancelled etc.). Tenant Rocketlane uses label strings
@@ -9006,7 +9010,9 @@
         }
         const payload = { byUserId, fetchedAt: new Date().toISOString() };
         teamWorkloadCache = payload;
+        try { window.__rlTeam = payload; } catch (_) {}
         saveTeamWorkloadToStorage(payload);
+        console.log("[TeamWorkload] fetched", Object.keys(byUserId).length, "owners over", pages, "page(s)");
         // Trigger UI refresh
         try { renderOwnerStatusOverview(); } catch (_) {}
         return { ok: true, count: Object.keys(byUserId).length };
