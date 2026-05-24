@@ -5346,15 +5346,18 @@
                 disabled
                 style="display: none"
               >
-                <!-- pangIcon's src is a data URI of the real tools.iwmac.local
-                     favicon (set later via JS or directly in src=""). Until a
-                     real icon is pasted in, the alt text falls back to ☄️ so
-                     the button still reads. -->
+                <!-- Pang icon: a 32×32 PNG of the orange star/explosion
+                     used by tools.iwmac.local. Embedded as a base64 data
+                     URI so the live tracker (served over https from
+                     GitHub Pages) can show it without an internal-only
+                     http:// request that would be blocked by mixed-
+                     content. Original asset is in the user's Downloads;
+                     this is the resized + base64-encoded copy. -->
                 <img
                   id="pangIcon"
                   class="projectLinkIcon"
-                  src=""
-                  alt="☄️"
+                  src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAO3SURBVFhHzZd/aBtlGMffOmqTOJQx9I/BFETUgUMQBRkt9Q8Ff8IQ/MWQIcrsJqx/dGi3icpksEFhkzGxoAhzMEEqtg6Gfwhqy0QZk7KywthGujVZfvTSpMnl3rtc7iPv3cXmR9MmabQGvrncc3fv9/t+n+d9L4+wTPOq4ziaaZoepDpKTUoP3nkl3HhVzHvWf6Y6XnWPgs95VZhSZlmjj5QyqwRo6sQ0zf8UvgBNKFvWSoCafHsEFAqYxWJtfBm0zwHLwsznMaKzWLZde70OPAdMTaiv1QiwgOyvP5M+9SWFJsZZdGCVRahI4++8gTZ0+N8RoGZoOU5N3L3mOORnwoTvCaEdO+IJkLX3LYWGasCyLPTpKYzYLXdwJcYsy7OKaUcOEb5DoB091LQD/iqo74BVLJKbvMjss90k9r1H7vwEpiFdIgVDmyfS8xBzTwuSH+1vWsCKDpjSI8uO/8L1DeuY2XQ70ee2kfzkU/RLl9FOfEGiu4Psu4LEQD+2L8x1ypC141UJUNzLOlCCGjRzdoyZe0Okdwi0FwWRx+/mxgOb0Q+G0AcFsd27kBmdhZ/OuvUgk4mKdFWjLAXLOFCCZbkiUsPDRLZ0YZ3swv62E31/APv7EPLzANHeB4k9v4Ub921kYWykbuG2JkDBtikCifcPENnaRWE0AFMBuBSkMBIi/0EnkYcFsb0DbgrcVBTri1isgRWWoQt/t5s/eZzZJ+9He7kD87MgzoUgznQIZzKEfS6IcTTI/M47Se56ioXvvkGm015hLpGK5gUYBrnz46SOHSa+o5f0WyGc34NwJURxIoRxfD25g7eR7ROkXxHEHhPc7HmE1PAJZErz3hctC/BFKGtVGrSvzpB6VcDFAHKoi+JYJ6nXA0TffJv06VNkRkfJTvxG7sIf5Cb/cp1wJ7EqAT6UiHj/HvIfCuTQOm5u3czc9vXo/YLkYJ+7FN3dswzVs68U0GgRKnLbRhoF4q9twzggiD6xgYXxP0mPniOxfRPRRzvQp694pEs8X47WBAC56WskX9pIvFuQ+vr0P5uPfm2G6Au9JAf3NrQj+pzNCXA3pB9/IHyXYO7jQY/Iz23J6szIGWQmvaTt5XA5m3VAESYG9hB9pgfLLtYuL9v2hMjlt2GF5h1QM9J14n07McLXGyaqh0UBja4C23Zfy/rlqYaKbCW0VoRWoS3kCi0JaCdaKsJ2ovkibDP+VwLWrDlV3EpAZXte1kKrv2vlcVW1pfbbPVa372UtfeXRv8+F97vUnv8NbbYRyjzUSjgAAAAASUVORK5CYII="
+                  alt=""
                   width="16"
                   height="16"
                   style="vertical-align: -3px; margin-right: 4px"
