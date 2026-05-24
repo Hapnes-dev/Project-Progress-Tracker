@@ -6248,13 +6248,13 @@
         window.getRocketlaneApiKey = getSavedRocketlaneApiKey;
         window.clearRocketlaneApiKey = () => saveRocketlaneApiKey("");
       } catch {}
-      // Auto-sync cadence: every 2 minutes. Matches the notification
-      // badge polling so changes other team members make in Rocketlane
-      // (status updates, due-date changes, new tasks) flow into the
-      // tracker within ~2 minutes. The cooldown below uses the same
-      // value, so back-to-back triggers (interval + visibilitychange)
-      // don't double-fire.
-      const ROCKETLANE_AUTO_SYNC_INTERVAL_MS = 2 * 60 * 1000;
+      // Auto-sync cadence: every 5 minutes. Local data changes (status,
+      // due date, notes, tasks) already trigger an immediate forced sync
+      // via touchProject() → rocketlaneQueueSyncForProjectChange — so the
+      // interval below only needs to catch changes other team members
+      // make on the Rocketlane side. 5 min balances freshness with API
+      // load (each tick = one /projects/{id} call per linked project).
+      const ROCKETLANE_AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
       // Non-forced syncs should not run more often than the interval.
       // The cooldown is shorter than the interval so that returning to
       // a tab that's been hidden a while triggers a fresh sync instead
