@@ -6359,14 +6359,36 @@
       // transparently inherits it here.
       function tryAutoSyncSessionKeyFromBridge() {
         try {
-          const bridgeKey = String(window.RocketlaneBridge?.apiKey ?? "").trim();
-          if (!bridgeKey) return "";
+          const bridgeRef = window.RocketlaneBridge;
+          const rawKey = bridgeRef?.apiKey;
+          const bridgeKey = String(rawKey ?? "").trim();
+          if (!bridgeKey) {
+            // Diagnostic: this is THE failure mode for "missing_api_key"
+            // when the bridge IS published. Log enough info to tell
+            // whether bridgeRef is missing, the getter returned null, or
+            // the value is empty-but-defined.
+            if (!window.__rlAuthDebugLogged) {
+              window.__rlAuthDebugLogged = true;
+              console.warn("[Auth] tryAutoSyncSessionKeyFromBridge — empty key", {
+                bridgeRefType: typeof bridgeRef,
+                bridgeRefKeys: bridgeRef ? Object.keys(bridgeRef).slice(0, 20) : null,
+                rawKeyType: typeof rawKey,
+                rawKey: rawKey == null ? rawKey : String(rawKey).slice(0, 8) + "…",
+                bridgeVersion: bridgeRef?.version,
+                bridgeUserId: bridgeRef?.userId,
+              });
+            }
+            return "";
+          }
           const existing = getSavedSessionKey();
           if (existing === bridgeKey) return bridgeKey; // already in sync
           saveSessionKey(bridgeKey);
           console.log("[Auth] Auto-pulled session key from bridge (length=" + bridgeKey.length + ")");
           return bridgeKey;
-        } catch { return ""; }
+        } catch (err) {
+          console.warn("[Auth] tryAutoSyncSessionKeyFromBridge threw:", err);
+          return "";
+        }
       }
       function getRocketlaneAuth() {
         // Try bridge → local sync FIRST so a fresh tracker session
