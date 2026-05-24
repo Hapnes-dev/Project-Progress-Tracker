@@ -10023,6 +10023,32 @@
       async function rocketlaneFetchPhasesForProject(projectId) {
         const pid = String(projectId ?? "").trim();
         if (!pid) return [];
+        // Preferred endpoint: project-scoped phases. This is what the
+        // tenant API (kiona.api.rocketlane.com) supports — verified by
+        // direct curl: GET /api/v1/projects/{id}/phases returns the
+        // phase list as a top-level array of objects with projectPhaseId
+        // and projectPhaseName.
+        try {
+          const json = await rocketlaneFetchJson("/projects/" + encodeURIComponent(pid) + "/phases");
+          const items = Array.isArray(json) ? json : (json?.data ?? []);
+          const list = [];
+          const seen = new Set();
+          for (const ph of items) {
+            const id = rocketlanePhaseId(ph);
+            if (id && !seen.has(id)) {
+              seen.add(id);
+              list.push(ph);
+            }
+          }
+          if (list.length) return list;
+        } catch (e) {
+          if (e instanceof TypeError) throw e;
+          // Fall through to legacy public-API filtered query
+          console.warn("[phases] project-scoped endpoint failed, falling back to filtered /phases", e?.message ?? e);
+        }
+        // Legacy fallback — the public api.rocketlane.com flavor that uses
+        // /phases with a project filter. Kept for compat with non-bridge
+        // session-key paths.
         const params = { pageSize: 100 };
         const filterKeys = ["projectId.eq", "projectID.eq", "project.eq", "projectId", "projectID", "project"];
         let list = [];
