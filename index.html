@@ -14643,8 +14643,8 @@
               chatBody.appendChild(row);
             }
 
-            // Restore the user's scroll position AFTER messages are
-            // appended (scrollHeight is only accurate now). Three cases:
+            // Restore scroll AFTER messages are appended (scrollHeight is
+            // only accurate now). Three cases:
             //   1. Fresh fetch (justLoaded class) → snap to newest msg.
             //   2. Cached replay AND user was previously near the bottom
             //      → snap to new bottom (so newly-arrived messages from
@@ -14653,22 +14653,43 @@
             //      messages → restore that exact scrollTop.
             // The "near bottom" threshold (40px) handles cases where the
             // saved scroll wasn't a perfect scrollHeight match.
-            requestAnimationFrame(() => {
-              const k = cache.activeKind || "private";
-              const saved = cache.scrollByKind?.[k];
-              const justLoaded = chatBody.classList.contains("justLoaded");
-              const stickyBottom =
-                typeof saved === "number" &&
-                cache._lastScrollHeightByKind?.[k] != null &&
-                saved + chatBody.clientHeight >= cache._lastScrollHeightByKind[k] - 40;
-              if (justLoaded || stickyBottom || saved == null) {
-                chatBody.scrollTop = chatBody.scrollHeight;
-              } else {
-                chatBody.scrollTop = Math.min(saved, chatBody.scrollHeight);
-              }
+            //
+            // Images in the chat (avatars, embedded previews) load
+            // asynchronously — they grow scrollHeight *after* the initial
+            // snap. We re-snap on each img `load` while sticky-bottom is
+            // active so the freshly-sent message stays in view.
+            const k = cache.activeKind || "private";
+            const saved = cache.scrollByKind?.[k];
+            const justLoaded = chatBody.classList.contains("justLoaded");
+            const wasNearBottom =
+              typeof saved === "number" &&
+              cache._lastScrollHeightByKind?.[k] != null &&
+              saved + chatBody.clientHeight >= cache._lastScrollHeightByKind[k] - 40;
+            const shouldStickToBottom = justLoaded || wasNearBottom || saved == null;
+            const snapToBottom = () => {
+              chatBody.scrollTop = chatBody.scrollHeight;
               cache.scrollByKind[k] = chatBody.scrollTop;
               if (!cache._lastScrollHeightByKind) cache._lastScrollHeightByKind = {};
               cache._lastScrollHeightByKind[k] = chatBody.scrollHeight;
+            };
+            requestAnimationFrame(() => {
+              if (shouldStickToBottom) {
+                snapToBottom();
+                // Re-snap when any embedded image / attachment finishes
+                // loading — keeps the bottom anchored as the content grows.
+                const imgs = chatBody.querySelectorAll("img");
+                imgs.forEach((img) => {
+                  if (img.complete) return;
+                  const onSettle = () => snapToBottom();
+                  img.addEventListener("load",  onSettle, { once: true });
+                  img.addEventListener("error", onSettle, { once: true });
+                });
+              } else {
+                chatBody.scrollTop = Math.min(saved, chatBody.scrollHeight);
+                cache.scrollByKind[k] = chatBody.scrollTop;
+                if (!cache._lastScrollHeightByKind) cache._lastScrollHeightByKind = {};
+                cache._lastScrollHeightByKind[k] = chatBody.scrollHeight;
+              }
             });
           };
 
