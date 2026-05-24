@@ -10073,7 +10073,18 @@
         ];
 
         let bodies = [
-          // Most likely (object refs)
+          // CONFIRMED WORKING SHAPE (verified via curl 2026-05):
+          //   POST https://kiona.api.rocketlane.com/api/v1/tasks
+          //   { taskName, project:{projectId}, projectPhase:{projectPhaseId},
+          //     startDate, dueDate, type:"Task" }
+          // The field name is `projectPhase`, NOT `phase` — Rocketlane
+          // silently drops the `phase` field if you use it (returns 201
+          // but the task ends up with no phase assignment).
+          { taskName: name, project: { projectId: pidV }, projectPhase: { projectPhaseId: phaseIdV }, startDate, dueDate, type: "Task" },
+          { taskName: name, project: { projectId: pidV }, projectPhase: { projectPhaseId: phaseIdV }, startDate, dueDate },
+          { taskName: name, project: projectRef, projectPhase: { projectPhaseId: phaseIdV }, startDate, dueDate, type: "Task" },
+
+          // Legacy fallbacks (kept in case some endpoint flavor accepts them)
           { taskName: name, project: projectRef, phase: phaseRef, startDate, dueDate, type: "Task" },
           { taskName: name, project: projectRef, phase: phaseRef, startDate, dueDate, type: "TASK" },
           { taskName: name, project: projectRef, phase: phaseRef, startDate, dueDate },
