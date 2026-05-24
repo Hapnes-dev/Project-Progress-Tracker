@@ -5346,20 +5346,21 @@
                 disabled
                 style="display: none"
               >
-                <!-- Pang icon: a 32×32 PNG of the orange star/explosion
-                     used by tools.iwmac.local. Embedded as a base64 data
-                     URI so the live tracker (served over https from
-                     GitHub Pages) can show it without an internal-only
-                     http:// request that would be blocked by mixed-
-                     content. Original asset is in the user's Downloads;
-                     this is the resized + base64-encoded copy. -->
+                <!-- Pang icon: 28×28 PNG, white background removed (made
+                     transparent), then tightly cropped to the star shape.
+                     Source was 1254×1254 with opaque white surrounding —
+                     pixels brighter than (235,235,235) were set to alpha 0,
+                     then bounded to the star, then bicubic-resized down.
+                     Embedded as base64 data URI so the live tracker
+                     (served https from GitHub Pages) can render without an
+                     internal-only http:// request blocked by mixed-content. -->
                 <img
                   id="pangIcon"
                   class="projectLinkIcon"
-                  src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAO3SURBVFhHzZd/aBtlGMffOmqTOJQx9I/BFETUgUMQBRkt9Q8Ff8IQ/MWQIcrsJqx/dGi3icpksEFhkzGxoAhzMEEqtg6Gfwhqy0QZk7KywthGujVZfvTSpMnl3rtc7iPv3cXmR9MmabQGvrncc3fv9/t+n+d9L4+wTPOq4ziaaZoepDpKTUoP3nkl3HhVzHvWf6Y6XnWPgs95VZhSZlmjj5QyqwRo6sQ0zf8UvgBNKFvWSoCafHsEFAqYxWJtfBm0zwHLwsznMaKzWLZde70OPAdMTaiv1QiwgOyvP5M+9SWFJsZZdGCVRahI4++8gTZ0+N8RoGZoOU5N3L3mOORnwoTvCaEdO+IJkLX3LYWGasCyLPTpKYzYLXdwJcYsy7OKaUcOEb5DoB091LQD/iqo74BVLJKbvMjss90k9r1H7vwEpiFdIgVDmyfS8xBzTwuSH+1vWsCKDpjSI8uO/8L1DeuY2XQ70ee2kfzkU/RLl9FOfEGiu4Psu4LEQD+2L8x1ypC141UJUNzLOlCCGjRzdoyZe0Okdwi0FwWRx+/mxgOb0Q+G0AcFsd27kBmdhZ/OuvUgk4mKdFWjLAXLOFCCZbkiUsPDRLZ0YZ3swv62E31/APv7EPLzANHeB4k9v4Ub921kYWykbuG2JkDBtikCifcPENnaRWE0AFMBuBSkMBIi/0EnkYcFsb0DbgrcVBTri1isgRWWoQt/t5s/eZzZJ+9He7kD87MgzoUgznQIZzKEfS6IcTTI/M47Se56ioXvvkGm015hLpGK5gUYBrnz46SOHSa+o5f0WyGc34NwJURxIoRxfD25g7eR7ROkXxHEHhPc7HmE1PAJZErz3hctC/BFKGtVGrSvzpB6VcDFAHKoi+JYJ6nXA0TffJv06VNkRkfJTvxG7sIf5Cb/cp1wJ7EqAT6UiHj/HvIfCuTQOm5u3czc9vXo/YLkYJ+7FN3dswzVs68U0GgRKnLbRhoF4q9twzggiD6xgYXxP0mPniOxfRPRRzvQp694pEs8X47WBAC56WskX9pIvFuQ+vr0P5uPfm2G6Au9JAf3NrQj+pzNCXA3pB9/IHyXYO7jQY/Iz23J6szIGWQmvaTt5XA5m3VAESYG9hB9pgfLLtYuL9v2hMjlt2GF5h1QM9J14n07McLXGyaqh0UBja4C23Zfy/rlqYaKbCW0VoRWoS3kCi0JaCdaKsJ2ovkibDP+VwLWrDlV3EpAZXte1kKrv2vlcVW1pfbbPVa372UtfeXRv8+F97vUnv8NbbYRyjzUSjgAAAAASUVORK5CYII="
+                  src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAATpSURBVEhLtdV9TBNnHAdwlqm9O8qLVii0UGjpe0sLtKUIRSC+4AJTUUhQiW5sotHpXPjD/bWaGM02Z5hRk6mbxixucdn2x8zELGy4ZNNocImTTSUZfbu+YCuvraX0et+lLi56KmqET/Lkkuf7u99zz13yXErKS3Btbxf51jWu5c7PGqfNYKcr9Z9z52eF49QpIlAiG6HNihPcbFbQ1WXbYZDAU64+yc1mnMNuJ9xGqWdKI4LbpPiGm8842qrbdk+bjzGNCB6z8iduPi26cfG2u5X6vaEVNi03exKv3U45lYX0aPVCTNRkwaVX/M6tmZa7QrvAb1b9FjMUwGsovDpk1ewJraiqAPAqtzbJVWXcFZFLML4rDdFVArhU8mvcmmfq7e2dQ5fIu6HLQ0QrRlAnAa2W3QyUaQ+F6sqXswc6Ux/UupK7q8hG/DCByFoBXMqiWwBeebTjc+jr65vrNSm6Iyox6JJshBsFiJpFGFZJQCukHpdeddxZqjoWkuZhbHMGmM/mIbI+A06ljB44f57H7edqXSl65oMMnD/E85lUPycXHdmYidgnBCZ28jGxej6ithyMKPLgNQsx1UUi8S2BSHs6HPLCIHvJTTqr63MDlcUrhy2qrmC5+g9PfdUapKRMv2CS++BB0l+qvBiRijGyKRPMCR6Yr3iIdRGIvMdHeAcfzFkKuExiYisfg6L8mLtEds1rFU9EdXlASSE8Vs1Obt9pee0dVMCouHhXJsZoewYS5wiw10mwvQSYrwkkLlFgLxOI7E7F8IZMsJ18jNQKEFIXjDuqypq4/Z4LfXq/wKcuon0iEcbeSgfzHQH2ZnKQYP8ikbhKYeokiXgXD6NvpsNfmAuPssgxZKxcjmN9c7n9nirYWKMOWVQf+XQF/wRqhMzY1nTc20Nh6iiBxBUK7A0S7HUKbD91/8r8QCF2nETETiG8KQPRZbkIlEkHAvoSO21YreT2f0ywoaY2WK763qeX+EerxUi0CTD+bhomP6bAXCDB/k39N25QYHooJH4hwfYQSJzlgTnGQ/zwPGAvBXTMR3BpDhswS7vvLCpeN9C8Iou71iPQ3z9vyLyoktYaP/XI8hHezkeihwQ7QCHRS4G9lYr4GQrjW9IQasoE0ypAojULTIsQk81CjDVl486ybARK8+AzyiZCVbof/auWvc5d5zGOysV14+Y8xPaRYP8kkegmMfkBhfgZEuyvBMI70+CUSFiHtviAS6Hf4tZZW2mNbam3qLrMXbRc7m9qyvZ3dqayzc2kv63t/wPkqRwqzZH40mwwXxL3X1/kfQojphxMNi3A1BEe4kd5iNbmwmUse4N77wtLnhSDCnl/bEMmmNM8RPeRiJiEGJTLe5xKRW+8LgfsfgJT76TBKS9wszt2PHbivBBnc7PUrSlkorv5mDxAImYTglbKrwCYk8w92tLdQYskjLfTMWnJhctqfLldui2W9dFFYkQ/JDG5JBs+peK2t6Nx4cM1g+Z6VcCkPIdSMbzFBbcfzl6YU6f9It6QhehKAfyKooBrTYOMW/OAr8KwcbhMNk4vKW/nZs8l+f2cBtmtaLEQdzQFYVed1cSt4fKvqi/0rV6yCS0tT/yXTsuzrkExpMtn72ol7GCtpZ6bzziPVbsZpVI4bcY2bjYrPGb1BbdJtZ87PyuGO1oyAq/ZNnPnZ8K/+AeUz7RxStAAAAAASUVORK5CYII="
                   alt=""
-                  width="16"
-                  height="16"
+                  width="14"
+                  height="14"
                   style="vertical-align: -3px; margin-right: 4px"
                 />PANG
               </button>
