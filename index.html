@@ -6352,7 +6352,28 @@
       function saveSessionKey(key) {
         try { if (key) localStorage.setItem(ROCKETLANE_SESSION_KEY_STORAGE, key); else localStorage.removeItem(ROCKETLANE_SESSION_KEY_STORAGE); } catch {}
       }
+      // Pull the api-key from the Tampermonkey bridge if it has one but
+      // the tracker's local cache is empty. Runs on every auth check so
+      // the user doesn't need to manually copy/paste the key — the
+      // bridge captures it on Rocketlane visits and the tracker
+      // transparently inherits it here.
+      function tryAutoSyncSessionKeyFromBridge() {
+        try {
+          const bridgeKey = String(window.RocketlaneBridge?.apiKey ?? "").trim();
+          if (!bridgeKey) return "";
+          const existing = getSavedSessionKey();
+          if (existing === bridgeKey) return bridgeKey; // already in sync
+          saveSessionKey(bridgeKey);
+          console.log("[Auth] Auto-pulled session key from bridge (length=" + bridgeKey.length + ")");
+          return bridgeKey;
+        } catch { return ""; }
+      }
       function getRocketlaneAuth() {
+        // Try bridge → local sync FIRST so a fresh tracker session
+        // (empty localStorage) doesn't trip "missing_api_key" before
+        // the user has done anything.
+        const fromBridge = tryAutoSyncSessionKeyFromBridge();
+        if (fromBridge) return { key: fromBridge, type: "session" };
         const session = getSavedSessionKey();
         if (session) return { key: session, type: "session" };
         const stored = getSavedRocketlaneApiKey();
