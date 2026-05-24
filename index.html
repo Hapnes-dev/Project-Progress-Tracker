@@ -5383,7 +5383,7 @@
                 <span style="font-size:1.15em;line-height:1;vertical-align:middle;margin-right:3px;display:inline-block;position:relative;top:-2px">👥</span><span style="vertical-align:middle">BAF</span>
               </button>
               <button class="btn" id="btnEdit" type="button" disabled>Edit</button>
-              <button class="btn danger" id="btnDelete" type="button" disabled>Delete</button>
+              <button class="btn danger" id="btnDelete" type="button" disabled title="Remove from this tracker only (Rocketlane is not touched)">Remove</button>
             </div>
           </div>
           <div class="bd" id="detailBody">
@@ -18156,15 +18156,22 @@
         alert("Suggested tasks added.");
       }
 
+      // CRITICAL: this is LOCAL-ONLY removal. Never call any Rocketlane
+      // delete endpoint here — the tracker should never be capable of
+      // destroying a Rocketlane project. The function just removes the
+      // project from this tracker's view; the actual Rocketlane project
+      // stays intact and can be re-imported via "+ RL Project" anytime.
       function deleteSelected() {
         if (isJsonRequired()) return;
         const p = getSelectedProject();
         if (!p) return;
         const msg =
-          "Delete project '" +
-          p.name +
-          "'?\n\nThis removes it from this browser only.\n(Export JSON first if you want a backup.)";
+          "Remove '" + p.name + "' from this tracker?\n\n" +
+          "This only hides the project from your local tracker — " +
+          "the actual project in Rocketlane is NOT touched and can " +
+          "be re-imported anytime via '+ RL Project'.";
         if (!confirm(msg)) return;
+        // Local state filter only. Never deletes from Rocketlane.
         state.projects = state.projects.filter((x) => x.id !== p.id);
         if (state.selectedProjectId === p.id) state.selectedProjectId = undefined;
         saveState(state);
