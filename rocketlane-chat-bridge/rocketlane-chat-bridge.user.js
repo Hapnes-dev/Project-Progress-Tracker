@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.8.0
+// @version      1.8.1
 // @description  Bridges Rocketlane chat API to the local Project Progress Tracker, bypassing CORS.
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
@@ -72,6 +72,18 @@
   // ──────────────────────────────────────────────────────────────────────────
   // Side B — On a file:// page (the tracker): expose window.RocketlaneBridge.
   // ──────────────────────────────────────────────────────────────────────────
+
+  // Startup beacon — visible in the page console so users can confirm the
+  // script actually loaded. If you don't see this log when the tracker
+  // page opens, Tampermonkey isn't injecting the script (URL @match miss,
+  // toggle off, etc.) and no amount of bridge code will help.
+  try {
+    console.log("[Rocketlane Chat Bridge] loaded on", location.href, "@ ", new Date().toISOString());
+  } catch (_) {}
+
+  // Pick the page's real window — unsafeWindow when Tampermonkey is
+  // running the script in an isolated world (the normal case with
+  // @grant unsafeWindow), or plain window when it isn't.
   const target = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
 
   // Don't double-install if the script ran on a frame or got injected twice.
@@ -611,4 +623,93 @@
   try {
     target.dispatchEvent(new CustomEvent("rocketlane-bridge-ready"));
   } catch (_) {}
+
+  // Verify the assignment actually landed on the page's real window
+  // (not the userscript's isolated world). If it didn't — which can
+  // happen on some Tampermonkey/browser combos where the unsafeWindow
+  // reference returns the sandbox window — fall back to an injected
+  // <script> tag that runs in the page world and forwards calls back to
+  // the userscript via window-level events.
+  function bridgeIsVisibleOnPage() {
+    try {
+      // Probe the page world with a synthetic script that reports back.
+      const probeKey = "__rlBridgeProbe_" + Date.now();
+      const s = document.createElement("script");
+      s.textContent =
+        "window['" + probeKey + "'] = typeof window.RocketlaneBridge !== 'undefined';";
+      (document.head || document.documentElement).appendChild(s);
+      s.remove();
+      const ok = !!(typeof unsafeWindow !== "undefined" ? unsafeWindow : window)[probeKey];
+      return ok;
+    } catch (_) { return false; }
+  }
+
+  // Schedule the visibility check after a microtask so the assignment
+  // has been committed first.
+  Promise.resolve().then(() => {
+    if (bridgeIsVisibleOnPage()) {
+      try { console.log("[Rocketlane Chat Bridge] published on page window ✓"); } catch (_) {}
+      return;
+    }
+    try { console.warn("[Rocketlane Chat Bridge] not visible on page window — installing <script>-tag forwarder"); } catch (_) {}
+    // Inject a tiny shim into the page world that:
+    //   1. Defines window.RocketlaneBridge with the same surface
+    //   2. For each async method, dispatches a CustomEvent to a
+    //      userscript-side listener, which performs the actual work
+    //      and dispatches back the result.
+    const reqEvt  = "rocketlaneBridgeReq";
+    const respEvt = "rocketlaneBridgeResp";
+    const shim = document.createElement("script");
+    const methodList = Object.keys(target.RocketlaneBridge).filter((k) =>
+      typeof target.RocketlaneBridge[k] === "function",
+    );
+    const props = {
+      version: target.RocketlaneBridge.version,
+      isAvailable: true,
+    };
+    shim.textContent = `
+      (function () {
+        if (window.RocketlaneBridge) return;
+        const methods = ${JSON.stringify(methodList)};
+        const props   = ${JSON.stringify(props)};
+        const reqEvt  = ${JSON.stringify(reqEvt)};
+        const respEvt = ${JSON.stringify(respEvt)};
+        const pending = new Map();
+        let seq = 0;
+        window.addEventListener(respEvt, (e) => {
+          const d = e.detail || {};
+          const p = pending.get(d.id);
+          if (!p) return;
+          pending.delete(d.id);
+          if (d.error) p.reject(new Error(d.error));
+          else p.resolve(d.value);
+        });
+        const bridge = { ...props };
+        for (const m of methods) {
+          bridge[m] = function (...args) {
+            return new Promise((resolve, reject) => {
+              const id = ++seq;
+              pending.set(id, { resolve, reject });
+              window.dispatchEvent(new CustomEvent(reqEvt, { detail: { id, method: m, args } }));
+            });
+          };
+        }
+        window.RocketlaneBridge = bridge;
+      })();
+    `;
+    (document.head || document.documentElement).appendChild(shim);
+    shim.remove();
+
+    // Userscript-side listener — runs the actual GM_xmlhttpRequest etc.
+    target.addEventListener(reqEvt, async (e) => {
+      const { id, method, args } = e.detail || {};
+      try {
+        const fn = target.RocketlaneBridge[method];
+        const value = typeof fn === "function" ? await fn.apply(target.RocketlaneBridge, args || []) : null;
+        target.dispatchEvent(new CustomEvent(respEvt, { detail: { id, value } }));
+      } catch (err) {
+        target.dispatchEvent(new CustomEvent(respEvt, { detail: { id, error: String(err?.message ?? err) } }));
+      }
+    });
+  });
 })();
