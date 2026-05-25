@@ -7852,15 +7852,19 @@
         statusEl.parentElement?.appendChild(picker);
       }
 
-      // Wire the 🔎 Find button click. Fire-and-forget; the function
-      // updates the status line + picker on its own.
-      try {
-        if (els?.btnFindOneflow) {
-          els.btnFindOneflow.addEventListener("click", () => {
-            void findOneflowDocumentForEditDialog();
-          });
+      // Wire the 🔎 Find button click via event delegation on document.
+      // We can't attach directly to `els.btnFindOneflow` here because the
+      // `els` object is constructed later in the file — by the time the
+      // script runs this far, `els` is still undefined. Delegating from
+      // document side-steps the timing dance entirely.
+      document.addEventListener("click", (e) => {
+        const t = /** @type {HTMLElement | null} */ (e.target);
+        if (!t) return;
+        if (t.id === "btnFindOneflow" || t.closest?.("#btnFindOneflow")) {
+          e.preventDefault();
+          void findOneflowDocumentForEditDialog();
         }
-      } catch (_) {}
+      });
 
       // Diagnostic: window.__of for DevTools testing:
       //   await window.__of.me()                 // current user
