@@ -714,45 +714,62 @@
         align-items: center;
         font-size: 12px;
       }
-      /* Public ↔ Internal switch — same chrome as .chatTabs (Private/General
-         tabs) so it visually rhymes with the chat-history toggle. */
+      /* Public ↔ Internal switch — pill-shaped track with a sliding
+         thumb. Inspired by alvarotrigo's switch design #1: a rounded
+         "track" with a colored thumb that slides between two labeled
+         positions. Both labels are always readable so the agent never
+         has to think about which side means what. */
       .zendeskReplyKind {
-        display: inline-flex;
-        gap: 4px;
+        position: relative;
+        display: inline-grid;
+        grid-template-columns: 1fr 1fr;
         background: var(--surface-1);
         border: 1px solid var(--hairline);
-        border-radius: var(--radius);
+        border-radius: 999px;
         padding: 3px;
+        user-select: none;
+      }
+      /* Sliding thumb: absolutely positioned over the active half.
+         Animates with a smooth cubic-bezier so the motion feels physical
+         rather than mechanical. */
+      .zendeskReplyKindThumb {
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: calc(50% - 3px);
+        height: calc(100% - 6px);
+        border-radius: 999px;
+        background: var(--accent-soft);
+        border: 1px solid var(--accent-stroke);
+        transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1),
+                    background 200ms ease, border-color 200ms ease;
+        pointer-events: none;
+      }
+      .zendeskReplyKind[data-active="internal"] .zendeskReplyKindThumb {
+        transform: translateX(100%);
+        background: rgba(251, 191, 36, 0.18);
+        border-color: rgba(251, 191, 36, 0.4);
       }
       .zendeskReplyKindBtn {
+        position: relative;
+        z-index: 1;
         appearance: none;
         background: transparent;
         border: none;
         color: var(--muted);
         font-size: 12px;
-        font-weight: 600;
-        padding: 4px 12px;
-        border-radius: 7px;
+        font-weight: 700;
+        padding: 6px 16px;
+        border-radius: 999px;
         cursor: pointer;
-        letter-spacing: 0.005em;
-        transition: background 120ms ease, color 120ms ease;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
+        letter-spacing: 0.02em;
+        transition: color 200ms ease;
+        white-space: nowrap;
+        text-align: center;
       }
       .zendeskReplyKindBtn:hover { color: var(--text); }
-      /* When "Public reply" is active, paint it in accent (calm primary).
-         When "Internal note" is active, paint it in warn (yellow) so
-         agents see at a glance that what they type WON'T reach the
-         customer — same color the internal-note tag uses on the thread. */
-      .zendeskReplyKindBtn.active.public {
-        background: var(--accent-soft);
-        color: var(--accent);
-      }
-      .zendeskReplyKindBtn.active.internal {
-        background: rgba(251, 191, 36, 0.15);
-        color: #fbbf24;
-      }
+      .zendeskReplyKind[data-active="public"]   .zendeskReplyKindBtn.public   { color: var(--accent); }
+      .zendeskReplyKind[data-active="internal"] .zendeskReplyKindBtn.internal { color: #fbbf24; }
       .zendeskComposeTextarea {
         width: 100%;
         min-height: 80px;
@@ -17569,19 +17586,27 @@
               const toolbar = document.createElement("div");
               toolbar.className = "zendeskComposeToolbar";
 
-              // Two-button switch instead of a checkbox so the "what
-              // does this send to whom" choice is unambiguous. Default
-              // is Public reply (per the original design choice).
+              // Sliding-thumb switch (pill track + animated thumb + two
+              // always-visible labels). Default is Public reply per the
+              // earlier design choice.
               const replyKind = document.createElement("div");
               replyKind.className = "zendeskReplyKind";
+              replyKind.dataset.active = "public";
               replyKind.setAttribute("role", "tablist");
+
+              const thumb = document.createElement("div");
+              thumb.className = "zendeskReplyKindThumb";
+              thumb.setAttribute("aria-hidden", "true");
+              replyKind.appendChild(thumb);
+
               const btnPublic = document.createElement("button");
               btnPublic.type = "button";
-              btnPublic.className = "zendeskReplyKindBtn public active";
+              btnPublic.className = "zendeskReplyKindBtn public";
               btnPublic.setAttribute("role", "tab");
               btnPublic.setAttribute("aria-selected", "true");
               btnPublic.title = "Customer-visible reply";
               btnPublic.textContent = "Public reply";
+
               const btnInternal = document.createElement("button");
               btnInternal.type = "button";
               btnInternal.className = "zendeskReplyKindBtn internal";
@@ -17589,14 +17614,13 @@
               btnInternal.setAttribute("aria-selected", "false");
               btnInternal.title = "Agents only — customer won't see this";
               btnInternal.textContent = "Internal note";
-              // Stub `publicCheck` for downstream code that reads `.checked`
-              // (preserves the existing send / label update logic).
+
+              // Stub `publicCheck` for downstream code that reads `.checked`.
               const publicCheck = { checked: true };
               const setKind = (isPublic) => {
                 publicCheck.checked = isPublic;
-                btnPublic.classList.toggle("active", isPublic);
+                replyKind.dataset.active = isPublic ? "public" : "internal";
                 btnPublic.setAttribute("aria-selected", isPublic ? "true" : "false");
-                btnInternal.classList.toggle("active", !isPublic);
                 btnInternal.setAttribute("aria-selected", isPublic ? "false" : "true");
                 if (typeof updateSubmitLabel === "function") updateSubmitLabel();
               };
