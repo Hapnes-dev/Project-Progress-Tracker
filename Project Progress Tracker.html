@@ -3080,8 +3080,13 @@
         transform: rotate(-90deg);
       }
       .ownerStatusOverview .bd.collapsed { display: none; }
-      /* Team-group section inside the overview */
-      .ownerTeamGroup { margin-bottom: 18px; }
+      /* Team-group section inside the overview. The bottom gap is
+         intentionally small — the overview header above and each
+         group header use the same 4/6px header padding, so they
+         visually stack at consistent intervals when collapsed.
+         When expanded, the group body's own padding adds breathing
+         room before the next group's header. */
+      .ownerTeamGroup { margin-bottom: 6px; }
       .ownerTeamGroup:last-child { margin-bottom: 0; }
       .ownerTeamGroupHd {
         display: inline-flex;
@@ -3089,7 +3094,7 @@
         gap: 8px;
         background: transparent;
         border: none;
-        padding: 4px 0 8px;
+        padding: 4px 0 6px;
         color: var(--muted2);
         cursor: pointer;
         font: inherit;
