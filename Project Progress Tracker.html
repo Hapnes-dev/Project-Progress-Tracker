@@ -2018,8 +2018,7 @@
 
       .statusBtn {
         width: 100%;
-        padding: 0 10px;
-        height: 36px; /* explicit, same as .task .t and .task .x */
+        padding: 8px 10px;
         border-radius: 12px;
         border: 1px solid var(--border);
         background: rgba(255, 255, 255, 0.04);
@@ -2032,6 +2031,7 @@
         justify-content: space-between;
         gap: 10px;
         white-space: nowrap; /* keep "Waiting on Partner" on one line */
+        line-height: 1;
       }
 
       .statusBtn > span:first-child {
@@ -2467,13 +2467,12 @@
         justify-content: center;
         gap: 4px;
         min-width: 0;
-        /* Match the status pill / Remove button effective height so all
-           three columns sit on the SAME horizontal center line. The
-           grid `align-items: center` does the rest. Without this, the
-           label rendered at its natural line-height (~20px) while the
-           buttons rendered at ~36px, and the prior padding-top hack
-           tried to nudge text down — which produced asymmetric drift. */
-        min-height: 36px;
+        /* No min-height, no padding hack. The parent .task grid uses
+           align-items: center, so this column's content centers against
+           the row's natural height (driven by the status dropdown). The
+           old padding-top: 2px nudge was the source of the off-center
+           text — without it, the label sits on the geometric center
+           line of the row alongside the dropdown and Remove button. */
       }
 
       .task .t .topLine {
@@ -2592,16 +2591,16 @@
         border: 1px solid var(--border);
         background: rgba(255, 255, 255, 0.04);
         color: var(--muted);
-        padding: 0 12px;
+        padding: 6px 8px;
         border-radius: 10px;
         cursor: pointer;
-        /* Match the status pill height (~36px) so the Remove button sits
-           on the same horizontal center line as the dropdown and label. */
-        height: 36px;
-        font-size: 12px;
+        /* inline-flex so the text inside the button is itself centered.
+           Grid `align-items: center` on the parent positions this whole
+           button against the row's center line. */
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        line-height: 1;
       }
 
       .task .x:hover {
