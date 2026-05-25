@@ -160,9 +160,15 @@ Lives just above the Oneflow API helpers in the tracker. Key exports:
 |---|---|
 | `matchNormalize(s)` | Lowercase, strip diacritics, collapse whitespace. |
 | `matchExtractPlantId(s)` | Capture leading 2–6 digit prefix. |
+| `matchExtractOrgNumber(s)` | 9-digit Norwegian orgnr (with or without grouping). |
+| `matchExtractMoneyAmount(v)` | Parse "1 234,56" / "16377.00" / "27 902 NOK" → number. |
+| `matchMoneyCloseness(a, b)` | 0..1 closeness (1.0 at exact, 0 at ≥50% diff). |
+| `matchExtractEmailDomain(s)` | Pull `bar.com` from "Name <foo@bar.com>" / `foo@bar.com`. |
 | `matchTokenize(s)` | Strip plant ID + punctuation, drop tokens ≤1 char, return a `Set`. |
 | `matchTokenOverlap(a, b)` | `|A ∩ B| / max(|A|, |B|)`, 0..1. |
-| `buildProjectMatchContext(src)` | Read `els.fName/fClient/fOwner/fDue/f*Url` (or accept a `state.projects[i]` shape) → frozen ctx with name/plantId/partner/owner/due + pre-tokenized variants. |
+| `extractRocketlaneForeignKeys(project)` | Scan custom fields for `HubspotDealID`, `OneflowAgreementID`, `YouniumOrderID`. |
+| `buildProjectMatchContext(src)` | Form-fields OR live Rocketlane project → frozen ctx with name / plantId / partner / owner / ownerEmail / due / startDate / projectFee / customerOrgNumber / foreignKeys / pre-tokenized variants. |
+| `buildEnrichedProjectMatchContext()` | Async: fetches the project via `/projects/<id>` and feeds the rich payload into `buildProjectMatchContext`. Falls back to form-only on missing ID / fetch failure. |
 | `scoreMatchCandidate(candidate, ctx)` | Returns `{ score, percent, signals }`. |
 | `decideMatchOutcome(scored, opts)` | Returns `{ kind: "auto" \| "picker" \| "none", entry?, entries?, reason }`. |
 | `renderMatchPicker(statusEl, scored, onSelect)` | Renders the picker; each row's `% match` badge is color-tinted and its `title` attribute holds the signal breakdown. |
@@ -170,23 +176,30 @@ Lives just above the Oneflow API helpers in the tracker. Key exports:
 
 #### Point budget (caps at 100)
 
+Calibrated from live data (plant 3299 across Rocketlane / Oneflow / HubSpot / Younium captured via Playwright). The strong "is this the right record?" signals (FK + plant ID + org number) max at 90, leaving the corroborating signals (name overlap / money / partner / dates) to push a real match to 100.
+
 | Signal | Weight |
 |---|---|
-| Plant ID exact (native field) OR leading-digit prefix | 50 |
-| Plant ID present elsewhere in matchable text (mutually exclusive with above) | 25 |
-| Name token Jaccard | 0..25 |
-| Partner / company-party match (exact > substring > token overlap) | 0..12 |
-| Owner / contact match | 0..4 |
-| Date proximity vs project due (≤7d → 5, ≤14d → 3, ≤30d → 2) | 0..5 |
-| "Live" status (not closed/cancelled/declined/lost/expired) | 0..4 |
+| Foreign-key ID match (project custom field carries the platform ID) | 35 |
+| Plant ID exact (native field or leading digits) | 35 |
+| Plant ID elsewhere in text (mutually exclusive with the above) | 18 |
+| Org number exact match (9-digit Norwegian orgnr) | 20 |
+| Name token Jaccard | 0..15 |
+| Partner / company match (exact > substring > token overlap) | 0..10 |
+| Money proximity (project fee vs candidate value, linear 0..50% diff) | 0..8 |
+| Owner-email exact (project owner appears as participant/contact) | 5 |
+| Same email domain (e.g. both `kiona.com`) | 3 |
+| Owner / contact NAME match | 0..4 |
+| Date proximity vs project due OR start (≤7d → 4, ≤14d → 3, ≤30d → 2) | 0..4 |
+| "Live" status (not closed/cancelled/declined/lost/expired/etc.) | 0..3 |
 
-`scoreMatchCandidate` returns the raw sum AND the percentage (clamped 0–100, since raw caps at 100). The percentage is the user-facing number.
+`scoreMatchCandidate` returns the raw sum AND the percentage (clamped 0–100). A perfect plant-3299 match in our test ran to ~88% (Plant ID 35 + Partner 10 + Name 9 + Money 7 + Live 3 + Date 4 + Owner-domain 3 + Plant ID exact = high), which would auto-fill. A weak match with just "name overlap + active status" lands at ~12–18% and surfaces in the picker for manual review.
 
 #### Auto-fill rule (uniform across all three platforms)
 
 `decideMatchOutcome`:
 
-- Best ≥ **80%** AND beats #2 by ≥ **15 percentage points** → auto-fill.
+- Best ≥ **85%** AND beats #2 by ≥ **15 percentage points** → auto-fill.
 - Otherwise → picker, sorted by percent desc.
 
 Override per call via `decideMatchOutcome(scored, { autoFillMinPercent, autoFillMinLeadPercent })`.
@@ -199,23 +212,43 @@ Each platform has a `xToMatchCandidate(rawApiResult)` function returning the com
 {
   id, platform,
   primaryText, secondaryText,
-  matchableTexts: [...],
-  partyNames: [...],
-  contactNames: [...],
+  matchableTexts:  [...],
+  partyNames:      [...],
+  contactNames:    [...],
+  contactEmails:   [...],  // emails for owner-email / domain scoring
+  orgNumbers:      [...],  // 9-digit org numbers extracted from the API
   plantId,
   status,
-  date,
-  raw, // original API object, used for URL building after selection
+  date,                    // ISO string for proximity scoring
+  amount,                  // number (NOK / EUR / etc.) for money proximity
+  currency,                // "NOK", "EUR", … (just for the display label)
+  raw,                     // original API object, used for URL building
 }
 ```
 
-| Platform | Adapter | URL builder | Search quirks |
+| Platform | Adapter | URL builder | Notes |
 |---|---|---|---|
-| Oneflow | `oneflowToMatchCandidate` | `oneflowDocumentUrl(id)` | Searches `/agreements/?q=<plantId>`; falls back to stripped name on empty. |
-| HubSpot | `hubspotToMatchCandidate` | `hubspotDealUrl(objectId)` (async — needs portalId from bridge) | Searches via `HubSpotBridge.searchDeals`; properties unwrap from `{ value: "..." }`. Tries multiple company-association keys for `partyNames`. |
-| Younium | `youniumToMatchCandidate` | `youniumOrderUrl(id)` (async — needs region from bridge) | Hard-filters by exact `plant_id` field after search (search returns spurious hits like `O-013299` for query `3299`). |
+| Oneflow | `oneflowToMatchCandidate` | `oneflowDocumentUrl(id)` | Harvests `agreement_value.amount` + `currency`, `parties[].orgnr`, `parties[].email`, `parties[].participants[].email/fullname`. |
+| HubSpot | `hubspotToMatchCandidate` | `hubspotDealUrl(objectId)` (async — needs portalId from bridge) | Reads `properties.amount.value` AND `properties.amount.unit` (currency). closedate/createdate are epoch-ms strings → converted to ISO. |
+| Younium | `youniumToMatchCandidate` | `youniumOrderUrl(id)` (async — needs region from bridge) | Hard-filters by exact `plant_id` (search returns false positives like `O-013299` for query `3299`). Money picks `totalContractValue` > `annualContractValue` > `mrr`. |
 
 The legacy `oneflowMatchScore` / `hubspotMatchScore` functions still exist as **thin shims** over the shared scorer so `window.__of.score` / `window.__hs.score` DevTools diagnostics keep working.
+
+#### Real cross-platform values (plant 3299, captured via Playwright)
+
+| Source | Field | Value |
+|---|---|---|
+| Rocketlane project 1240431 | `projectName` | `"3299 - Coop Marked Øvre Rendalen: ombygging"` |
+| Rocketlane project 1240431 | `customer.companyName` | `"Coolteam AS"` |
+| Rocketlane project 1240431 | `projectFee` | `31238` |
+| Rocketlane project 1240431 | `projectOwner.emailId` | `thomas.kvalvag@kiona.com` |
+| Oneflow agreement 14690987 | `agreement_value` | `{ amount: 16377, currency: "NOK" }` |
+| Oneflow agreement 14690987 | `parties[1].name` | `"Coolteam AS"` |
+| Oneflow agreement 14690987 | `parties[1].participants[0].email` | `es@coolteam.no` |
+| HubSpot deal 502989505768 | `properties.amount` | `{ value: "27902.00", unit: "NOK" }` |
+| HubSpot deal 502989505768 | `properties.dealname` | `"3299 - Coop Marked Øvre Rendalen - Ombygging"` |
+
+Note the three money values differ (RL labor 31238, signed contract 16377, deal estimate 27902) — that's why money is a **supporting** 0..8 signal, not a primary one.
 
 ### CSS conventions
 - Dark mode + light mode via `@media (prefers-color-scheme: light)`.
