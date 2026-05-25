@@ -1869,7 +1869,10 @@
         align-items: center;
         border: 1px solid var(--border);
         border-radius: 12px;
-        padding: 10px 12px;
+        /* Asymmetric vertical padding — top is 2px larger than bottom so
+           the content sits visually a couple pixels lower. Total row
+           height stays the same (12+8 == 10+10), so the row isn't taller. */
+        padding: 12px 12px 8px;
         background: rgba(255, 255, 255, 0.03);
         overflow: visible; /* allow status menu to not resize row */
         transition: border-color 150ms ease, background 150ms ease;
