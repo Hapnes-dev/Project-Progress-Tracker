@@ -150,13 +150,72 @@ document.addEventListener("click", (e) => {
 
 The reason: the `els` object is built ~6000 lines later in the file, so direct `els.btnFindOneflow.addEventListener(...)` at script load fires before `els` exists. Document delegation sidesteps the timing entirely.
 
-Matching strategies (all extract plant ID from project name first):
+All three buttons share a single scoring framework — search and URL-building are still platform-specific, but normalization, scoring, decision logic, and picker UI are common code.
 
-| Field | Matcher |
+#### Shared scoring framework
+
+Lives just above the Oneflow API helpers in the tracker. Key exports:
+
+| Helper | Role |
 |---|---|
-| Oneflow | Plant-ID prefix `^<plantId>` +50, name token overlap +0..30, partner in `parties` +20 → threshold ≥60 + clear-lead ≥20 for auto-fill |
-| HubSpot | Plant ID anywhere in `dealname` (word-boundary regex) +50, name token overlap +0..30, partner in name +20 → same threshold |
-| Younium | Exact `plant_id` field match (native column) — 1 hit → auto-fill, 2+ → picker (newest first) |
+| `matchNormalize(s)` | Lowercase, strip diacritics, collapse whitespace. |
+| `matchExtractPlantId(s)` | Capture leading 2–6 digit prefix. |
+| `matchTokenize(s)` | Strip plant ID + punctuation, drop tokens ≤1 char, return a `Set`. |
+| `matchTokenOverlap(a, b)` | `|A ∩ B| / max(|A|, |B|)`, 0..1. |
+| `buildProjectMatchContext(src)` | Read `els.fName/fClient/fOwner/fDue/f*Url` (or accept a `state.projects[i]` shape) → frozen ctx with name/plantId/partner/owner/due + pre-tokenized variants. |
+| `scoreMatchCandidate(candidate, ctx)` | Returns `{ score, percent, signals }`. |
+| `decideMatchOutcome(scored, opts)` | Returns `{ kind: "auto" \| "picker" \| "none", entry?, entries?, reason }`. |
+| `renderMatchPicker(statusEl, scored, onSelect)` | Renders the picker; each row's `% match` badge is color-tinted and its `title` attribute holds the signal breakdown. |
+| `debugLogMatch(label, ctx, scored, decision)` | Collapsed `console.group` with the ctx, a `console.table` of candidates, and the decision rationale. Disable via `window.__matchDebug = false`. |
+
+#### Point budget (caps at 100)
+
+| Signal | Weight |
+|---|---|
+| Plant ID exact (native field) OR leading-digit prefix | 50 |
+| Plant ID present elsewhere in matchable text (mutually exclusive with above) | 25 |
+| Name token Jaccard | 0..25 |
+| Partner / company-party match (exact > substring > token overlap) | 0..12 |
+| Owner / contact match | 0..4 |
+| Date proximity vs project due (≤7d → 5, ≤14d → 3, ≤30d → 2) | 0..5 |
+| "Live" status (not closed/cancelled/declined/lost/expired) | 0..4 |
+
+`scoreMatchCandidate` returns the raw sum AND the percentage (clamped 0–100, since raw caps at 100). The percentage is the user-facing number.
+
+#### Auto-fill rule (uniform across all three platforms)
+
+`decideMatchOutcome`:
+
+- Best ≥ **80%** AND beats #2 by ≥ **15 percentage points** → auto-fill.
+- Otherwise → picker, sorted by percent desc.
+
+Override per call via `decideMatchOutcome(scored, { autoFillMinPercent, autoFillMinLeadPercent })`.
+
+#### Per-platform adapters
+
+Each platform has a `xToMatchCandidate(rawApiResult)` function returning the common Candidate shape:
+
+```js
+{
+  id, platform,
+  primaryText, secondaryText,
+  matchableTexts: [...],
+  partyNames: [...],
+  contactNames: [...],
+  plantId,
+  status,
+  date,
+  raw, // original API object, used for URL building after selection
+}
+```
+
+| Platform | Adapter | URL builder | Search quirks |
+|---|---|---|---|
+| Oneflow | `oneflowToMatchCandidate` | `oneflowDocumentUrl(id)` | Searches `/agreements/?q=<plantId>`; falls back to stripped name on empty. |
+| HubSpot | `hubspotToMatchCandidate` | `hubspotDealUrl(objectId)` (async — needs portalId from bridge) | Searches via `HubSpotBridge.searchDeals`; properties unwrap from `{ value: "..." }`. Tries multiple company-association keys for `partyNames`. |
+| Younium | `youniumToMatchCandidate` | `youniumOrderUrl(id)` (async — needs region from bridge) | Hard-filters by exact `plant_id` field after search (search returns spurious hits like `O-013299` for query `3299`). |
+
+The legacy `oneflowMatchScore` / `hubspotMatchScore` functions still exist as **thin shims** over the shared scorer so `window.__of.score` / `window.__hs.score` DevTools diagnostics keep working.
 
 ### CSS conventions
 - Dark mode + light mode via `@media (prefers-color-scheme: light)`.
@@ -246,13 +305,21 @@ For Oneflow/HubSpot, the warmup can't directly mint new credentials (sessions ar
 3. Hook into `openDlgEdit` to fetch on open + the `els.projectForm` submit handler to push on save.
 
 ### Add a 🔎 Find button for a new external system
-1. Build the search helper (e.g., `xSearchYThings(query)`) modelled on `youniumSearchOrders` (exact-field) or `oneflowSearchAgreements` (free-text + scoring).
-2. Build the matcher score function modelled on `oneflowMatchScore` / `hubspotMatchScore`.
+1. Build the search helper (e.g., `xSearchYThings(query)`) modelled on `oneflowSearchAgreements` / `hubspotSearchDeals` / `youniumSearchOrders`.
+2. Build an **adapter** `xToMatchCandidate(rawApiResult)` returning the shared Candidate shape — see the table in **Auto-find buttons → Per-platform adapters**. Map every field you can: `primaryText`, `partyNames`, `contactNames`, `plantId`, `status`, `date`, `raw`. Missing fields just score 0.
 3. Add the HTML row in the Edit dialog: clone the `oneflowLinkBlock` div structure with `id="btnFindX"` + `id="xFindStatus"`.
 4. Register the elements in the `els = { ... }` block.
-5. Add the orchestrator `findXForEditDialog()` mirroring `findOneflowDocumentForEditDialog`.
+5. Build the orchestrator `findXForEditDialog()` modelled on `findOneflowDocumentForEditDialog`:
+   - `const ctx = buildProjectMatchContext(null);`
+   - call your search helper
+   - `const scored = results.map(r => { const c = xToMatchCandidate(r); const s = scoreMatchCandidate(c, ctx); return { candidate: c, ...s }; }).sort((a,b) => b.percent - a.percent || b.score - a.score);`
+   - `const decision = decideMatchOutcome(scored);`
+   - `debugLogMatch("X", ctx, scored, decision);`
+   - branch on `decision.kind === "auto"` → fill, else `renderMatchPicker(...)`
 6. Wire the click via document delegation, not direct `els.btnFindX.addEventListener` (timing issue).
 7. Reset the status line in the dialog-open handler so it doesn't carry stale values across projects.
+
+Do NOT reinvent scoring — every percentage and "clear-lead" decision goes through the shared functions so all platforms behave identically.
 
 ### Add a new toolbar button next to PANG/BAF
 - HTML markup: search for `id="btnOpenPang"` and clone the pattern.
