@@ -14804,10 +14804,23 @@
 
             const open = () => {
               state.selectedProjectId = p.id;
-              // Don't save and don't sync — selecting a project to view is
-              // a pure UI navigation. Live sync still runs on its 10-min
-              // interval and whenever real data changes (touchProject).
+              // Render immediately for snappy UX — don't block the click
+              // on a network call.
               render();
+              // Kick off a one-shot Rocketlane sync of JUST this project
+              // if it's linked. Fire-and-forget; result lands in state
+              // via touchProject and triggers a re-render when done.
+              // Only synced once per click — no fan-out, no auto-loop.
+              const rlPid = String(p.rocketlaneProjectId ?? "").trim();
+              if (rlPid) {
+                void rocketlaneSyncLinkedProjectsNow({
+                  onlyProjectId: p.id,
+                  silent: true,
+                  force: true,
+                }).catch((err) => {
+                  console.debug("[Rocketlane] on-click sync failed for", p.id, err?.message ?? err);
+                });
+              }
             };
             card.addEventListener("click", open);
             card.addEventListener("keydown", (e) => {
