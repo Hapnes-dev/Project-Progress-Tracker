@@ -6159,33 +6159,41 @@
             saveState(state);
             render();
             // Push to Rocketlane meta-project so teammates see the change.
-            // Look up userId from teamWorkloadCache by matching display name.
-            try {
-              const team = teamWorkloadCache?.byUserId || {};
-              const targetKey = normalizeOwnerGroupKey(ownerKey);
-              let userId = "";
-              let displayName = ownerKey;
-              for (const uid of Object.keys(team)) {
-                const tm = team[uid];
-                if (!tm?.fullName) continue;
-                if (normalizeOwnerGroupKey(tm.fullName) === targetKey) {
-                  userId = uid;
-                  displayName = tm.fullName;
-                  break;
+            // Async IIFE so we can await a team-fetch if the cache hasn't
+            // populated yet (page-load race: user clicks before the first
+            // 5-min sync runs). Without this, the lookup silently bails.
+            void (async () => {
+              try {
+                let team = teamWorkloadCache?.byUserId || {};
+                if (Object.keys(team).length === 0) {
+                  console.info("[WorkloadSync] team cache empty, fetching before push…");
+                  await rocketlaneFetchTeamWorkload();
+                  team = teamWorkloadCache?.byUserId || {};
                 }
+                const targetKey = normalizeOwnerGroupKey(ownerKey);
+                let userId = "";
+                let displayName = ownerKey;
+                for (const uid of Object.keys(team)) {
+                  const tm = team[uid];
+                  if (!tm?.fullName) continue;
+                  if (normalizeOwnerGroupKey(tm.fullName) === targetKey) {
+                    userId = uid;
+                    displayName = tm.fullName;
+                    break;
+                  }
+                }
+                if (!userId) {
+                  console.warn("[WorkloadSync] no Rocketlane userId for '" + ownerKey + "' — local-only. Known teammates:",
+                    Object.values(team).map((t) => t.fullName));
+                  return;
+                }
+                console.info("[WorkloadSync] pushing", displayName, "=", next || "(cleared)");
+                const result = await rocketlanePushUserWorkload(userId, displayName, next);
+                console.info("[WorkloadSync] push result:", result);
+              } catch (err) {
+                console.error("[WorkloadSync] push error:", err);
               }
-              if (userId) {
-                // Fire-and-forget — UI already updated locally; if push
-                // fails we'll retry on next manual change.
-                void rocketlanePushUserWorkload(userId, displayName, next).catch((err) => {
-                  console.warn("[WorkloadSync] push failed for", displayName, err);
-                });
-              } else {
-                console.debug("[WorkloadSync] no Rocketlane userId for", ownerKey, "— stayed local-only");
-              }
-            } catch (err) {
-              console.warn("[WorkloadSync] push error:", err);
-            }
+            })();
           });
           menu.appendChild(btn);
         }
