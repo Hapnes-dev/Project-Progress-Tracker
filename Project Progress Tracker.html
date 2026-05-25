@@ -7553,6 +7553,51 @@
         };
       } catch (_) {}
 
+      // ──────────────────────────────────────────────────────────────────
+      // Oneflow API access (via Tampermonkey OneflowBridge).
+      // Same constraints as Zendesk: app.oneflow.com only allows same-
+      // origin requests, so the bridge routes calls through
+      // GM_xmlhttpRequest which auto-attaches the user's existing session
+      // cookies and (for non-GET) the captured xsrf-token CSRF header.
+      // No tokens stored in this HTML file.
+      // ──────────────────────────────────────────────────────────────────
+
+      /**
+       * Generic Oneflow API call routed through the Tampermonkey bridge.
+       *   await oneflowApiRequest("GET", "/positions/me");
+       *   await oneflowApiRequest("GET", "/collections/?limit=10");
+       *
+       * @param {string} method
+       * @param {string} path   Relative to /api, e.g. "/positions/me"
+       * @param {object} [body] JSON body for non-GET requests.
+       */
+      async function oneflowApiRequest(method, path, body) {
+        const bridge = (typeof window !== "undefined" ? window.OneflowBridge : null);
+        if (!bridge || typeof bridge.apiRequest !== "function") {
+          throw new Error("OneflowBridge unavailable. Install/update the Rocketlane Chat Bridge userscript (v1.9.3+) and open https://app.oneflow.com once while logged in.");
+        }
+        return await bridge.apiRequest(method, path, body);
+      }
+
+      /** Returns the current Oneflow user (proof session is valid), or null. */
+      async function oneflowFetchCurrentUser() {
+        const bridge = window.OneflowBridge;
+        if (bridge?.getCurrentUser) return await bridge.getCurrentUser();
+        return await oneflowApiRequest("GET", "/positions/me");
+      }
+
+      // Diagnostic: window.__of for DevTools testing:
+      //   await window.__of.me()                 // current user
+      //   await window.__of.api("GET", "/dashboard/?collection_id=…")
+      //   await window.__of.csrf()               // CSRF capture status
+      try {
+        window.__of = {
+          api: oneflowApiRequest,
+          me: oneflowFetchCurrentUser,
+          async csrf() { return await window.OneflowBridge?.getCsrfStatus?.(); },
+        };
+      } catch (_) {}
+
       async function rocketlaneRequestJson(method, path, params, body) {
         // Direct-fetch path for hapnes-dev.github.io — Rocketlane's
         // tenant API explicitly allows CORS from this origin, so we
