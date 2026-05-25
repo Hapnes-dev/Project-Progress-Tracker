@@ -2018,7 +2018,8 @@
 
       .statusBtn {
         width: 100%;
-        padding: 8px 10px;
+        padding: 0 10px;
+        height: 36px; /* explicit, same as .task .t and .task .x */
         border-radius: 12px;
         border: 1px solid var(--border);
         background: rgba(255, 255, 255, 0.04);
@@ -2463,13 +2464,16 @@
         word-break: break-word;
         display: flex;
         flex-direction: column;
+        justify-content: center;
         gap: 4px;
         min-width: 0;
-        /* Optical alignment with the status pill + Remove button: those
-           buttons have internal padding from native form rendering that
-           sits their text 2px lower visually than equivalent plain text.
-           This padding-top brings the task name onto the same baseline. */
-        padding-top: 2px;
+        /* Match the status pill / Remove button effective height so all
+           three columns sit on the SAME horizontal center line. The
+           grid `align-items: center` does the rest. Without this, the
+           label rendered at its natural line-height (~20px) while the
+           buttons rendered at ~36px, and the prior padding-top hack
+           tried to nudge text down — which produced asymmetric drift. */
+        min-height: 36px;
       }
 
       .task .t .topLine {
@@ -2588,9 +2592,16 @@
         border: 1px solid var(--border);
         background: rgba(255, 255, 255, 0.04);
         color: var(--muted);
-        padding: 6px 8px;
+        padding: 0 12px;
         border-radius: 10px;
         cursor: pointer;
+        /* Match the status pill height (~36px) so the Remove button sits
+           on the same horizontal center line as the dropdown and label. */
+        height: 36px;
+        font-size: 12px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
       }
 
       .task .x:hover {
