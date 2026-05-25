@@ -16870,13 +16870,14 @@
                 renderZdEmpty();
                 return;
               }
-              // Defensive client-side sort by updated_at desc — the API
-              // already sorts this way (sort_by=updated_at&sort_order=desc)
-              // but if a future endpoint change reorders the payload, the
-              // user-visible order stays correct.
+              // Sort by lastReplyAt desc (most recently replied first).
+              // lastReplyAt was populated by hydrating each ticket with
+              // the newest PUBLIC comment's created_at. If a ticket has
+              // no public comments at all, we fell back to updated_at
+              // inside the hydrator — sort treats both consistently.
               const sorted = tickets.slice().sort((a, b) => {
-                const at = Date.parse(String(a?.updated_at ?? "")) || 0;
-                const bt = Date.parse(String(b?.updated_at ?? "")) || 0;
+                const at = Date.parse(String(a?.lastReplyAt ?? a?.updated_at ?? "")) || 0;
+                const bt = Date.parse(String(b?.lastReplyAt ?? b?.updated_at ?? "")) || 0;
                 return bt - at;
               });
               zdBody.innerHTML = "";
@@ -16893,25 +16894,27 @@
                 statusEl.className = "zendeskTaskStatus " + zdStatusClass(t.status);
                 statusEl.textContent = String(t.status ?? "open");
 
-                // Middle column: subject on top, timestamp underneath
-                // (smaller, muted). Two-line layout keeps the row readable
-                // even with long subjects.
+                // Middle column: subject on top, "Replied <when>" underneath.
+                // The displayed timestamp is the LAST PUBLIC REPLY, not the
+                // generic updated_at (which changes on status / tag edits).
+                // If no public reply was found, we say "Updated" instead so
+                // it's clear the timestamp isn't a true reply.
                 const middle = document.createElement("div");
                 middle.className = "zendeskTaskMiddle";
                 const subject = document.createElement("span");
                 subject.className = "zendeskTaskSubject";
                 subject.textContent = String(t.subject ?? "(no subject)");
                 middle.appendChild(subject);
-                if (t?.updated_at) {
+                const stampIso = String(t?.lastReplyAt ?? t?.updated_at ?? "").trim();
+                if (stampIso) {
+                  const usingReply = !!t?.lastReplyAt;
                   const when = document.createElement("span");
                   when.className = "zendeskTaskWhen";
-                  // Show absolute date+time inline (mirrors Zendesk UI),
-                  // with relative time in parens for at-a-glance freshness.
-                  // Full ISO timestamp goes on hover for precision.
-                  const abs = zdAbsTime(t.updated_at);
-                  const rel = formatRelativeTimeShort(t.updated_at);
-                  when.textContent = abs + (rel ? " · " + rel : "");
-                  when.title = "Last updated: " + zdFullTime(t.updated_at);
+                  const abs = zdAbsTime(stampIso);
+                  const rel = formatRelativeTimeShort(stampIso);
+                  const label = usingReply ? "Last reply " : "Updated ";
+                  when.textContent = label + abs + (rel ? " · " + rel : "");
+                  when.title = (usingReply ? "Last public reply: " : "Last updated: ") + zdFullTime(stampIso);
                   middle.appendChild(when);
                 }
 
@@ -16927,6 +16930,56 @@
               zdBody.appendChild(list);
             };
 
+            // Fetch the most recent PUBLIC comment for a single ticket.
+            // Public comments are customer-visible replies — exactly what
+            // "last reply" means for an agent. Internal notes are skipped.
+            // Returns ISO string or null if no public comments found.
+            const fetchLastPublicReplyAt = async (ticketId) => {
+              try {
+                // sort_order=desc + per_page=1 would be ideal, but Zendesk's
+                // comments endpoint sometimes ignores per_page=1 and returns
+                // the first page. We ask for a small page and find the
+                // newest PUBLIC entry locally — safe either way.
+                const json = await window.ZendeskBridge.apiRequest(
+                  "GET",
+                  "/tickets/" + encodeURIComponent(ticketId) + "/comments.json?sort_order=desc&per_page=20",
+                );
+                const comments = Array.isArray(json?.comments) ? json.comments : [];
+                // Find newest public comment (descending sort + first public).
+                // Default Zendesk order is ASCENDING by created_at — verify
+                // by sorting locally just in case.
+                const sorted = comments.slice().sort((a, b) => {
+                  const at = Date.parse(String(a?.created_at ?? "")) || 0;
+                  const bt = Date.parse(String(b?.created_at ?? "")) || 0;
+                  return bt - at;
+                });
+                for (const c of sorted) {
+                  if (c?.public === true) return String(c.created_at ?? "") || null;
+                }
+                return null;
+              } catch (e) {
+                console.debug("[ZendeskTasks] last-reply fetch failed for", ticketId, e?.message ?? e);
+                return null;
+              }
+            };
+
+            // Concurrency-limited parallel map: runs `fn(item)` over the
+            // array with at most `limit` in flight at once. Keeps the
+            // burst of comment lookups from overwhelming the bridge.
+            const mapWithConcurrency = async (items, limit, fn) => {
+              const out = new Array(items.length);
+              let next = 0;
+              const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+                while (true) {
+                  const i = next++;
+                  if (i >= items.length) return;
+                  out[i] = await fn(items[i], i);
+                }
+              });
+              await Promise.all(workers);
+              return out;
+            };
+
             const loadZdTickets = async () => {
               renderZdLoading();
               if (!window.ZendeskBridge?.apiRequest) {
@@ -16936,11 +16989,10 @@
                 return;
               }
               try {
-                // Search: tickets whose subject or description contains the
-                // plant ID. Sorted newest-first, capped at 50. Zendesk
-                // search supports "type:ticket" + free text — we don't
-                // restrict the field so a ticket like "Anlegg 3299" matches
-                // just like "3299 - Some plant".
+                // Step 1: search tickets matching the plant ID. We still
+                // ask the server to sort by updated_at as a sensible
+                // default — the client-side sort below will reorder by
+                // last-public-reply once we have that data.
                 const query = "type:ticket " + zdPlantId;
                 const params = new URLSearchParams({
                   query,
@@ -16953,9 +17005,26 @@
                   "/search.json?" + params.toString()
                 );
                 const results = Array.isArray(json?.results) ? json.results : [];
-                // Defensive: search can return other types if not filtered
-                // server-side correctly; only keep tickets here.
                 const tickets = results.filter((r) => r?.result_type === "ticket");
+                if (tickets.length === 0) {
+                  renderZdTickets(tickets);
+                  zdLoaded = true;
+                  return;
+                }
+
+                // Step 2: hydrate each ticket with `lastReplyAt` — fetched
+                // in parallel batches so the user doesn't wait for a serial
+                // chain of 50 round-trips. Concurrency 8 is a sweet spot
+                // for Zendesk's per-account rate limits (~700 req/min).
+                await mapWithConcurrency(tickets, 8, async (t) => {
+                  const replyAt = await fetchLastPublicReplyAt(t.id);
+                  // Attach to the ticket object directly. Fall back to
+                  // updated_at when we couldn't find a public comment (e.g.,
+                  // ticket has only internal notes or the comments endpoint
+                  // errored — we still want a stable sort).
+                  t.lastReplyAt = replyAt || t.updated_at || t.created_at || null;
+                });
+
                 renderZdTickets(tickets);
                 zdLoaded = true;
               } catch (e) {
