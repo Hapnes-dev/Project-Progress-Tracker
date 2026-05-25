@@ -2525,7 +2525,10 @@
       .ownerTeamGroupBody.collapsed { display: none; }
       .ownerStatusRows {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr));
+        /* Smaller minimum card width so cards flow horizontally before
+           wrapping to a new row. On a 1440px viewport this fits ~5 cards
+           per row instead of ~3. */
+        grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
         gap: 10px;
       }
 
