@@ -861,28 +861,17 @@
       @media (prefers-color-scheme: light) {
         .zendeskTaskCard.zendeskCardFullscreen .zendeskCompose { background: #ffffff; }
       }
-      /* Floating expand/exit button — same pin-to-top-right as chat. */
+      /* Expand/exit button — hidden in the row (right-click is the primary
+         affordance for entering fullscreen). Only visible while
+         fullscreen, where it doubles as a visible "exit" handle pinned
+         to the top-right of the viewport. */
       .zendeskExpandBtn {
-        background: var(--surface-2);
-        border: 1px solid var(--hairline);
-        border-radius: 6px;
-        width: 28px;
-        height: 28px;
-        font-size: 14px;
-        line-height: 1;
-        cursor: pointer;
-        color: var(--muted);
-        padding: 0;
+        display: none;
+      }
+      .zendeskTaskCard.zendeskCardFullscreen .zendeskExpandBtn {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        margin-left: 4px;
-      }
-      .zendeskExpandBtn:hover {
-        background: var(--surface-3);
-        color: var(--text);
-      }
-      .zendeskTaskCard.zendeskCardFullscreen .zendeskExpandBtn {
         position: fixed;
         top: 14px;
         right: 18px;
@@ -890,10 +879,16 @@
         width: 36px;
         height: 36px;
         font-size: 18px;
+        line-height: 1;
         border-radius: 10px;
         background: var(--surface-2);
         border: 1px solid var(--hairline-strong);
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        cursor: pointer;
+        color: var(--text);
+      }
+      .zendeskTaskCard.zendeskCardFullscreen .zendeskExpandBtn:hover {
+        background: var(--surface-3);
       }
       body.zendeskFullscreenOpen { overflow: hidden; }
 
