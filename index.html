@@ -1044,16 +1044,28 @@
       .zendeskTaskCard:not(.zendeskCardFullscreen) .zendeskCompose {
         display: none;
       }
-      /* Small affordance at the bottom of the preview pointing the
-         user to fullscreen for replying. Only shown in non-fullscreen,
-         hidden once the card is full-viewport (compose is right there). */
+      /* Small affordance at the TOP of the preview pointing the user
+         to fullscreen for the full thread + reply box. Visible only
+         in non-fullscreen (no point showing it when compose is already
+         right there). Compact pill so it doesn't compete with content. */
       .zendeskInlineReplyHint {
-        display: flex;
-        justify-content: flex-end;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        align-self: flex-start;
         font-size: 11px;
-        color: var(--muted2);
-        padding: 2px 0 0;
+        color: var(--muted);
+        padding: 4px 10px;
+        margin-bottom: 4px;
+        border: 1px dashed var(--hairline);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.025);
         font-style: italic;
+        cursor: help;
+      }
+      .zendeskInlineReplyHint::before {
+        content: "💡";
+        font-style: normal;
       }
       .zendeskTaskCard.zendeskCardFullscreen .zendeskInlineReplyHint {
         display: none;
@@ -17681,6 +17693,15 @@
 
               container.innerHTML = "";
 
+              // Reply hint pill — first thing visible in the preview so
+              // the user immediately knows where to go for the full
+              // thread + reply box. Auto-hides in fullscreen via CSS.
+              const replyHintTop = document.createElement("div");
+              replyHintTop.className = "zendeskInlineReplyHint";
+              replyHintTop.textContent = "Right-click to open fullscreen — read full thread & reply";
+              replyHintTop.title = "Right-click anywhere on this card to enter fullscreen mode where you can read every comment and post a reply.";
+              container.appendChild(replyHintTop);
+
               // Conversation thread — oldest first so reading flows top→bottom.
               // To keep the compose box visible without scrolling, we
               // collapse older comments and show only the most recent 3
@@ -17968,14 +17989,6 @@
               // exceeds max-height, which it usually won't with the trim).
               requestAnimationFrame(() => { convo.scrollTop = convo.scrollHeight; });
               container.appendChild(convo);
-
-              // Inline preview reply hint — only visible in non-fullscreen.
-              // Tells the user where to go to reply without occupying
-              // vertical space in the row.
-              const replyHint = document.createElement("div");
-              replyHint.className = "zendeskInlineReplyHint";
-              replyHint.textContent = "Right-click for full thread + reply →";
-              container.appendChild(replyHint);
 
               // Compose — public reply by default, with toggle for internal note.
               const compose = document.createElement("div");
