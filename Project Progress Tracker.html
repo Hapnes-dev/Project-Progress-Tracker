@@ -16831,16 +16831,36 @@
               err.textContent = msg;
               zdBody.appendChild(err);
             };
-            // Format a Zendesk timestamp as an absolute date for hover-title
-            // (full precision) — paired with the existing relative formatter
-            // for the inline label. Norwegian-friendly local time.
+            // Format a Zendesk timestamp as an absolute date/time. Mirrors
+            // how Zendesk's own UI formats it: same-day → "Today HH:MM",
+            // yesterday → "Yesterday HH:MM", within 7 days → "Mon HH:MM",
+            // older → "12 May 15:53". Norwegian agents read it the same way
+            // they read it in Zendesk itself.
             const zdAbsTime = (iso) => {
+              const ts = Date.parse(String(iso ?? ""));
+              if (!Number.isFinite(ts)) return "";
+              const d = new Date(ts);
+              const now = new Date();
+              const sameDay = d.toDateString() === now.toDateString();
+              const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+              const isYesterday = d.toDateString() === yesterday.toDateString();
+              const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+              if (sameDay) return "Today " + time;
+              if (isYesterday) return "Yesterday " + time;
+              const within7d = (now.getTime() - ts) < 7 * 24 * 60 * 60 * 1000;
+              if (within7d) {
+                const weekday = d.toLocaleDateString(undefined, { weekday: "short" });
+                return weekday + " " + time;
+              }
+              return d.toLocaleDateString(undefined, { day: "2-digit", month: "short" }) + " " + time;
+            };
+            const zdFullTime = (iso) => {
               const ts = Date.parse(String(iso ?? ""));
               if (!Number.isFinite(ts)) return "";
               try {
                 return new Date(ts).toLocaleString(undefined, {
                   year: "numeric", month: "short", day: "2-digit",
-                  hour: "2-digit", minute: "2-digit",
+                  hour: "2-digit", minute: "2-digit", second: "2-digit",
                 });
               } catch { return new Date(ts).toISOString(); }
             };
@@ -16885,8 +16905,13 @@
                 if (t?.updated_at) {
                   const when = document.createElement("span");
                   when.className = "zendeskTaskWhen";
-                  when.textContent = "Updated " + formatRelativeTimeShort(t.updated_at);
-                  when.title = zdAbsTime(t.updated_at);
+                  // Show absolute date+time inline (mirrors Zendesk UI),
+                  // with relative time in parens for at-a-glance freshness.
+                  // Full ISO timestamp goes on hover for precision.
+                  const abs = zdAbsTime(t.updated_at);
+                  const rel = formatRelativeTimeShort(t.updated_at);
+                  when.textContent = abs + (rel ? " · " + rel : "");
+                  when.title = "Last updated: " + zdFullTime(t.updated_at);
                   middle.appendChild(when);
                 }
 
