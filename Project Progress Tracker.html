@@ -698,6 +698,17 @@
         color: var(--text);
         overflow-wrap: anywhere;
       }
+      /* Belt-and-suspenders: if any inline color slipped through the
+         sanitizer (e.g., legacy <font color> attribute or [color] HTML
+         attribute), force-reset to the theme's text color. Links keep
+         their accent override below. */
+      .zendeskMsgBody [style*="color"]:not(a),
+      .zendeskMsgBody font {
+        color: var(--text) !important;
+      }
+      .zendeskMsgBody [style*="background"]:not(pre):not(code) {
+        background: transparent !important;
+      }
       /* Element-level styling for the sanitized Zendesk HTML. Mirror
          the visual rhythm Zendesk's own UI uses: tight paragraph spacing,
          readable lists, accented links. */
@@ -17754,13 +17765,19 @@
                     return ZD_IMG_HOST_RE.some((rx) => rx.test(u.host));
                   } catch { return false; }
                 };
-                // Allow a small allowlist of safe-ish style declarations
-                // (Zendesk emits text-align, font-weight, color etc on
-                // signatures). Strip anything else, including expressions.
+                // Allow a small allowlist of safe-ish style declarations.
+                // NOTE: `color` and `background-color` are deliberately
+                // EXCLUDED. Email clients inject hard-coded dark colors
+                // (like color: rgb(13,13,13)) that look fine on white but
+                // become near-invisible on the tracker's dark theme. The
+                // theme's CSS variables already handle text color
+                // correctly — stripping inline color lets them win.
                 const SAFE_STYLE_PROPS = new Set([
-                  "color", "background-color", "font-weight", "font-style",
-                  "text-align", "text-decoration", "margin", "margin-left",
-                  "padding-left", "list-style-type",
+                  "font-weight", "font-style",
+                  "text-align", "text-decoration",
+                  "margin", "margin-left",
+                  "padding-left",
+                  "list-style-type",
                 ]);
                 const sanitizeStyle = (raw) => {
                   return String(raw || "")
