@@ -6850,6 +6850,70 @@
         return __rlKeyRefreshInFlight;
       }
 
+      // ──────────────────────────────────────────────────────────────────
+      // Zendesk API access (via Tampermonkey ZendeskBridge)
+      //
+      // Cross-origin fetch from github.io to iwmac.zendesk.com is blocked
+      // by Zendesk's CORS (only their own subdomain is allowed). The
+      // bridge userscript runs alongside the user's Zendesk session and
+      // forwards calls via GM_xmlhttpRequest, which auto-attaches the
+      // session cookie. No tokens stored anywhere in this file.
+      // ──────────────────────────────────────────────────────────────────
+
+      /**
+       * Generic Zendesk API call routed through the Tampermonkey bridge.
+       * Throws if the bridge isn't installed or if the user isn't logged
+       * into Zendesk (HTTP 401/403 surfaces with an actionable message).
+       *
+       *   await zendeskApiRequest("GET", "/tickets/196389.json");
+       *   await zendeskApiRequest("GET", "/users/me.json");
+       *
+       * @param {string} method
+       * @param {string} path   Relative to /api/v2, e.g. "/tickets/123.json"
+       * @param {object} [body] JSON body for non-GET requests.
+       */
+      async function zendeskApiRequest(method, path, body) {
+        const bridge = (typeof window !== "undefined" ? window.ZendeskBridge : null);
+        if (!bridge || typeof bridge.apiRequest !== "function") {
+          throw new Error("ZendeskBridge unavailable. Install the Rocketlane Chat Bridge userscript (v1.9.0+) and open https://iwmac.zendesk.com once while logged in.");
+        }
+        return await bridge.apiRequest(method, path, body);
+      }
+
+      /**
+       * Convenience: fetch a single Zendesk ticket by ID. Returns the
+       * full ticket object, or null if the ticket doesn't exist.
+       * @param {number|string} ticketId
+       */
+      async function zendeskFetchTicket(ticketId) {
+        const id = String(ticketId ?? "").trim();
+        if (!id) throw new Error("ticketId required");
+        const bridge = window.ZendeskBridge;
+        if (bridge?.getTicket) return await bridge.getTicket(id);
+        // Fallback if older bridge version: direct API call
+        const json = await zendeskApiRequest("GET", "/tickets/" + encodeURIComponent(id) + ".json");
+        return json?.ticket ?? null;
+      }
+
+      /** Returns the current Zendesk user (proof session is valid), or null. */
+      async function zendeskFetchCurrentUser() {
+        const bridge = window.ZendeskBridge;
+        if (bridge?.getCurrentUser) return await bridge.getCurrentUser();
+        const json = await zendeskApiRequest("GET", "/users/me.json");
+        return json?.user ?? null;
+      }
+
+      // Diagnostic: expose so you can test from DevTools:
+      //   await window.__zd.fetchTicket(196389)
+      //   await window.__zd.me()
+      try {
+        window.__zd = {
+          api: zendeskApiRequest,
+          fetchTicket: zendeskFetchTicket,
+          me: zendeskFetchCurrentUser,
+        };
+      } catch (_) {}
+
       async function rocketlaneRequestJson(method, path, params, body) {
         // Direct-fetch path for hapnes-dev.github.io — Rocketlane's
         // tenant API explicitly allows CORS from this origin, so we
