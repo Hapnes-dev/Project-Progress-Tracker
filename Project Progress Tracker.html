@@ -2470,6 +2470,59 @@
         padding: 4px 0 10px;
       }
       .ownerStatusOverview .bd { padding: 0; }
+      /* Collapse toggle for the whole overview — invisible button wrapping
+         the heading so the chevron + label both feel clickable. */
+      .ownerStatusToggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background: transparent;
+        border: none;
+        padding: 0;
+        color: inherit;
+        cursor: pointer;
+        font: inherit;
+      }
+      .ownerStatusToggle h2 { margin: 0; }
+      .ownerStatusChevron {
+        display: inline-block;
+        transition: transform 120ms ease;
+        color: var(--muted2);
+        font-size: 14px;
+      }
+      .ownerStatusToggle[aria-expanded="false"] .ownerStatusChevron {
+        transform: rotate(-90deg);
+      }
+      .ownerStatusOverview .bd.collapsed { display: none; }
+      /* Team-group section inside the overview */
+      .ownerTeamGroup { margin-bottom: 18px; }
+      .ownerTeamGroup:last-child { margin-bottom: 0; }
+      .ownerTeamGroupHd {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background: transparent;
+        border: none;
+        padding: 4px 0 8px;
+        color: var(--muted2);
+        cursor: pointer;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .ownerTeamGroupHd .ownerStatusChevron {
+        font-size: 12px;
+      }
+      .ownerTeamGroupHd:hover { color: var(--text); }
+      .ownerTeamGroupCount {
+        color: var(--muted2);
+        font-weight: 400;
+        text-transform: none;
+        letter-spacing: 0;
+      }
+      .ownerTeamGroupBody.collapsed { display: none; }
       .ownerStatusRows {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr));
@@ -5265,10 +5318,13 @@
       </div>
 
       <section class="panel ownerStatusOverview" aria-label="Owner workload overview">
-        <div class="hd">
-          <h2>Owner Workload Overview</h2>
+        <div class="hd ownerStatusHd">
+          <button type="button" id="ownerStatusToggle" class="ownerStatusToggle" aria-expanded="true" title="Expand/collapse Owner Workload Overview">
+            <span class="ownerStatusChevron" aria-hidden="true">▾</span>
+            <h2>Owner Workload Overview</h2>
+          </button>
         </div>
-        <div class="bd">
+        <div class="bd" id="ownerStatusBody">
           <div class="ownerStatusRows" id="ownerStatusRows"></div>
         </div>
       </section>
@@ -6131,6 +6187,72 @@
         { value: "high_workload", label: "High Workload" },
         { value: "on_hold", label: "On Hold" },
       ];
+
+      // Static team groupings for the Owner Workload Overview. The matcher
+      // is diacritic-insensitive + case-insensitive so "Thomas Kvalvåg Håpnes"
+      // and "thomas kvalvag hapnes" both land in Team kulde. Anyone NOT in
+      // a named team falls into the "Others" group at the bottom.
+      const OWNER_TEAM_GROUPS = [
+        {
+          id: "team_kulde",
+          label: "Team kulde",
+          members: [
+            "Thomas Kvalvåg Håpnes",
+            "Matthias Criel",
+            "Svein Olav Wahlberg",
+            "Andreas Sandnes",
+          ],
+        },
+      ];
+      // Normalize a name for group matching: strip diacritics, lowercase,
+      // collapse whitespace. Mirrors normalizeOwnerGroupKey's intent but
+      // shared here so we can pre-compute the team membership set once.
+      function normalizeTeamMemberName(s) {
+        return String(s ?? "")
+          .normalize("NFD")
+          .replace(/\p{Diacritic}/gu, "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .toLowerCase();
+      }
+      const OWNER_TEAM_GROUP_LOOKUP = (() => {
+        const m = new Map();
+        for (const g of OWNER_TEAM_GROUPS) {
+          for (const name of g.members) {
+            m.set(normalizeTeamMemberName(name), g.id);
+          }
+        }
+        return m;
+      })();
+      function teamIdForOwnerKey(ownerKey) {
+        const id = OWNER_TEAM_GROUP_LOOKUP.get(normalizeTeamMemberName(ownerKey));
+        return id || "others";
+      }
+      // Collapse state — persisted in localStorage so the choice survives
+      // reloads. Default: everything expanded.
+      const collapsedTeamGroups = (() => {
+        try {
+          const raw = localStorage.getItem("progress_tracker_team_collapse_v1");
+          return new Set(raw ? JSON.parse(raw) : []);
+        } catch { return new Set(); }
+      })();
+      function saveCollapsedTeamGroups() {
+        try {
+          localStorage.setItem(
+            "progress_tracker_team_collapse_v1",
+            JSON.stringify(Array.from(collapsedTeamGroups))
+          );
+        } catch {}
+      }
+      // Whole overview collapse state (just the section, separate from
+      // the per-team toggles inside).
+      let ownerOverviewCollapsed = (() => {
+        try { return localStorage.getItem("progress_tracker_overview_collapsed_v1") === "1"; }
+        catch { return false; }
+      })();
+      function saveOwnerOverviewCollapsed() {
+        try { localStorage.setItem("progress_tracker_overview_collapsed_v1", ownerOverviewCollapsed ? "1" : "0"); } catch {}
+      }
       function openOwnerLoadPicker(ownerKey, anchorEl) {
         closeOwnerLoadMenu();
         closeProjectStatusMenu();
@@ -13564,6 +13686,8 @@
         sort: document.getElementById("sort"),
         filter: document.getElementById("filter"),
         ownerStatusRows: document.getElementById("ownerStatusRows"),
+        ownerStatusToggle: document.getElementById("ownerStatusToggle"),
+        ownerStatusBody: document.getElementById("ownerStatusBody"),
         btnSaveAsDataFile: document.getElementById("btnSaveAsDataFile"),
         dataFileStatus: document.getElementById("dataFileStatus"),
         btnExport: document.getElementById("btnExport"),
@@ -14096,7 +14220,24 @@
           return;
         }
 
+        // Partition rows into team groups. "Others" picks up anyone not
+        // explicitly listed in OWNER_TEAM_GROUPS. Order: named groups in
+        // declaration order, then Others at the bottom.
+        const rowsByTeam = new Map();
+        for (const g of OWNER_TEAM_GROUPS) rowsByTeam.set(g.id, []);
+        rowsByTeam.set("others", []);
         for (const row of rows) {
+          const tid = teamIdForOwnerKey(row.ownerKey);
+          (rowsByTeam.get(tid) || rowsByTeam.get("others")).push(row);
+        }
+        const teamSections = [
+          ...OWNER_TEAM_GROUPS.map((g) => ({ id: g.id, label: g.label, rows: rowsByTeam.get(g.id) || [] })),
+          { id: "others", label: "Others", rows: rowsByTeam.get("others") || [] },
+        ];
+
+        // Render a single owner card. Extracted so each team-group grid
+        // can reuse it without duplicating ~150 lines of DOM building.
+        const renderOwnerCard = (row) => {
           const item = document.createElement("div");
           item.className = "ownerStatusRow";
 
@@ -14245,7 +14386,54 @@
 
           item.appendChild(avatar);
           item.appendChild(main);
-          rowsEl.appendChild(item);
+          return item;
+        };
+
+        // Render team-group sections in order. Each section has a
+        // collapsible header (chevron) and a grid of owner cards.
+        for (const section of teamSections) {
+          if (section.rows.length === 0) continue;
+          const teamWrap = document.createElement("div");
+          teamWrap.className = "ownerTeamGroup";
+          teamWrap.dataset.teamId = section.id;
+
+          const isCollapsed = collapsedTeamGroups.has(section.id);
+
+          const hdr = document.createElement("button");
+          hdr.type = "button";
+          hdr.className = "ownerTeamGroupHd";
+          hdr.setAttribute("aria-expanded", isCollapsed ? "false" : "true");
+          const chev = document.createElement("span");
+          chev.className = "ownerStatusChevron";
+          chev.setAttribute("aria-hidden", "true");
+          chev.textContent = "▾";
+          hdr.appendChild(chev);
+          const labelSpan = document.createElement("span");
+          labelSpan.textContent = section.label;
+          hdr.appendChild(labelSpan);
+          const countSpan = document.createElement("span");
+          countSpan.className = "ownerTeamGroupCount";
+          countSpan.textContent = "(" + section.rows.length + ")";
+          hdr.appendChild(countSpan);
+
+          const grid = document.createElement("div");
+          grid.className = "ownerTeamGroupBody ownerStatusRows";
+          if (isCollapsed) grid.classList.add("collapsed");
+
+          hdr.addEventListener("click", () => {
+            const nowCollapsed = !collapsedTeamGroups.has(section.id);
+            if (nowCollapsed) collapsedTeamGroups.add(section.id);
+            else collapsedTeamGroups.delete(section.id);
+            saveCollapsedTeamGroups();
+            hdr.setAttribute("aria-expanded", nowCollapsed ? "false" : "true");
+            grid.classList.toggle("collapsed", nowCollapsed);
+          });
+
+          for (const row of section.rows) grid.appendChild(renderOwnerCard(row));
+
+          teamWrap.appendChild(hdr);
+          teamWrap.appendChild(grid);
+          rowsEl.appendChild(teamWrap);
         }
 
         for (const key of Array.from(ownerStatusBlinkUntil.keys())) {
@@ -21251,6 +21439,19 @@
           }
           return false;
         }
+      }
+      // Whole-section collapse for Owner Workload Overview.
+      if (els.ownerStatusToggle && els.ownerStatusBody) {
+        const applyOverviewCollapsed = () => {
+          els.ownerStatusToggle.setAttribute("aria-expanded", ownerOverviewCollapsed ? "false" : "true");
+          els.ownerStatusBody.classList.toggle("collapsed", ownerOverviewCollapsed);
+        };
+        applyOverviewCollapsed();
+        els.ownerStatusToggle.addEventListener("click", () => {
+          ownerOverviewCollapsed = !ownerOverviewCollapsed;
+          saveOwnerOverviewCollapsed();
+          applyOverviewCollapsed();
+        });
       }
       els.btnSaveAsDataFile.addEventListener("click", async () => {
         if (dataFileApiUnsupported()) {
