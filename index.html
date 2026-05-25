@@ -626,12 +626,40 @@
       .zendeskConvo {
         display: grid;
         gap: 8px;
-        max-height: 360px;
+        max-height: 220px; /* small enough that compose stays in view */
         overflow-y: auto;
         padding: 10px;
         border-radius: 8px;
         background: rgba(0, 0, 0, 0.16);
         border: 1px solid var(--border);
+      }
+      /* "Show earlier replies" link that appears when we've trimmed the
+         conversation to the most recent N. Sits at the top of the
+         conversation panel inside the same scroll area. */
+      .zendeskConvoShowEarlier {
+        align-self: stretch;
+        background: transparent;
+        color: var(--accent);
+        border: 1px dashed var(--accent-stroke);
+        border-radius: 6px;
+        padding: 6px 10px;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        text-align: center;
+      }
+      .zendeskConvoShowEarlier:hover { background: var(--accent-soft); }
+      /* Make compose look like the primary thing on the page when the
+         conversation is folded — slight emphasis border + a "Reply" hint
+         heading so the user immediately knows where to type. */
+      .zendeskCompose { position: relative; }
+      .zendeskComposeHd {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        margin-bottom: 2px;
       }
       .zendeskMsg {
         padding: 8px 10px;
@@ -17184,6 +17212,44 @@
               container.innerHTML = "";
 
               // Conversation thread — oldest first so reading flows top→bottom.
+              // To keep the compose box visible without scrolling, we
+              // collapse older comments and show only the most recent 3
+              // by default. A "Show earlier replies (N more)" button at
+              // the top expands the full thread.
+              const SHOW_RECENT_COUNT = 3;
+              const renderComment = (c) => {
+                const author = userById[c?.author_id];
+                const authorName = (author?.name || ("User #" + (c?.author_id ?? "?"))).trim();
+                const isInternal = c?.public === false;
+                const msg = document.createElement("div");
+                msg.className = "zendeskMsg" + (isInternal ? " zendeskMsgInternal" : "");
+                const head = document.createElement("div");
+                head.className = "zendeskMsgHead";
+                const a = document.createElement("span");
+                a.className = "zendeskMsgAuthor";
+                a.textContent = authorName;
+                head.appendChild(a);
+                if (c?.created_at) {
+                  const w = document.createElement("span");
+                  w.className = "zendeskMsgWhen";
+                  w.textContent = zdAbsTime(c.created_at);
+                  w.title = zdFullTime(c.created_at);
+                  head.appendChild(w);
+                }
+                if (isInternal) {
+                  const tag = document.createElement("span");
+                  tag.className = "zendeskMsgInternalTag";
+                  tag.textContent = "Internal note";
+                  head.appendChild(tag);
+                }
+                const body = document.createElement("div");
+                body.className = "zendeskMsgBody";
+                body.textContent = String(c?.body ?? "");
+                msg.appendChild(head);
+                msg.appendChild(body);
+                return msg;
+              };
+
               const convo = document.createElement("div");
               convo.className = "zendeskConvo";
               if (comments.length === 0) {
@@ -17191,53 +17257,41 @@
                 empty.className = "chatHistoryEmpty";
                 empty.textContent = "No comments on this ticket yet.";
                 convo.appendChild(empty);
+              } else if (comments.length <= SHOW_RECENT_COUNT) {
+                for (const c of comments) convo.appendChild(renderComment(c));
               } else {
-                for (const c of comments) {
-                  const author = userById[c?.author_id];
-                  const authorName = (author?.name || ("User #" + (c?.author_id ?? "?"))).trim();
-                  const isInternal = c?.public === false;
-
-                  const msg = document.createElement("div");
-                  msg.className = "zendeskMsg" + (isInternal ? " zendeskMsgInternal" : "");
-
-                  const head = document.createElement("div");
-                  head.className = "zendeskMsgHead";
-                  const a = document.createElement("span");
-                  a.className = "zendeskMsgAuthor";
-                  a.textContent = authorName;
-                  head.appendChild(a);
-                  if (c?.created_at) {
-                    const w = document.createElement("span");
-                    w.className = "zendeskMsgWhen";
-                    w.textContent = zdAbsTime(c.created_at);
-                    w.title = zdFullTime(c.created_at);
-                    head.appendChild(w);
-                  }
-                  if (isInternal) {
-                    const tag = document.createElement("span");
-                    tag.className = "zendeskMsgInternalTag";
-                    tag.textContent = "Internal note";
-                    head.appendChild(tag);
-                  }
-
-                  const body = document.createElement("div");
-                  body.className = "zendeskMsgBody";
-                  // Use plain-text body — safer than html_body and matches
-                  // chat history's whitespace-pre-wrap rendering.
-                  body.textContent = String(c?.body ?? "");
-
-                  msg.appendChild(head);
-                  msg.appendChild(body);
-                  convo.appendChild(msg);
-                }
-                // Auto-scroll to newest at bottom.
-                requestAnimationFrame(() => { convo.scrollTop = convo.scrollHeight; });
+                const earlierCount = comments.length - SHOW_RECENT_COUNT;
+                const recent = comments.slice(-SHOW_RECENT_COUNT);
+                const earlier = comments.slice(0, earlierCount);
+                const showBtn = document.createElement("button");
+                showBtn.type = "button";
+                showBtn.className = "zendeskConvoShowEarlier";
+                showBtn.textContent = "Show " + earlierCount + " earlier " + (earlierCount === 1 ? "reply" : "replies") + " ↑";
+                showBtn.addEventListener("click", (e) => {
+                  e.stopPropagation();
+                  showBtn.remove();
+                  // Render earlier comments at the TOP of the convo so the
+                  // scroll position visually flows "history → present".
+                  const frag = document.createDocumentFragment();
+                  for (const c of earlier) frag.appendChild(renderComment(c));
+                  convo.insertBefore(frag, convo.firstChild);
+                });
+                convo.appendChild(showBtn);
+                for (const c of recent) convo.appendChild(renderComment(c));
               }
+              // Auto-scroll to newest at bottom (only matters when convo
+              // exceeds max-height, which it usually won't with the trim).
+              requestAnimationFrame(() => { convo.scrollTop = convo.scrollHeight; });
               container.appendChild(convo);
 
               // Compose — public reply by default, with toggle for internal note.
               const compose = document.createElement("div");
               compose.className = "zendeskCompose";
+
+              const composeHd = document.createElement("div");
+              composeHd.className = "zendeskComposeHd";
+              composeHd.textContent = "Reply";
+              compose.appendChild(composeHd);
 
               const toolbar = document.createElement("div");
               toolbar.className = "zendeskComposeToolbar";
