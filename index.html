@@ -635,11 +635,6 @@
         margin-left: 4px;
       }
 
-      .ownerGroupHeader.dragOver {
-        background: rgba(110, 231, 255, 0.15);
-        border-color: rgba(110, 231, 255, 0.5);
-        border-radius: var(--radius2);
-      }
 
       .card {
         border: 1px solid var(--border);
@@ -663,15 +658,6 @@
         border-color: rgba(110, 231, 255, 0.45);
         background: linear-gradient(180deg, rgba(110, 231, 255, 0.14), rgba(255, 255, 255, 0.04));
         box-shadow: 0 0 0 1px rgba(110, 231, 255, 0.12), 0 4px 20px rgba(110, 231, 255, 0.08);
-      }
-
-      .card.dragging {
-        opacity: 0.4;
-        cursor: grabbing;
-      }
-
-      .card[draggable="true"] {
-        cursor: grab;
       }
 
       .row {
@@ -14678,32 +14664,6 @@
             toggleOwnerGroup();
           });
           
-          // Make owner header a drop target
-          ownerHeader.setAttribute("data-owner", ownerKey);
-          ownerHeader.addEventListener("dragover", (e) => {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = "move";
-            ownerHeader.classList.add("dragOver");
-          });
-          ownerHeader.addEventListener("dragleave", () => {
-            ownerHeader.classList.remove("dragOver");
-          });
-          ownerHeader.addEventListener("drop", (e) => {
-            e.preventDefault();
-            ownerHeader.classList.remove("dragOver");
-            const projectId = e.dataTransfer.getData("text/plain");
-            const project = state.projects.find((p) => p.id === projectId);
-            if (project) {
-              const newOwner = ownerKey === "No owner" ? "" : ownerKey;
-              if (project.owner !== newOwner) {
-                project.owner = newOwner;
-                touchProject(project.id);
-                saveState(state);
-                render();
-              }
-            }
-          });
-          
           els.projectList.appendChild(ownerHeader);
 
           if (isOwnerCollapsed) {
@@ -14727,18 +14687,6 @@
             card.tabIndex = 0;
             card.setAttribute("role", "button");
             card.setAttribute("aria-label", "Open project " + displayName);
-            card.setAttribute("draggable", "true");
-            
-            // Drag and drop handlers
-            card.addEventListener("dragstart", (e) => {
-              e.dataTransfer.effectAllowed = "move";
-              e.dataTransfer.setData("text/plain", p.id);
-              card.classList.add("dragging");
-            });
-            card.addEventListener("dragend", () => {
-              card.classList.remove("dragging");
-            });
-
             const top = document.createElement("div");
             top.className = "row";
 
