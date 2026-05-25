@@ -8119,6 +8119,51 @@
         };
       } catch (_) {}
 
+      // ──────────────────────────────────────────────────────────────────
+      // Younium API access (via Tampermonkey YouniumBridge).
+      // Younium uses Frontegg auth — the bridge mints fresh 24h access
+      // tokens via /frontegg/.../token/refresh and uses them as Bearer
+      // tokens against api.younium.com. No token stored in this file;
+      // the bridge handles refresh + caching internally.
+      // ──────────────────────────────────────────────────────────────────
+
+      /**
+       * Generic Younium API call routed through the Tampermonkey bridge.
+       *   await youniumApiRequest("GET", "/api/user/profile");
+       *
+       * @param {string} method
+       * @param {string} path   Relative to https://api.younium.com, e.g. "/api/data/query/order"
+       * @param {object} [body] JSON body for non-GET requests.
+       */
+      async function youniumApiRequest(method, path, body) {
+        const bridge = (typeof window !== "undefined" ? window.YouniumBridge : null);
+        if (!bridge || typeof bridge.apiRequest !== "function") {
+          throw new Error("YouniumBridge unavailable. Install/update the Rocketlane Chat Bridge userscript (v1.9.6+) and open https://eu.younium.com (or us.younium.com) once while logged in.");
+        }
+        return await bridge.apiRequest(method, path, body);
+      }
+
+      /** Returns the current Younium user (proof session is valid). */
+      async function youniumFetchCurrentUser() {
+        const bridge = window.YouniumBridge;
+        if (bridge?.getCurrentUser) return await bridge.getCurrentUser();
+        return await youniumApiRequest("GET", "/api/user/profile");
+      }
+
+      // Diagnostic: window.__yn for DevTools testing:
+      //   await window.__yn.me()        // current user
+      //   await window.__yn.api("POST", "/api/data/query/order", { ... })
+      //   await window.__yn.token()     // token cache status
+      //   await window.__yn.refresh()   // force token refresh
+      try {
+        window.__yn = {
+          api: youniumApiRequest,
+          me: youniumFetchCurrentUser,
+          async token() { return await window.YouniumBridge?.getTokenStatus?.(); },
+          async refresh() { return await window.YouniumBridge?.refreshToken?.(); },
+        };
+      } catch (_) {}
+
       async function rocketlaneRequestJson(method, path, params, body) {
         // Direct-fetch path for hapnes-dev.github.io — Rocketlane's
         // tenant API explicitly allows CORS from this origin, so we
