@@ -9215,6 +9215,41 @@
        * match on the stable prefix (case + whitespace insensitive).
        * Returns { html, fieldId, links } where `links` is the parsed map.
        */
+      // Cache the discovered Hubspot Deal Description fieldId once.
+      // Tenant-level field IDs are stable, so we only need to look it up
+      // once per session. Without this cache, every save would walk the
+      // entire /fields list (~700+ entries) just to find one ID.
+      let _rocketlaneDealDescriptionFieldId = null;
+
+      /**
+       * Look up the "Hubspot Deal Description" tenant fieldId from
+       * /fields. Cached after the first call. Returns null if no such
+       * field exists in the tenant schema (in which case we'd skip the
+       * push entirely).
+       */
+      async function rocketlaneFindDealDescriptionFieldId() {
+        if (_rocketlaneDealDescriptionFieldId) return _rocketlaneDealDescriptionFieldId;
+        try {
+          const json = await rocketlaneRequestJson("GET", "/fields");
+          const fields = Array.isArray(json) ? json : (json?.data ?? []);
+          const match = fields.find((f) => {
+            if (String(f?.objectType ?? "").toUpperCase() !== "PROJECT") return false;
+            const name = String(f?.fieldName ?? "").toLowerCase().replace(/\s+/g, "");
+            const label = String(f?.fieldLabel ?? "").toLowerCase().replace(/\s+/g, "");
+            return name.startsWith("hubspotdealdescription") ||
+                   label.startsWith("hubspotdealdescription") ||
+                   label === "dealdescription";
+          });
+          if (match) {
+            _rocketlaneDealDescriptionFieldId = match.fieldId;
+            return match.fieldId;
+          }
+        } catch (e) {
+          console.warn("[DealDescription] fields-lookup failed:", e?.message ?? e);
+        }
+        return null;
+      }
+
       async function rocketlaneFetchHubspotDealDescription(rlProjectId) {
         const pid = String(rlProjectId ?? "").trim();
         if (!pid) throw new Error("Missing Rocketlane projectId.");
@@ -9229,9 +9264,21 @@
           const n = String(f?.fieldName ?? "").toLowerCase().replace(/\s+/g, "");
           return n.startsWith("hubspotdealdescription") || n.startsWith("dealdescription");
         });
-        if (!match) return { html: "", fieldId: null, links: parseProjectLinksFromHtml("") };
-        const html = String(match.fieldValue ?? "");
-        return { html, fieldId: match.fieldId, links: parseProjectLinksFromHtml(html) };
+        if (match) {
+          const html = String(match.fieldValue ?? "");
+          // Remember the fieldId for future calls (avoids re-walking /fields).
+          _rocketlaneDealDescriptionFieldId = match.fieldId;
+          return { html, fieldId: match.fieldId, links: parseProjectLinksFromHtml(html) };
+        }
+        // Field exists in the TENANT schema but the project hasn't been
+        // written to yet — Rocketlane omits custom fields with no value
+        // from /projects/<id>'s fields[] response. Look up the fieldId
+        // from the tenant-wide /fields endpoint so we can still write.
+        const tenantFieldId = await rocketlaneFindDealDescriptionFieldId();
+        if (tenantFieldId) {
+          return { html: "", fieldId: tenantFieldId, links: parseProjectLinksFromHtml("") };
+        }
+        return { html: "", fieldId: null, links: parseProjectLinksFromHtml("") };
       }
 
       /** Write a new HTML value to the project's Hubspot Deal Description field. */
