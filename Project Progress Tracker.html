@@ -6205,15 +6205,11 @@
             </div>
             <div></div>
           </div>
-          <div>
-            <label class="small" for="fOverviewUrl">Zendesk link</label>
-            <input
-              class="input"
-              id="fOverviewUrl"
-              placeholder="Paste Zendesk ticket link (or keep empty)"
-              inputmode="url"
-            />
-          </div>
+          <!-- Zendesk link removed from the UI; kept as hidden input so
+               save/load/links-toolbar code (els.fOverviewUrl) still works.
+               If a user pastes a Zendesk URL into the rich description,
+               it's parsed back into this hidden value on save. -->
+          <input type="hidden" id="fOverviewUrl" />
           <div class="oneflowLinkBlock">
             <label class="small" for="fOneflowUrl">Oneflow link</label>
             <div class="oneflowFindRow">
