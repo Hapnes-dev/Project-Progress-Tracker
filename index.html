@@ -2523,13 +2523,20 @@
         letter-spacing: 0;
       }
       .ownerTeamGroupBody.collapsed { display: none; }
+      /* Outer wrapper #ownerStatusRows holds the team-group sections.
+         Sections must stack vertically as plain blocks (Team kulde
+         on top, Others below) — NOT in a grid, or they'd get squeezed
+         into 280px columns. The grid layout lives one level deeper
+         on each team-group body (see .ownerTeamGroupBody.ownerStatusRows
+         override below). */
       .ownerStatusRows {
+        display: block;
+        width: 100%;
+      }
+      /* Inside each team-group body, cards flow in a responsive grid:
+         fill the row left-to-right, wrap when there's no more space. */
+      .ownerTeamGroupBody.ownerStatusRows {
         display: grid;
-        /* Each card needs ~280px for the name + workload pill + at least
-           one chip on the same row before wrapping. With auto-fill + 1fr,
-           the row fits as many cards as it can and the rest distribute
-           extra space. The `min(...)` clamp keeps single-card-per-row
-           behavior on narrow viewports. */
         grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
         gap: 10px;
         width: 100%;
