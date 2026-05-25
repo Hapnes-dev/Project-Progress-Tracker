@@ -909,6 +909,42 @@
       }
       body.zendeskFullscreenOpen { overflow: hidden; }
 
+      /* Inline preview (NOT fullscreen): show only the most recent
+         comment as a quick "where is this ticket at" peek. Hide the
+         compose box and the "show earlier replies" link — the user
+         right-clicks (→ fullscreen) to actually read history and post
+         a reply. Keeps each row compact so a long ticket list stays
+         scannable. */
+      .zendeskTaskCard:not(.zendeskCardFullscreen) .zendeskMsg:not(:last-child) {
+        display: none;
+      }
+      .zendeskTaskCard:not(.zendeskCardFullscreen) .zendeskConvoShowEarlier {
+        display: none;
+      }
+      .zendeskTaskCard:not(.zendeskCardFullscreen) .zendeskCompose {
+        display: none;
+      }
+      /* Small affordance at the bottom of the preview pointing the
+         user to fullscreen for replying. Only shown in non-fullscreen,
+         hidden once the card is full-viewport (compose is right there). */
+      .zendeskInlineReplyHint {
+        display: flex;
+        justify-content: flex-end;
+        font-size: 11px;
+        color: var(--muted2);
+        padding: 2px 0 0;
+        font-style: italic;
+      }
+      .zendeskTaskCard.zendeskCardFullscreen .zendeskInlineReplyHint {
+        display: none;
+      }
+      /* Make the single comment in preview-mode look complete (no
+         "max-height clipping" hint). Drop the convo's max-height when
+         we're showing just one entry. */
+      .zendeskTaskCard:not(.zendeskCardFullscreen) .zendeskConvo {
+        max-height: none;
+      }
+
       .grid {
         display: grid;
         grid-template-columns: 420px 1fr;
@@ -17597,6 +17633,14 @@
               // exceeds max-height, which it usually won't with the trim).
               requestAnimationFrame(() => { convo.scrollTop = convo.scrollHeight; });
               container.appendChild(convo);
+
+              // Inline preview reply hint — only visible in non-fullscreen.
+              // Tells the user where to go to reply without occupying
+              // vertical space in the row.
+              const replyHint = document.createElement("div");
+              replyHint.className = "zendeskInlineReplyHint";
+              replyHint.textContent = "Right-click for full thread + reply →";
+              container.appendChild(replyHint);
 
               // Compose — public reply by default, with toggle for internal note.
               const compose = document.createElement("div");
