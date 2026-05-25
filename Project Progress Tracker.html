@@ -584,6 +584,158 @@
         font-size: 11px;
         white-space: nowrap;
       }
+      .zendeskTaskMetaLink {
+        color: var(--muted2);
+        font-size: 11px;
+        white-space: nowrap;
+        text-decoration: none;
+        padding: 2px 6px;
+        border-radius: 6px;
+        border: 1px solid transparent;
+        transition: background 120ms ease, border-color 120ms ease;
+      }
+      .zendeskTaskMetaLink:hover {
+        background: rgba(255,255,255,0.06);
+        border-color: var(--hairline-strong);
+        color: var(--text);
+      }
+      /* Expandable conversation block underneath each ticket row. */
+      .zendeskTaskCard {
+        display: grid;
+        gap: 0;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .zendeskTaskCard > .zendeskTaskRow {
+        background: transparent;
+        border: none;
+        border-radius: 0;
+        cursor: pointer;
+      }
+      .zendeskTaskCard.expanded {
+        background: rgba(255, 255, 255, 0.06);
+        border-color: var(--hairline-strong);
+      }
+      .zendeskTaskDetail {
+        padding: 0 12px 12px;
+        display: grid;
+        gap: 10px;
+      }
+      .zendeskConvo {
+        display: grid;
+        gap: 8px;
+        max-height: 360px;
+        overflow-y: auto;
+        padding: 10px;
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.16);
+        border: 1px solid var(--border);
+      }
+      .zendeskMsg {
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--border);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      .zendeskMsg.zendeskMsgInternal {
+        background: rgba(251, 191, 36, 0.06);
+        border-color: rgba(251, 191, 36, 0.28);
+      }
+      .zendeskMsgHead {
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+        font-size: 11px;
+        margin-bottom: 4px;
+        flex-wrap: wrap;
+      }
+      .zendeskMsgAuthor { font-weight: 700; color: var(--text); }
+      .zendeskMsgWhen   { color: var(--muted2); }
+      .zendeskMsgInternalTag {
+        color: #fbbf24;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-size: 10px;
+        padding: 1px 6px;
+        border-radius: 999px;
+        border: 1px solid rgba(251, 191, 36, 0.35);
+        background: rgba(251, 191, 36, 0.1);
+      }
+      .zendeskMsgBody {
+        color: var(--text);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      /* Compose area for posting a reply */
+      .zendeskCompose {
+        display: grid;
+        gap: 8px;
+        padding: 10px;
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.12);
+        border: 1px solid var(--border);
+      }
+      .zendeskComposeToolbar {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        font-size: 12px;
+      }
+      .zendeskComposeToolbar label {
+        display: inline-flex;
+        gap: 6px;
+        align-items: center;
+        cursor: pointer;
+        color: var(--muted);
+      }
+      .zendeskComposeTextarea {
+        width: 100%;
+        min-height: 80px;
+        resize: vertical;
+        font: inherit;
+        font-size: 12px;
+        line-height: 1.45;
+        color: var(--text);
+        background: var(--surface-1);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 8px 10px;
+        box-sizing: border-box;
+      }
+      .zendeskComposeRow {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        align-items: center;
+      }
+      .zendeskComposeStatus {
+        flex: 1;
+        font-size: 11px;
+        color: var(--muted2);
+      }
+      .zendeskComposeStatus.error { color: rgba(251, 113, 133, 0.95); }
+      .zendeskComposeBtn {
+        background: var(--accent-soft);
+        color: var(--accent);
+        border: 1px solid var(--accent-stroke);
+        border-radius: 6px;
+        padding: 6px 14px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .zendeskComposeBtn:hover:not(:disabled) {
+        filter: brightness(1.15);
+      }
+      .zendeskComposeBtn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
 
       .grid {
         display: grid;
@@ -16908,50 +17060,248 @@
               const list = document.createElement("div");
               list.className = "zendeskTaskList";
               for (const t of sorted) {
-                const row = document.createElement("a");
-                row.className = "zendeskTaskRow";
-                row.href = "https://iwmac.zendesk.com/agent/tickets/" + encodeURIComponent(t.id);
-                row.target = "_blank";
-                row.rel = "noopener noreferrer";
-
-                const statusEl = document.createElement("span");
-                statusEl.className = "zendeskTaskStatus " + zdStatusClass(t.status);
-                statusEl.textContent = String(t.status ?? "open");
-
-                // Middle column: subject on top, "Replied <when>" underneath.
-                // The displayed timestamp is the LAST PUBLIC REPLY, not the
-                // generic updated_at (which changes on status / tag edits).
-                // If no public reply was found, we say "Updated" instead so
-                // it's clear the timestamp isn't a true reply.
-                const middle = document.createElement("div");
-                middle.className = "zendeskTaskMiddle";
-                const subject = document.createElement("span");
-                subject.className = "zendeskTaskSubject";
-                subject.textContent = String(t.subject ?? "(no subject)");
-                middle.appendChild(subject);
-                const stampIso = String(t?.lastReplyAt ?? t?.updated_at ?? "").trim();
-                if (stampIso) {
-                  const usingReply = !!t?.lastReplyAt;
-                  const when = document.createElement("span");
-                  when.className = "zendeskTaskWhen";
-                  const abs = zdAbsTime(stampIso);
-                  const rel = formatRelativeTimeShort(stampIso);
-                  const label = usingReply ? "Last reply " : "Updated ";
-                  when.textContent = label + abs + (rel ? " · " + rel : "");
-                  when.title = (usingReply ? "Last public reply: " : "Last updated: ") + zdFullTime(stampIso);
-                  middle.appendChild(when);
-                }
-
-                const meta = document.createElement("span");
-                meta.className = "zendeskTaskMeta";
-                meta.textContent = "#" + t.id;
-
-                row.appendChild(statusEl);
-                row.appendChild(middle);
-                row.appendChild(meta);
-                list.appendChild(row);
+                list.appendChild(buildTicketCard(t));
               }
               zdBody.appendChild(list);
+            };
+
+            // Build one expandable ticket card. The header row toggles
+            // an inline preview underneath that fetches comments on first
+            // expand and provides a reply compose box.
+            const buildTicketCard = (t) => {
+              const card = document.createElement("div");
+              card.className = "zendeskTaskCard";
+              card.dataset.ticketId = String(t.id);
+
+              const row = document.createElement("div");
+              row.className = "zendeskTaskRow";
+              row.setAttribute("role", "button");
+              row.setAttribute("tabindex", "0");
+              row.title = "Click to preview / reply";
+
+              const statusEl = document.createElement("span");
+              statusEl.className = "zendeskTaskStatus " + zdStatusClass(t.status);
+              statusEl.textContent = String(t.status ?? "open");
+
+              const middle = document.createElement("div");
+              middle.className = "zendeskTaskMiddle";
+              const subject = document.createElement("span");
+              subject.className = "zendeskTaskSubject";
+              subject.textContent = String(t.subject ?? "(no subject)");
+              middle.appendChild(subject);
+              const stampIso = String(t?.lastReplyAt ?? t?.updated_at ?? "").trim();
+              if (stampIso) {
+                const usingReply = !!t?.lastReplyAt;
+                const when = document.createElement("span");
+                when.className = "zendeskTaskWhen";
+                const abs = zdAbsTime(stampIso);
+                const rel = formatRelativeTimeShort(stampIso);
+                const label = usingReply ? "Last reply " : "Updated ";
+                when.textContent = label + abs + (rel ? " · " + rel : "");
+                when.title = (usingReply ? "Last public reply: " : "Last updated: ") + zdFullTime(stampIso);
+                middle.appendChild(when);
+              }
+
+              // Ticket ID is now its own LINK so it stays a quick way to
+              // jump to Zendesk in a new tab. Clicking elsewhere on the
+              // row toggles the inline preview.
+              const idLink = document.createElement("a");
+              idLink.className = "zendeskTaskMetaLink";
+              idLink.textContent = "#" + t.id + " ↗";
+              idLink.href = "https://iwmac.zendesk.com/agent/tickets/" + encodeURIComponent(t.id);
+              idLink.target = "_blank";
+              idLink.rel = "noopener noreferrer";
+              idLink.title = "Open ticket in Zendesk (new tab)";
+              idLink.addEventListener("click", (e) => e.stopPropagation());
+
+              row.appendChild(statusEl);
+              row.appendChild(middle);
+              row.appendChild(idLink);
+
+              const detail = document.createElement("div");
+              detail.className = "zendeskTaskDetail";
+              detail.style.display = "none";
+
+              let detailLoaded = false;
+              const toggle = async () => {
+                const willOpen = detail.style.display === "none";
+                detail.style.display = willOpen ? "" : "none";
+                card.classList.toggle("expanded", willOpen);
+                if (willOpen && !detailLoaded) {
+                  detailLoaded = true;
+                  await loadTicketDetail(t.id, detail);
+                }
+              };
+              row.addEventListener("click", toggle);
+              row.addEventListener("keydown", (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  toggle();
+                }
+              });
+
+              card.appendChild(row);
+              card.appendChild(detail);
+              return card;
+            };
+
+            const escapeHtml = (s) => String(s ?? "")
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/"/g, "&quot;")
+              .replace(/'/g, "&#39;");
+
+            // Fetch comments + render them as a chat-like thread with a
+            // compose box for replying. Reloads on successful submit.
+            const loadTicketDetail = async (ticketId, container) => {
+              container.innerHTML = "";
+              const loading = document.createElement("div");
+              loading.className = "chatHistoryEmpty";
+              loading.textContent = "Loading conversation…";
+              container.appendChild(loading);
+
+              let payload;
+              try {
+                payload = await window.ZendeskBridge.apiRequest(
+                  "GET",
+                  "/tickets/" + encodeURIComponent(ticketId) + "/comments.json?include=users&sort_order=asc",
+                );
+              } catch (e) {
+                container.innerHTML = "";
+                const err = document.createElement("div");
+                err.className = "chatHistoryError";
+                err.textContent = String(e?.message ?? e ?? "Failed to load conversation.");
+                container.appendChild(err);
+                return;
+              }
+
+              const comments = Array.isArray(payload?.comments) ? payload.comments : [];
+              const users = Array.isArray(payload?.users) ? payload.users : [];
+              const userById = {};
+              for (const u of users) userById[u.id] = u;
+
+              container.innerHTML = "";
+
+              // Conversation thread — oldest first so reading flows top→bottom.
+              const convo = document.createElement("div");
+              convo.className = "zendeskConvo";
+              if (comments.length === 0) {
+                const empty = document.createElement("div");
+                empty.className = "chatHistoryEmpty";
+                empty.textContent = "No comments on this ticket yet.";
+                convo.appendChild(empty);
+              } else {
+                for (const c of comments) {
+                  const author = userById[c?.author_id];
+                  const authorName = (author?.name || ("User #" + (c?.author_id ?? "?"))).trim();
+                  const isInternal = c?.public === false;
+
+                  const msg = document.createElement("div");
+                  msg.className = "zendeskMsg" + (isInternal ? " zendeskMsgInternal" : "");
+
+                  const head = document.createElement("div");
+                  head.className = "zendeskMsgHead";
+                  const a = document.createElement("span");
+                  a.className = "zendeskMsgAuthor";
+                  a.textContent = authorName;
+                  head.appendChild(a);
+                  if (c?.created_at) {
+                    const w = document.createElement("span");
+                    w.className = "zendeskMsgWhen";
+                    w.textContent = zdAbsTime(c.created_at);
+                    w.title = zdFullTime(c.created_at);
+                    head.appendChild(w);
+                  }
+                  if (isInternal) {
+                    const tag = document.createElement("span");
+                    tag.className = "zendeskMsgInternalTag";
+                    tag.textContent = "Internal note";
+                    head.appendChild(tag);
+                  }
+
+                  const body = document.createElement("div");
+                  body.className = "zendeskMsgBody";
+                  // Use plain-text body — safer than html_body and matches
+                  // chat history's whitespace-pre-wrap rendering.
+                  body.textContent = String(c?.body ?? "");
+
+                  msg.appendChild(head);
+                  msg.appendChild(body);
+                  convo.appendChild(msg);
+                }
+                // Auto-scroll to newest at bottom.
+                requestAnimationFrame(() => { convo.scrollTop = convo.scrollHeight; });
+              }
+              container.appendChild(convo);
+
+              // Compose — public reply by default, with toggle for internal note.
+              const compose = document.createElement("div");
+              compose.className = "zendeskCompose";
+
+              const toolbar = document.createElement("div");
+              toolbar.className = "zendeskComposeToolbar";
+              const publicLabel = document.createElement("label");
+              const publicCheck = document.createElement("input");
+              publicCheck.type = "checkbox";
+              publicCheck.checked = true;
+              publicLabel.appendChild(publicCheck);
+              publicLabel.appendChild(document.createTextNode(" Public reply (customer sees this)"));
+              toolbar.appendChild(publicLabel);
+
+              const ta = document.createElement("textarea");
+              ta.className = "zendeskComposeTextarea";
+              ta.placeholder = "Type your reply…";
+
+              const submitRow = document.createElement("div");
+              submitRow.className = "zendeskComposeRow";
+              const statusLine = document.createElement("span");
+              statusLine.className = "zendeskComposeStatus";
+              const submitBtn = document.createElement("button");
+              submitBtn.type = "button";
+              submitBtn.className = "zendeskComposeBtn";
+              const updateSubmitLabel = () => {
+                submitBtn.textContent = publicCheck.checked ? "Send public reply" : "Add internal note";
+              };
+              updateSubmitLabel();
+              publicCheck.addEventListener("change", updateSubmitLabel);
+
+              const doSubmit = async () => {
+                const body = ta.value.trim();
+                if (!body) { statusLine.textContent = "Reply cannot be empty."; statusLine.classList.add("error"); return; }
+                submitBtn.disabled = true;
+                ta.disabled = true;
+                statusLine.classList.remove("error");
+                statusLine.textContent = "Sending…";
+                try {
+                  await window.ZendeskBridge.postTicketReply(ticketId, body, publicCheck.checked);
+                  ta.value = "";
+                  statusLine.textContent = "Sent.";
+                  // Reload conversation so the new reply appears + last-reply
+                  // timestamp in the row updates on next refresh.
+                  await loadTicketDetail(ticketId, container);
+                } catch (e) {
+                  statusLine.textContent = "Failed: " + String(e?.message ?? e);
+                  statusLine.classList.add("error");
+                  submitBtn.disabled = false;
+                  ta.disabled = false;
+                }
+              };
+              submitBtn.addEventListener("click", doSubmit);
+              ta.addEventListener("keydown", (e) => {
+                // Ctrl/Cmd + Enter sends — matches the Rocketlane chat convention.
+                if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  doSubmit();
+                }
+              });
+
+              submitRow.appendChild(statusLine);
+              submitRow.appendChild(submitBtn);
+              compose.appendChild(toolbar);
+              compose.appendChild(ta);
+              compose.appendChild(submitRow);
+              container.appendChild(compose);
             };
 
             // Fetch the most recent PUBLIC comment for a single ticket.
