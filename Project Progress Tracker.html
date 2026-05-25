@@ -16853,18 +16853,28 @@
               const dayKey = zdDateKeyInTz(d);
               const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
               const yesterdayKey = zdDateKeyInTz(yesterday);
+              // Norwegian numeric date DD.MM — always shown so the user
+              // never has to compute what "I går" or "man" actually maps to.
+              // Year is included only when the date is in a different year
+              // than today (otherwise it's noise).
+              const sameYear =
+                d.toLocaleDateString(ZD_LOCALE, { timeZone: ZD_TZ, year: "numeric" }) ===
+                now.toLocaleDateString(ZD_LOCALE, { timeZone: ZD_TZ, year: "numeric" });
+              const datePart = sameYear
+                ? d.toLocaleDateString(ZD_LOCALE, { timeZone: ZD_TZ, day: "2-digit", month: "2-digit" })
+                : d.toLocaleDateString(ZD_LOCALE, { timeZone: ZD_TZ, day: "2-digit", month: "2-digit", year: "numeric" });
               const time = d.toLocaleTimeString(ZD_LOCALE, {
                 timeZone: ZD_TZ, hour: "2-digit", minute: "2-digit", hour12: false,
               });
-              if (dayKey === todayKey) return "I dag " + time;
-              if (dayKey === yesterdayKey) return "I går " + time;
-              const within7d = (now.getTime() - ts) < 7 * 24 * 60 * 60 * 1000;
-              if (within7d) {
+              // Add a human-friendly context tag for recent days.
+              let context = "";
+              if (dayKey === todayKey) context = " (i dag)";
+              else if (dayKey === yesterdayKey) context = " (i går)";
+              else if ((now.getTime() - ts) < 7 * 24 * 60 * 60 * 1000) {
                 const weekday = d.toLocaleDateString(ZD_LOCALE, { timeZone: ZD_TZ, weekday: "short" });
-                return weekday + " " + time;
+                context = " (" + weekday + ")";
               }
-              const dateStr = d.toLocaleDateString(ZD_LOCALE, { timeZone: ZD_TZ, day: "2-digit", month: "short" });
-              return dateStr + " " + time;
+              return datePart + " " + time + context;
             };
             const zdFullTime = (iso) => {
               const ts = Date.parse(String(iso ?? ""));
