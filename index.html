@@ -17289,8 +17289,18 @@
               //   • Esc / mouse back button (button 3) / click on the
               //     dim backdrop (card itself, not children) exits
               //   • History pushState sentinel so browser back also exits
+              //
+              // Portal pattern: while fullscreen, the card is moved to
+              // <body> and restored to its original parent on exit. This
+              // is required because the parent .chatHistoryBody uses
+              // `contain: layout paint style` which creates a containing
+              // block for position:fixed — without the portal, the
+              // overlay would clip to the chat-body box instead of the
+              // viewport.
               // ────────────────────────────────────────────────────────
               let isFullscreen = false;
+              /** @type {{ parent: HTMLElement, nextSibling: Node | null } | null} */
+              let portalOrigin = null;
               const exitOnEsc = (ev) => {
                 if (ev.key === "Escape" && isFullscreen) {
                   ev.preventDefault();
@@ -17312,9 +17322,19 @@
                   document.body.classList.remove("zendeskFullscreenOpen");
                   expandBtn.textContent = "⤢";
                   expandBtn.title = "Expand to fullscreen (or right-click the card)";
+                  // Restore portal — same as toggle's exit path.
+                  if (portalOrigin && portalOrigin.parent) {
+                    try {
+                      portalOrigin.parent.insertBefore(card, portalOrigin.nextSibling);
+                    } catch (_) {
+                      try { card.remove(); } catch (_) {}
+                    }
+                  }
+                  portalOrigin = null;
                   document.removeEventListener("keydown", exitOnEsc);
                   document.removeEventListener("mousedown", exitOnMouseBack, true);
                   document.removeEventListener("auxclick", exitOnMouseBack, true);
+                  card.removeEventListener("click", exitOnBackdropClick);
                   window.removeEventListener("popstate", exitOnPopstate);
                 }
               };
@@ -17328,13 +17348,21 @@
 
               const toggleFullscreen = () => {
                 isFullscreen = !isFullscreen;
-                card.classList.toggle("zendeskCardFullscreen", isFullscreen);
                 document.body.classList.toggle("zendeskFullscreenOpen", isFullscreen);
                 expandBtn.textContent = isFullscreen ? "⤡" : "⤢";
                 expandBtn.title = isFullscreen ? "Exit fullscreen (or press Esc)" : "Expand to fullscreen (or right-click the card)";
                 if (isFullscreen) {
-                  // Expanding implies the user wants to see content — make
-                  // sure the detail panel is loaded.
+                  // PORTAL: remember where the card lives in the DOM,
+                  // then move it to <body> so position:fixed is relative
+                  // to the viewport (not the contained chat-body).
+                  portalOrigin = {
+                    parent: /** @type {HTMLElement} */ (card.parentNode),
+                    nextSibling: card.nextSibling,
+                  };
+                  document.body.appendChild(card);
+                  card.classList.add("zendeskCardFullscreen");
+
+                  // Make sure the detail panel is loaded.
                   if (!detailLoaded || detail.style.display === "none") {
                     detail.style.display = "";
                     card.classList.add("expanded");
@@ -17350,6 +17378,20 @@
                   try { history.pushState({ zendeskFullscreen: true }, ""); } catch (_) {}
                   window.addEventListener("popstate", exitOnPopstate);
                 } else {
+                  card.classList.remove("zendeskCardFullscreen");
+                  // Restore card to its original DOM position so the
+                  // ticket list stays intact when the user exits.
+                  if (portalOrigin && portalOrigin.parent) {
+                    try {
+                      portalOrigin.parent.insertBefore(card, portalOrigin.nextSibling);
+                    } catch (_) {
+                      // Parent may have been re-rendered (e.g. user clicked
+                      // a different project). In that case just drop the
+                      // card — the next render will recreate it.
+                      try { card.remove(); } catch (_) {}
+                    }
+                  }
+                  portalOrigin = null;
                   document.removeEventListener("keydown", exitOnEsc);
                   document.removeEventListener("mousedown", exitOnMouseBack, true);
                   document.removeEventListener("auxclick", exitOnMouseBack, true);
