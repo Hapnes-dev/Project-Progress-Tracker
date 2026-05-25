@@ -714,12 +714,44 @@
         align-items: center;
         font-size: 12px;
       }
-      .zendeskComposeToolbar label {
+      /* Public ↔ Internal switch — same chrome as .chatTabs (Private/General
+         tabs) so it visually rhymes with the chat-history toggle. */
+      .zendeskReplyKind {
         display: inline-flex;
-        gap: 6px;
-        align-items: center;
-        cursor: pointer;
+        gap: 4px;
+        background: var(--surface-1);
+        border: 1px solid var(--hairline);
+        border-radius: var(--radius);
+        padding: 3px;
+      }
+      .zendeskReplyKindBtn {
+        appearance: none;
+        background: transparent;
+        border: none;
         color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+        padding: 4px 12px;
+        border-radius: 7px;
+        cursor: pointer;
+        letter-spacing: 0.005em;
+        transition: background 120ms ease, color 120ms ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .zendeskReplyKindBtn:hover { color: var(--text); }
+      /* When "Public reply" is active, paint it in accent (calm primary).
+         When "Internal note" is active, paint it in warn (yellow) so
+         agents see at a glance that what they type WON'T reach the
+         customer — same color the internal-note tag uses on the thread. */
+      .zendeskReplyKindBtn.active.public {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+      .zendeskReplyKindBtn.active.internal {
+        background: rgba(251, 191, 36, 0.15);
+        color: #fbbf24;
       }
       .zendeskComposeTextarea {
         width: 100%;
@@ -17541,13 +17573,43 @@
 
               const toolbar = document.createElement("div");
               toolbar.className = "zendeskComposeToolbar";
-              const publicLabel = document.createElement("label");
-              const publicCheck = document.createElement("input");
-              publicCheck.type = "checkbox";
-              publicCheck.checked = true;
-              publicLabel.appendChild(publicCheck);
-              publicLabel.appendChild(document.createTextNode(" Public reply (customer sees this)"));
-              toolbar.appendChild(publicLabel);
+
+              // Two-button switch instead of a checkbox so the "what
+              // does this send to whom" choice is unambiguous. Default
+              // is Public reply (per the original design choice).
+              const replyKind = document.createElement("div");
+              replyKind.className = "zendeskReplyKind";
+              replyKind.setAttribute("role", "tablist");
+              const btnPublic = document.createElement("button");
+              btnPublic.type = "button";
+              btnPublic.className = "zendeskReplyKindBtn public active";
+              btnPublic.setAttribute("role", "tab");
+              btnPublic.setAttribute("aria-selected", "true");
+              btnPublic.title = "Customer-visible reply";
+              btnPublic.textContent = "Public reply";
+              const btnInternal = document.createElement("button");
+              btnInternal.type = "button";
+              btnInternal.className = "zendeskReplyKindBtn internal";
+              btnInternal.setAttribute("role", "tab");
+              btnInternal.setAttribute("aria-selected", "false");
+              btnInternal.title = "Agents only — customer won't see this";
+              btnInternal.textContent = "Internal note";
+              // Stub `publicCheck` for downstream code that reads `.checked`
+              // (preserves the existing send / label update logic).
+              const publicCheck = { checked: true };
+              const setKind = (isPublic) => {
+                publicCheck.checked = isPublic;
+                btnPublic.classList.toggle("active", isPublic);
+                btnPublic.setAttribute("aria-selected", isPublic ? "true" : "false");
+                btnInternal.classList.toggle("active", !isPublic);
+                btnInternal.setAttribute("aria-selected", isPublic ? "false" : "true");
+                if (typeof updateSubmitLabel === "function") updateSubmitLabel();
+              };
+              btnPublic.addEventListener("click", () => setKind(true));
+              btnInternal.addEventListener("click", () => setKind(false));
+              replyKind.appendChild(btnPublic);
+              replyKind.appendChild(btnInternal);
+              toolbar.appendChild(replyKind);
 
               const ta = document.createElement("textarea");
               ta.className = "zendeskComposeTextarea";
@@ -17564,7 +17626,8 @@
                 submitBtn.textContent = publicCheck.checked ? "Send public reply" : "Add internal note";
               };
               updateSubmitLabel();
-              publicCheck.addEventListener("change", updateSubmitLabel);
+              // No `change` listener needed — setKind() invokes
+              // updateSubmitLabel() directly when the user picks a kind.
 
               const doSubmit = async () => {
                 const body = ta.value.trim();
