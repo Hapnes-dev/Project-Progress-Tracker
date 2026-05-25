@@ -1858,21 +1858,12 @@
       .task {
         display: grid;
         grid-template-columns: 180px 1fr auto;
-        /* Horizontal gap only — collapsed .taskDetails was leaving a 10px
-           row-gap below the visible row, making the task text look like
-           it was floating above the bottom of the box. The vertical
-           spacing between the title row and expanded details is now
-           controlled entirely by .taskDetails margin-top (which transitions
-           from 0 to 4px on expand). */
         column-gap: 10px;
         row-gap: 0;
         align-items: center;
         border: 1px solid var(--border);
         border-radius: 12px;
-        /* Asymmetric vertical padding — top is 2px larger than bottom so
-           the content sits visually a couple pixels lower. Total row
-           height stays the same (12+8 == 10+10), so the row isn't taller. */
-        padding: 12px 12px 8px;
+        padding: 10px 12px;
         background: rgba(255, 255, 255, 0.03);
         overflow: visible; /* allow status menu to not resize row */
         transition: border-color 150ms ease, background 150ms ease;
@@ -3430,7 +3421,13 @@
         padding: 8px 12px;
         box-shadow: inset 0 0 0 0 transparent; /* explicit base for clean shadow transitions */
         border-radius: var(--radius);
-        gap: 12px;
+        /* row-gap MUST be 0 — the collapsed .taskDetails sits below row 1
+           as a 0-height grid row. A non-zero row-gap would still add
+           empty space between row 1 and that 0-height row, pushing
+           the visible content up and leaving phantom space below.
+           column-gap stays at 12 to space the three columns. */
+        column-gap: 12px;
+        row-gap: 0;
         /* Single consolidated transition (was duplicated earlier, causing
            the later rule to override the first). */
         transition:
