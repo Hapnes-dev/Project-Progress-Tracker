@@ -6725,6 +6725,49 @@
       }
 
       async function rocketlaneRequestJson(method, path, params, body) {
+        // Direct-fetch path for hapnes-dev.github.io — Rocketlane's
+        // tenant API explicitly allows CORS from this origin, so we
+        // don't need Tampermonkey here. Verified via Playwright +
+        // PowerShell end-to-end. Keeps the workload-sync write path
+        // working even for users without the userscript installed.
+        if (typeof location !== "undefined" &&
+            /^https:\/\/hapnes-dev\.github\.io/i.test(location.origin)) {
+          const key = getRocketlaneApiKey();
+          if (key) {
+            const TENANT = "https://kiona.api.rocketlane.com/api/v1";
+            let fullPath = path;
+            if (params) {
+              const search = new URLSearchParams();
+              for (const [k, v] of Object.entries(params)) {
+                if (v === undefined || v === null || v === "") continue;
+                search.set(k, String(v));
+              }
+              const qs = search.toString();
+              if (qs) fullPath += (fullPath.includes("?") ? "&" : "?") + qs;
+            }
+            const url = /^https?:/i.test(fullPath) ? fullPath : (TENANT + fullPath);
+            const headers = { "api-key": key, accept: "application/json" };
+            const init = { method, headers };
+            if (body !== undefined && body !== null) {
+              headers["content-type"] = "application/json";
+              init.body = typeof body === "string" ? body : JSON.stringify(body);
+            }
+            try {
+              const res = await fetch(url, init);
+              const text = await res.text();
+              if (!res.ok) {
+                const err = new Error("HTTP " + res.status + ": " + text.slice(0, 300));
+                /** @type {any} */ (err).status = res.status;
+                throw err;
+              }
+              return text ? JSON.parse(text) : null;
+            } catch (e) {
+              // If direct fetch fails (e.g., key invalid), fall through
+              // to the bridge path below — it has 401 auto-renewal.
+              console.debug("[Rocketlane API] direct fetch failed, trying bridge:", String(e?.message ?? e));
+            }
+          }
+        }
         // Prefer the Tampermonkey bridge — it routes through
         // GM_xmlhttpRequest against the TENANT API host
         // (kiona.api.rocketlane.com) which is the only host where the
