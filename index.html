@@ -502,6 +502,73 @@
         overflow-wrap: anywhere;
       }
 
+      /* Zendesk tasks list — reuses chat panel chrome but renders ticket
+         rows instead of messages. Styled to feel native alongside Notes /
+         Chat history / Categories. */
+      .zendeskTaskList {
+        display: grid;
+        gap: 6px;
+        max-height: 320px;
+        overflow-y: auto;
+        padding: 8px;
+        border-radius: 10px;
+        background: rgba(0, 0, 0, 0.18);
+        border: 1px solid var(--border);
+      }
+      @media (prefers-color-scheme: light) {
+        .zendeskTaskList { background: rgba(255, 255, 255, 0.5); }
+      }
+      .zendeskTaskRow {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 8px;
+        align-items: center;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--border);
+        font-size: 12px;
+        color: var(--text);
+        text-decoration: none;
+        transition: background 120ms ease, border-color 120ms ease;
+      }
+      .zendeskTaskRow:hover {
+        background: rgba(255, 255, 255, 0.07);
+        border-color: var(--hairline-strong);
+      }
+      .zendeskTaskStatus {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 56px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        border: 1px solid transparent;
+        white-space: nowrap;
+      }
+      .zendeskTaskStatus.zd-new      { background: rgba(96, 165, 250, 0.15);  color: #60a5fa; border-color: rgba(96, 165, 250, 0.32); }
+      .zendeskTaskStatus.zd-open     { background: rgba(251, 191, 36, 0.15);  color: #fbbf24; border-color: rgba(251, 191, 36, 0.32); }
+      .zendeskTaskStatus.zd-pending  { background: rgba(167, 139, 250, 0.15); color: #a78bfa; border-color: rgba(167, 139, 250, 0.32); }
+      .zendeskTaskStatus.zd-hold     { background: rgba(251, 113, 133, 0.15); color: #fb7185; border-color: rgba(251, 113, 133, 0.32); }
+      .zendeskTaskStatus.zd-solved   { background: rgba(52, 211, 153, 0.15);  color: #34d399; border-color: rgba(52, 211, 153, 0.32); }
+      .zendeskTaskStatus.zd-closed   { background: rgba(148, 163, 184, 0.15); color: var(--muted2); border-color: var(--hairline); }
+      .zendeskTaskSubject {
+        font-weight: 600;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+      }
+      .zendeskTaskMeta {
+        color: var(--muted2);
+        font-size: 11px;
+        white-space: nowrap;
+      }
+
       .grid {
         display: grid;
         grid-template-columns: 420px 1fr;
@@ -16643,6 +16710,209 @@
             renderMsgs(cache.msgs[startKind], startKind === "private" ? "Private" : "General");
           } else {
             wrappedLoadKind(startKind);
+          }
+        }
+
+        // ──────────────────────────────────────────────────────────────────
+        // Zendesk tasks — sits in the same picWrap column directly under
+        // Chat history. Same visual chrome (sectionTitle.chatSectionTitle,
+        // chatPanel, chatHistoryBody) so it feels native. Independent of
+        // Rocketlane availability — only requires:
+        //   • Project title starts with a numeric plant ID (e.g. "12345 - …")
+        //   • Tampermonkey bridge v1.9.0+ installed AND user logged into Zendesk
+        // No credentials stored in this file; the bridge re-uses the
+        // existing iwmac.zendesk.com session cookie via GM_xmlhttpRequest.
+        // ──────────────────────────────────────────────────────────────────
+        {
+          const zdPlantMatch = String(p?.name ?? "").match(/^\s*(\d+)\b/);
+          const zdPlantId = zdPlantMatch ? zdPlantMatch[1] : "";
+          if (zdPlantId) {
+            const zdPanel = document.createElement("div");
+            zdPanel.className = "chatPanel zendeskPanel";
+
+            // Header — mirrors Chat history exactly (sectionTitle.chatSectionTitle)
+            const zdHeader = document.createElement("div");
+            zdHeader.className = "sectionTitle chatSectionTitle";
+            zdHeader.style.alignItems = "center";
+
+            const zdCollapseBtn = document.createElement("button");
+            zdCollapseBtn.type = "button";
+            zdCollapseBtn.className = "sectionCollapseBtn chatCollapseBtn";
+            zdCollapseBtn.setAttribute("aria-label", "Toggle Zendesk tasks");
+
+            const zdH3 = document.createElement("h3");
+            zdH3.textContent = "Zendesk tasks";
+            zdH3.style.display = "flex";
+            zdH3.style.alignItems = "center";
+            zdH3.style.gap = "8px";
+            zdH3.insertBefore(zdCollapseBtn, zdH3.firstChild);
+            zdHeader.appendChild(zdH3);
+
+            const zdControls = document.createElement("div");
+            zdControls.className = "chatHeaderControls";
+            const zdRefreshBtn = document.createElement("button");
+            zdRefreshBtn.type = "button";
+            zdRefreshBtn.className = "chatRefreshBtn";
+            zdRefreshBtn.title = "Refresh Zendesk tasks";
+            zdRefreshBtn.setAttribute("aria-label", "Refresh Zendesk tasks");
+            zdRefreshBtn.textContent = "↻";
+            zdControls.appendChild(zdRefreshBtn);
+            zdHeader.appendChild(zdControls);
+
+            const zdBody = document.createElement("div");
+            zdBody.className = "chatHistoryBody zendeskTasksBody";
+
+            zdPanel.appendChild(zdHeader);
+            zdPanel.appendChild(zdBody);
+            picWrap.appendChild(zdPanel);
+
+            // Collapse state — per-project, persists across reloads.
+            // Default collapsed so we don't fire a Zendesk query on every
+            // project click. User opts in by expanding.
+            const zdCollapseKey = "progress_tracker_zd_collapsed_" + zdPlantId;
+            let zdIsCollapsed = true;
+            try {
+              if (localStorage.getItem(zdCollapseKey) === "false") zdIsCollapsed = false;
+            } catch (_) {}
+            let zdLoaded = false;
+
+            const updateZdCollapse = () => {
+              zdPanel.classList.toggle("chatPanelCollapsed", zdIsCollapsed);
+              zdCollapseBtn.textContent = zdIsCollapsed ? "▶" : "▼";
+              zdCollapseBtn.title = zdIsCollapsed ? "Show Zendesk tasks" : "Hide Zendesk tasks";
+            };
+            updateZdCollapse();
+
+            const zdStatusClass = (status) => {
+              const s = String(status ?? "").toLowerCase();
+              if (s === "new")      return "zd-new";
+              if (s === "open")     return "zd-open";
+              if (s === "pending")  return "zd-pending";
+              if (s === "hold")     return "zd-hold";
+              if (s === "solved")   return "zd-solved";
+              if (s === "closed")   return "zd-closed";
+              return "zd-open";
+            };
+
+            const renderZdLoading = () => {
+              zdBody.innerHTML = "";
+              const loading = document.createElement("div");
+              loading.className = "chatHistoryEmpty";
+              loading.textContent = "Loading Zendesk tasks…";
+              zdBody.appendChild(loading);
+            };
+            const renderZdEmpty = () => {
+              zdBody.innerHTML = "";
+              const empty = document.createElement("div");
+              empty.className = "chatHistoryEmpty";
+              empty.textContent = "No Zendesk tasks found for this project.";
+              zdBody.appendChild(empty);
+            };
+            const renderZdError = (msg) => {
+              zdBody.innerHTML = "";
+              const err = document.createElement("div");
+              err.className = "chatHistoryError";
+              err.textContent = msg;
+              zdBody.appendChild(err);
+            };
+            const renderZdTickets = (tickets) => {
+              if (!Array.isArray(tickets) || tickets.length === 0) {
+                renderZdEmpty();
+                return;
+              }
+              zdBody.innerHTML = "";
+              const list = document.createElement("div");
+              list.className = "zendeskTaskList";
+              for (const t of tickets) {
+                const row = document.createElement("a");
+                row.className = "zendeskTaskRow";
+                row.href = "https://iwmac.zendesk.com/agent/tickets/" + encodeURIComponent(t.id);
+                row.target = "_blank";
+                row.rel = "noopener noreferrer";
+
+                const statusEl = document.createElement("span");
+                statusEl.className = "zendeskTaskStatus " + zdStatusClass(t.status);
+                statusEl.textContent = String(t.status ?? "open");
+
+                const subject = document.createElement("span");
+                subject.className = "zendeskTaskSubject";
+                subject.textContent = String(t.subject ?? "(no subject)");
+
+                const meta = document.createElement("span");
+                meta.className = "zendeskTaskMeta";
+                meta.textContent = "#" + t.id;
+
+                row.appendChild(statusEl);
+                row.appendChild(subject);
+                row.appendChild(meta);
+                list.appendChild(row);
+              }
+              zdBody.appendChild(list);
+            };
+
+            const loadZdTickets = async () => {
+              renderZdLoading();
+              if (!window.ZendeskBridge?.apiRequest) {
+                renderZdError(
+                  "Zendesk bridge unavailable. Install/update the Rocketlane Chat Bridge userscript to v1.9.0+, then open https://iwmac.zendesk.com once while logged in."
+                );
+                return;
+              }
+              try {
+                // Search: tickets whose subject or description contains the
+                // plant ID. Sorted newest-first, capped at 50. Zendesk
+                // search supports "type:ticket" + free text — we don't
+                // restrict the field so a ticket like "Anlegg 3299" matches
+                // just like "3299 - Some plant".
+                const query = "type:ticket " + zdPlantId;
+                const params = new URLSearchParams({
+                  query,
+                  sort_by: "updated_at",
+                  sort_order: "desc",
+                  per_page: "50",
+                });
+                const json = await window.ZendeskBridge.apiRequest(
+                  "GET",
+                  "/search.json?" + params.toString()
+                );
+                const results = Array.isArray(json?.results) ? json.results : [];
+                // Defensive: search can return other types if not filtered
+                // server-side correctly; only keep tickets here.
+                const tickets = results.filter((r) => r?.result_type === "ticket");
+                renderZdTickets(tickets);
+                zdLoaded = true;
+              } catch (e) {
+                renderZdError(String(e?.message ?? e ?? "Failed to load Zendesk tasks."));
+              }
+            };
+
+            zdCollapseBtn.addEventListener("click", () => {
+              zdIsCollapsed = !zdIsCollapsed;
+              updateZdCollapse();
+              try { localStorage.setItem(zdCollapseKey, String(zdIsCollapsed)); } catch (_) {}
+              if (!zdIsCollapsed && !zdLoaded) loadZdTickets();
+            });
+            zdRefreshBtn.addEventListener("click", (e) => {
+              e.stopPropagation();
+              zdLoaded = false;
+              loadZdTickets();
+            });
+
+            // Right-click on the header area also toggles collapse — matches
+            // chat-history quality-of-life behavior.
+            zdHeader.addEventListener("contextmenu", (e) => {
+              const t = /** @type {HTMLElement | null} */ (e.target);
+              if (t?.closest?.("button, a")) return;
+              e.preventDefault();
+              zdIsCollapsed = !zdIsCollapsed;
+              updateZdCollapse();
+              try { localStorage.setItem(zdCollapseKey, String(zdIsCollapsed)); } catch (_) {}
+              if (!zdIsCollapsed && !zdLoaded) loadZdTickets();
+            });
+
+            // If user opens the project with the section already expanded
+            // (from a previous session), fetch immediately.
+            if (!zdIsCollapsed) loadZdTickets();
           }
         }
 
