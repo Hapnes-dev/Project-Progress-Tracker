@@ -6228,14 +6228,23 @@
             </div>
             <div class="oneflowFindStatus" id="oneflowFindStatus" aria-live="polite"></div>
           </div>
-          <div>
+          <div class="youniumLinkBlock">
             <label class="small" for="fYouniumUrl">Younium link</label>
-            <input
-              class="input"
-              id="fYouniumUrl"
-              placeholder="Paste Younium link (or keep empty)"
-              inputmode="url"
-            />
+            <div class="oneflowFindRow">
+              <input
+                class="input"
+                id="fYouniumUrl"
+                placeholder="Paste Younium link (or keep empty)"
+                inputmode="url"
+              />
+              <button
+                type="button"
+                class="btn oneflowFindBtn"
+                id="btnFindYounium"
+                title="Search Younium for an order matching this project (by plant ID)"
+              >🔎 Find</button>
+            </div>
+            <div class="oneflowFindStatus" id="youniumFindStatus" aria-live="polite"></div>
           </div>
           <div class="hubspotLinkBlock">
             <label class="small" for="fHubspotUrl">HubSpot link</label>
@@ -8150,15 +8159,162 @@
         return await youniumApiRequest("GET", "/api/user/profile");
       }
 
+      /**
+       * Search Younium orders by free text. Returns the parsed API
+       * response: { totalCount, result: [...] }. Each result has flat
+       * fields including `plant_id`, `plant_name`, `orderNumber`,
+       * `accountname`, `status`, `effectiveStartDate`, `id`.
+       */
+      async function youniumSearchOrders(query, limit) {
+        const bridge = window.YouniumBridge;
+        if (!bridge?.searchOrders) {
+          throw new Error("YouniumBridge.searchOrders not available — update userscript to v1.9.7+.");
+        }
+        return await bridge.searchOrders(query, { pageSize: limit || 20 });
+      }
+
+      /**
+       * Build the order detail URL.
+       *   https://<region>.younium.com/orders/<orderId>
+       * Region is captured by the bridge from the user's logged-in
+       * Younium tab. Falls back to "eu" if not yet known.
+       */
+      async function youniumOrderUrl(orderId) {
+        const tokenStatus = await window.YouniumBridge?.getTokenStatus?.();
+        const region = tokenStatus?.region || "eu";
+        return "https://" + region + ".younium.com/orders/" + encodeURIComponent(orderId);
+      }
+
+      // Younium status numbers (verified from the orders list — 5 = Draft,
+      // 9 = Active. Others appear in deal lifecycle: 1 = Created, etc.)
+      const YOUNIUM_STATUS_LABEL = {
+        1: "Created",
+        5: "Draft",
+        9: "Active",
+      };
+
+      /**
+       * Auto-find the best Younium order for the project currently being
+       * edited. Strategy is different from Oneflow/HubSpot because
+       * Younium orders carry a NATIVE plant_id field — we can do exact
+       * matching instead of fuzzy name matching.
+       *
+       * Decision tree:
+       *   1. No plant ID in project name → "need plant ID" error
+       *   2. Exactly 1 order with matching plant_id → auto-fill
+       *   3. Multiple matching orders → picker (the newest is on top,
+       *      but the user picks which year/order they want)
+       *   4. No matching orders → "no match" error
+       */
+      async function findYouniumOrderForEditDialog() {
+        const statusEl = els?.youniumFindStatus;
+        const inputEl = els?.fYouniumUrl;
+        if (!statusEl || !inputEl) return;
+        statusEl.className = "oneflowFindStatus";
+        statusEl.textContent = "Searching Younium…";
+        const oldPicker = statusEl.parentElement?.querySelector(".oneflowFindPicker");
+        if (oldPicker) oldPicker.remove();
+
+        const projName = String(els?.fName?.value ?? "").trim();
+        const plantMatch = projName.match(/^\s*(\d+)/);
+        const plantId = plantMatch ? plantMatch[1] : "";
+        if (!plantId) {
+          statusEl.className = "oneflowFindStatus error";
+          statusEl.textContent = "Project name needs to start with a plant ID (e.g. \"3299 - …\").";
+          return;
+        }
+
+        let json;
+        try {
+          json = await youniumSearchOrders(plantId, 20);
+        } catch (e) {
+          statusEl.className = "oneflowFindStatus error";
+          statusEl.textContent = String(e?.message ?? e ?? "Younium search failed.");
+          return;
+        }
+        const allResults = Array.isArray(json?.result) ? json.result : [];
+        // EXACT match on plant_id — search returns false positives when
+        // the plant ID happens to appear in an order number (e.g.
+        // "3299" inside "O-013299"). Filter strictly.
+        const matches = allResults.filter((o) => String(o?.plant_id ?? "").trim() === plantId);
+        if (matches.length === 0) {
+          statusEl.className = "oneflowFindStatus error";
+          statusEl.textContent = "No matching Younium orders found for plant " + plantId + ".";
+          return;
+        }
+        // Sort by effectiveStartDate desc — newest first.
+        matches.sort((a, b) => {
+          const at = Date.parse(String(a?.effectiveStartDate ?? "")) || 0;
+          const bt = Date.parse(String(b?.effectiveStartDate ?? "")) || 0;
+          return bt - at;
+        });
+
+        if (matches.length === 1) {
+          inputEl.value = await youniumOrderUrl(matches[0].id);
+          statusEl.className = "oneflowFindStatus success";
+          statusEl.textContent = "Matched: " + (matches[0].orderNumber ?? matches[0].id) +
+            (matches[0].accountname ? " · " + matches[0].accountname : "");
+          return;
+        }
+
+        // Multiple matches → picker. Newest is on top; user picks.
+        statusEl.className = "oneflowFindStatus";
+        statusEl.textContent = "Multiple orders for plant " + plantId + " — pick one (newest first):";
+        const picker = document.createElement("div");
+        picker.className = "oneflowFindPicker";
+        for (const entry of matches.slice(0, 10)) {
+          const item = document.createElement("button");
+          item.type = "button";
+          item.className = "oneflowFindPickerItem";
+          const left = document.createElement("div");
+          const name = document.createElement("div");
+          name.className = "oneflowFindPickerName";
+          name.textContent =
+            (entry.orderNumber ?? "(no number)") +
+            (entry.plant_name ? " — " + entry.plant_name : "");
+          const meta = document.createElement("div");
+          meta.className = "oneflowFindPickerMeta";
+          const statusLabel = YOUNIUM_STATUS_LABEL[entry.status] ?? ("status " + entry.status);
+          const date = entry.effectiveStartDate ? String(entry.effectiveStartDate).slice(0, 10) : "";
+          meta.textContent = statusLabel +
+            (entry.accountname ? " · " + entry.accountname : "") +
+            (date ? " · " + date : "");
+          left.appendChild(name);
+          left.appendChild(meta);
+          item.appendChild(left);
+          item.addEventListener("click", async () => {
+            inputEl.value = await youniumOrderUrl(entry.id);
+            statusEl.className = "oneflowFindStatus success";
+            statusEl.textContent = "Selected: " + (entry.orderNumber ?? entry.id);
+            picker.remove();
+          });
+          picker.appendChild(item);
+        }
+        statusEl.parentElement?.appendChild(picker);
+      }
+
+      // Wire the Younium 🔎 Find button via document delegation.
+      document.addEventListener("click", (e) => {
+        const t = /** @type {HTMLElement | null} */ (e.target);
+        if (!t) return;
+        if (t.id === "btnFindYounium" || t.closest?.("#btnFindYounium")) {
+          e.preventDefault();
+          void findYouniumOrderForEditDialog();
+        }
+      });
+
       // Diagnostic: window.__yn for DevTools testing:
       //   await window.__yn.me()        // current user
       //   await window.__yn.api("POST", "/api/data/query/order", { ... })
       //   await window.__yn.token()     // token cache status
       //   await window.__yn.refresh()   // force token refresh
+      //   await window.__yn.search("3299")
       try {
         window.__yn = {
           api: youniumApiRequest,
           me: youniumFetchCurrentUser,
+          search: youniumSearchOrders,
+          orderUrl: youniumOrderUrl,
           async token() { return await window.YouniumBridge?.getTokenStatus?.(); },
           async refresh() { return await window.YouniumBridge?.refreshToken?.(); },
         };
@@ -15116,6 +15272,8 @@
         oneflowFindStatus: document.getElementById("oneflowFindStatus"),
         btnFindHubspot: document.getElementById("btnFindHubspot"),
         hubspotFindStatus: document.getElementById("hubspotFindStatus"),
+        btnFindYounium: document.getElementById("btnFindYounium"),
+        youniumFindStatus: document.getElementById("youniumFindStatus"),
         fYouniumUrl: document.getElementById("fYouniumUrl"),
         fHubspotUrl: document.getElementById("fHubspotUrl"),
         fRocketlaneUrl: document.getElementById("fRocketlaneUrl"),
@@ -21439,6 +21597,12 @@
           els.hubspotFindStatus.className = "oneflowFindStatus";
           els.hubspotFindStatus.textContent = "";
           const stalePicker = els.hubspotFindStatus.parentElement?.querySelector(".oneflowFindPicker");
+          if (stalePicker) stalePicker.remove();
+        }
+        if (els.youniumFindStatus) {
+          els.youniumFindStatus.className = "oneflowFindStatus";
+          els.youniumFindStatus.textContent = "";
+          const stalePicker = els.youniumFindStatus.parentElement?.querySelector(".oneflowFindPicker");
           if (stalePicker) stalePicker.remove();
         }
         if (els.fYouniumUrl) els.fYouniumUrl.value = p.youniumUrl ?? "";
