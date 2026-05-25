@@ -16831,37 +16831,51 @@
               err.textContent = msg;
               zdBody.appendChild(err);
             };
-            // Format a Zendesk timestamp as an absolute date/time. Mirrors
-            // how Zendesk's own UI formats it: same-day → "Today HH:MM",
-            // yesterday → "Yesterday HH:MM", within 7 days → "Mon HH:MM",
-            // older → "12 May 15:53". Norwegian agents read it the same way
-            // they read it in Zendesk itself.
+            // All Zendesk timestamps render in Norwegian locale (nb-NO)
+            // with Europe/Oslo timezone and 24-hour clock. This matches
+            // how the Zendesk web UI itself displays times to Norwegian
+            // agents and avoids the AM/PM ambiguity that would creep in
+            // if we let the browser pick the locale automatically.
+            const ZD_TZ = "Europe/Oslo";
+            const ZD_LOCALE = "nb-NO";
+            // Same-day check has to be done IN Oslo timezone, otherwise
+            // a 23:30 reply on the user's UTC day might be "yesterday"
+            // in Oslo or vice-versa. We compare the date-part rendered
+            // in the target timezone.
+            const zdDateKeyInTz = (d) =>
+              d.toLocaleDateString(ZD_LOCALE, { timeZone: ZD_TZ, year: "numeric", month: "2-digit", day: "2-digit" });
             const zdAbsTime = (iso) => {
               const ts = Date.parse(String(iso ?? ""));
               if (!Number.isFinite(ts)) return "";
               const d = new Date(ts);
               const now = new Date();
-              const sameDay = d.toDateString() === now.toDateString();
+              const todayKey = zdDateKeyInTz(now);
+              const dayKey = zdDateKeyInTz(d);
               const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
-              const isYesterday = d.toDateString() === yesterday.toDateString();
-              const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-              if (sameDay) return "Today " + time;
-              if (isYesterday) return "Yesterday " + time;
+              const yesterdayKey = zdDateKeyInTz(yesterday);
+              const time = d.toLocaleTimeString(ZD_LOCALE, {
+                timeZone: ZD_TZ, hour: "2-digit", minute: "2-digit", hour12: false,
+              });
+              if (dayKey === todayKey) return "I dag " + time;
+              if (dayKey === yesterdayKey) return "I går " + time;
               const within7d = (now.getTime() - ts) < 7 * 24 * 60 * 60 * 1000;
               if (within7d) {
-                const weekday = d.toLocaleDateString(undefined, { weekday: "short" });
+                const weekday = d.toLocaleDateString(ZD_LOCALE, { timeZone: ZD_TZ, weekday: "short" });
                 return weekday + " " + time;
               }
-              return d.toLocaleDateString(undefined, { day: "2-digit", month: "short" }) + " " + time;
+              const dateStr = d.toLocaleDateString(ZD_LOCALE, { timeZone: ZD_TZ, day: "2-digit", month: "short" });
+              return dateStr + " " + time;
             };
             const zdFullTime = (iso) => {
               const ts = Date.parse(String(iso ?? ""));
               if (!Number.isFinite(ts)) return "";
               try {
-                return new Date(ts).toLocaleString(undefined, {
+                return new Date(ts).toLocaleString(ZD_LOCALE, {
+                  timeZone: ZD_TZ,
                   year: "numeric", month: "short", day: "2-digit",
                   hour: "2-digit", minute: "2-digit", second: "2-digit",
-                });
+                  hour12: false,
+                }) + " (Oslo)";
               } catch { return new Date(ts).toISOString(); }
             };
 
