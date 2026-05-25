@@ -2522,7 +2522,6 @@
         text-transform: none;
         letter-spacing: 0;
       }
-      .ownerTeamGroupBody.collapsed { display: none; }
       /* Outer wrapper #ownerStatusRows holds the team-group sections.
          Sections must stack vertically as plain blocks (Team kulde
          on top, Others below) — NOT in a grid, or they'd get squeezed
@@ -2541,6 +2540,12 @@
         gap: 10px;
         width: 100%;
       }
+      /* Collapse rule MUST come after the grid rule above and match the
+         compound selector so it wins on equal specificity. Without this,
+         clicking the team-group chevron would set the class but the
+         grid `display: grid` would still apply, so the body never hides. */
+      .ownerTeamGroupBody.ownerStatusRows.collapsed,
+      .ownerTeamGroupBody.collapsed { display: none; }
 
       /* Card layout for each owner row */
       .ownerStatusRow {
