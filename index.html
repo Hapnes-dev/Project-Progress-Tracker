@@ -696,8 +696,66 @@
       }
       .zendeskMsgBody {
         color: var(--text);
-        white-space: pre-wrap;
         overflow-wrap: anywhere;
+      }
+      /* Element-level styling for the sanitized Zendesk HTML. Mirror
+         the visual rhythm Zendesk's own UI uses: tight paragraph spacing,
+         readable lists, accented links. */
+      .zendeskMsgBody p { margin: 0 0 6px; }
+      .zendeskMsgBody p:last-child { margin-bottom: 0; }
+      .zendeskMsgBody br + br { display: none; } /* collapse Zendesk's "blank line" double-breaks */
+      .zendeskMsgBody ul, .zendeskMsgBody ol { margin: 4px 0 6px; padding-left: 20px; }
+      .zendeskMsgBody li { margin: 0 0 2px; }
+      .zendeskMsgBody h1,
+      .zendeskMsgBody h2,
+      .zendeskMsgBody h3,
+      .zendeskMsgBody h4 {
+        margin: 8px 0 4px;
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .zendeskMsgBody blockquote {
+        margin: 4px 0;
+        padding: 4px 10px;
+        border-left: 3px solid var(--hairline-strong);
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .zendeskMsgBody a {
+        color: var(--accent);
+        text-decoration: underline;
+      }
+      .zendeskMsgBody a:hover { filter: brightness(1.15); }
+      .zendeskMsgBody code {
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size: 11px;
+        background: rgba(255, 255, 255, 0.06);
+        border-radius: 4px;
+        padding: 1px 4px;
+      }
+      .zendeskMsgBody pre {
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size: 11px;
+        background: rgba(0, 0, 0, 0.32);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 8px 10px;
+        margin: 4px 0;
+        overflow-x: auto;
+      }
+      .zendeskMsgBody hr {
+        border: none;
+        border-top: 1px dashed var(--hairline);
+        margin: 8px 0;
+      }
+      .zendeskMsgBody table {
+        border-collapse: collapse;
+        margin: 4px 0;
+      }
+      .zendeskMsgBody th, .zendeskMsgBody td {
+        border: 1px solid var(--border);
+        padding: 4px 8px;
+        font-size: 11px;
       }
       /* Inline images from markdown ![alt](url) inside the body */
       .zendeskMsgBody img.zendeskMsgInlineImg {
@@ -17637,11 +17695,110 @@
                 if (v < 1024 * 1024) return Math.round(v / 1024) + " KB";
                 return (v / (1024 * 1024)).toFixed(1) + " MB";
               };
-              // Render the comment body into a fragment: plain text +
-              // inline images parsed from markdown ![alt](url) syntax.
-              // Only https:// URLs are turned into <img>; other URLs are
-              // kept as text so we don't accidentally render data:/javascript:.
-              const renderCommentBody = (text) => {
+              // Render the comment body. Zendesk returns BOTH a plain
+               // `body` field and a fully-formatted `html_body`. We use
+               // html_body sanitized through an allowlist so the rendered
+               // output matches what Zendesk's own UI shows — bold,
+               // italics, lists, embedded images, signatures, etc.
+              const ZD_IMG_HOST_RE = [
+                /(?:^|\.)zendesk\.com$/i,
+                /(?:^|\.)zdusercontent\.com$/i, // Zendesk's CDN for user-uploaded images
+                /(?:^|\.)zdassets\.com$/i,
+                /(?:^|\.)cloudfront\.net$/i,
+                /(?:^|\.)amazonaws\.com$/i,
+              ];
+              const sanitizeZendeskHtml = (rawHtml) => {
+                const ALLOWED_TAGS = new Set([
+                  "p", "br", "div", "span",
+                  "b", "strong", "i", "em", "u", "s", "strike", "del",
+                  "ul", "ol", "li", "a", "img",
+                  "code", "pre", "blockquote",
+                  "h1", "h2", "h3", "h4", "h5", "h6",
+                  "table", "thead", "tbody", "tr", "td", "th",
+                  "hr",
+                ]);
+                const ALLOWED_ATTRS = new Set([
+                  "href", "target", "rel", "src", "alt", "title",
+                  "width", "height", "class", "style",
+                  "colspan", "rowspan",
+                ]);
+                const SAFE_URL = /^(?:https?:|mailto:|tel:)/i;
+                const isAllowedImg = (raw) => {
+                  const s = String(raw || "").trim();
+                  if (!s) return false;
+                  if (s.startsWith("data:image/")) return true;
+                  try {
+                    const u = new URL(s, "https://iwmac.zendesk.com");
+                    if (!/^https?:$/i.test(u.protocol)) return false;
+                    return ZD_IMG_HOST_RE.some((rx) => rx.test(u.host));
+                  } catch { return false; }
+                };
+                // Allow a small allowlist of safe-ish style declarations
+                // (Zendesk emits text-align, font-weight, color etc on
+                // signatures). Strip anything else, including expressions.
+                const SAFE_STYLE_PROPS = new Set([
+                  "color", "background-color", "font-weight", "font-style",
+                  "text-align", "text-decoration", "margin", "margin-left",
+                  "padding-left", "list-style-type",
+                ]);
+                const sanitizeStyle = (raw) => {
+                  return String(raw || "")
+                    .split(";")
+                    .map((p) => p.trim())
+                    .filter(Boolean)
+                    .filter((p) => {
+                      const [k, v] = p.split(":").map((s) => s.trim().toLowerCase());
+                      if (!SAFE_STYLE_PROPS.has(k)) return false;
+                      // Disallow url() / expression() / javascript: inside values.
+                      if (/url\s*\(|expression\s*\(|javascript:/i.test(v)) return false;
+                      return true;
+                    })
+                    .join("; ");
+                };
+                const doc = new DOMParser().parseFromString(String(rawHtml ?? ""), "text/html");
+                const clean = (node) => {
+                  for (const child of Array.from(node.childNodes)) {
+                    if (child.nodeType !== 1) continue;
+                    const tag = String(child.tagName || "").toLowerCase();
+                    if (!ALLOWED_TAGS.has(tag)) {
+                      const text = doc.createTextNode(child.textContent || "");
+                      node.replaceChild(text, child);
+                      continue;
+                    }
+                    if (tag === "img") {
+                      const src = child.getAttribute("src") || "";
+                      if (!isAllowedImg(src)) { node.removeChild(child); continue; }
+                      child.classList.add("zendeskMsgInlineImg");
+                      child.setAttribute("loading", "lazy");
+                      child.setAttribute("referrerpolicy", "no-referrer");
+                    }
+                    for (const attr of Array.from(child.attributes)) {
+                      const name = String(attr.name || "").toLowerCase();
+                      if (!ALLOWED_ATTRS.has(name)) { child.removeAttribute(attr.name); continue; }
+                      if (name === "href") {
+                        const v = String(attr.value || "").trim();
+                        if (!SAFE_URL.test(v)) child.removeAttribute("href");
+                        else if (tag === "a") {
+                          child.setAttribute("target", "_blank");
+                          child.setAttribute("rel", "noopener noreferrer");
+                        }
+                      }
+                      if (name === "style") {
+                        const cleaned = sanitizeStyle(attr.value);
+                        if (cleaned) child.setAttribute("style", cleaned);
+                        else child.removeAttribute("style");
+                      }
+                    }
+                    clean(child);
+                  }
+                };
+                clean(doc.body);
+                return doc.body.innerHTML;
+              };
+              // Fallback for comments that only have a plain `body`
+              // (rare but possible). Renders text + inline markdown
+              // images. We only call this when html_body is missing.
+              const renderCommentBodyPlain = (text) => {
                 const frag = document.createDocumentFragment();
                 const src = String(text ?? "");
                 const re = /!\[([^\]]*)\]\((https:\/\/[^)\s]+)\)/g;
@@ -17657,18 +17814,6 @@
                   img.alt = m[1] || "";
                   img.loading = "lazy";
                   img.referrerPolicy = "no-referrer";
-                  img.addEventListener("error", () => {
-                    // If the image can't load (e.g. session lost or
-                    // CSP), gracefully degrade to a download link.
-                    const link = document.createElement("a");
-                    link.href = m[2];
-                    link.target = "_blank";
-                    link.rel = "noopener noreferrer";
-                    link.className = "zendeskMsgFile";
-                    link.innerHTML = "📎 <span class=\"zendeskMsgFileName\"></span>";
-                    link.querySelector(".zendeskMsgFileName").textContent = m[1] || "image";
-                    img.replaceWith(link);
-                  });
                   frag.appendChild(img);
                   lastIdx = m.index + m[0].length;
                 }
@@ -17759,7 +17904,30 @@
                 }
                 const body = document.createElement("div");
                 body.className = "zendeskMsgBody";
-                body.appendChild(renderCommentBody(c?.body));
+                // Prefer Zendesk's html_body — it matches the agent UI
+                // formatting exactly (bold, italic, lists, images,
+                // signatures). Sanitized through an allowlist before
+                // insertion. Fall back to plain `body` with markdown
+                // image parsing if html_body is unexpectedly missing.
+                const htmlBody = String(c?.html_body ?? "").trim();
+                if (htmlBody) {
+                  body.innerHTML = sanitizeZendeskHtml(htmlBody);
+                  // Hook image errors → graceful file-link fallback.
+                  for (const img of body.querySelectorAll("img")) {
+                    img.addEventListener("error", () => {
+                      const link = document.createElement("a");
+                      link.href = img.src;
+                      link.target = "_blank";
+                      link.rel = "noopener noreferrer";
+                      link.className = "zendeskMsgFile";
+                      link.innerHTML = "📎 <span class=\"zendeskMsgFileName\"></span>";
+                      link.querySelector(".zendeskMsgFileName").textContent = img.alt || "image";
+                      img.replaceWith(link);
+                    });
+                  }
+                } else {
+                  body.appendChild(renderCommentBodyPlain(c?.body));
+                }
                 msg.appendChild(head);
                 msg.appendChild(body);
                 const attRow = renderAttachments(c?.attachments);
