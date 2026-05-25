@@ -2940,6 +2940,30 @@
       .ownerTeamGroupBody.ownerStatusRows.collapsed,
       .ownerTeamGroupBody.collapsed { display: none; }
 
+      /* Zendesk panel collapse — DOES NOT use the chat-history's animated
+         max-height transition. Reason: the Zendesk panel's body contains
+         expandable ticket cards whose borders compress into visible
+         horizontal stripes mid-animation (visual artifact). A clean
+         display:none on collapse skips the animation entirely.
+         Targets the SAME .chatHistoryBody class but only when the panel
+         also carries .zendeskPanel + .chatPanelCollapsed, so we don't
+         affect Rocketlane chat at all. */
+      .zendeskPanel.chatPanelCollapsed .chatHistoryBody {
+        display: none !important;
+        max-height: 0 !important;
+        transition: none !important;
+        opacity: 0;
+        padding: 0 !important;
+        margin: 0 !important;
+        border-width: 0 !important;
+      }
+      /* Also remove the height/padding/border transitions on the
+         non-collapsed Zendesk body so the open→close isn't briefly
+         animated either. */
+      .zendeskPanel .chatHistoryBody {
+        transition: none !important;
+      }
+
       /* Card layout for each owner row */
       .ownerStatusRow {
         display: grid;
