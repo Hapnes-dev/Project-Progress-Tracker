@@ -556,12 +556,28 @@
       .zendeskTaskStatus.zd-hold     { background: rgba(251, 113, 133, 0.15); color: #fb7185; border-color: rgba(251, 113, 133, 0.32); }
       .zendeskTaskStatus.zd-solved   { background: rgba(52, 211, 153, 0.15);  color: #34d399; border-color: rgba(52, 211, 153, 0.32); }
       .zendeskTaskStatus.zd-closed   { background: rgba(148, 163, 184, 0.15); color: var(--muted2); border-color: var(--hairline); }
+      /* Middle column = subject (bold) stacked over "Updated 5h ago" line.
+         The min-width:0 lets ellipsis kick in when subjects are long. */
+      .zendeskTaskMiddle {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+        overflow: hidden;
+      }
       .zendeskTaskSubject {
         font-weight: 600;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
         min-width: 0;
+      }
+      .zendeskTaskWhen {
+        color: var(--muted2);
+        font-size: 11px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       .zendeskTaskMeta {
         color: var(--muted2);
@@ -16815,15 +16831,38 @@
               err.textContent = msg;
               zdBody.appendChild(err);
             };
+            // Format a Zendesk timestamp as an absolute date for hover-title
+            // (full precision) — paired with the existing relative formatter
+            // for the inline label. Norwegian-friendly local time.
+            const zdAbsTime = (iso) => {
+              const ts = Date.parse(String(iso ?? ""));
+              if (!Number.isFinite(ts)) return "";
+              try {
+                return new Date(ts).toLocaleString(undefined, {
+                  year: "numeric", month: "short", day: "2-digit",
+                  hour: "2-digit", minute: "2-digit",
+                });
+              } catch { return new Date(ts).toISOString(); }
+            };
+
             const renderZdTickets = (tickets) => {
               if (!Array.isArray(tickets) || tickets.length === 0) {
                 renderZdEmpty();
                 return;
               }
+              // Defensive client-side sort by updated_at desc — the API
+              // already sorts this way (sort_by=updated_at&sort_order=desc)
+              // but if a future endpoint change reorders the payload, the
+              // user-visible order stays correct.
+              const sorted = tickets.slice().sort((a, b) => {
+                const at = Date.parse(String(a?.updated_at ?? "")) || 0;
+                const bt = Date.parse(String(b?.updated_at ?? "")) || 0;
+                return bt - at;
+              });
               zdBody.innerHTML = "";
               const list = document.createElement("div");
               list.className = "zendeskTaskList";
-              for (const t of tickets) {
+              for (const t of sorted) {
                 const row = document.createElement("a");
                 row.className = "zendeskTaskRow";
                 row.href = "https://iwmac.zendesk.com/agent/tickets/" + encodeURIComponent(t.id);
@@ -16834,16 +16873,29 @@
                 statusEl.className = "zendeskTaskStatus " + zdStatusClass(t.status);
                 statusEl.textContent = String(t.status ?? "open");
 
+                // Middle column: subject on top, timestamp underneath
+                // (smaller, muted). Two-line layout keeps the row readable
+                // even with long subjects.
+                const middle = document.createElement("div");
+                middle.className = "zendeskTaskMiddle";
                 const subject = document.createElement("span");
                 subject.className = "zendeskTaskSubject";
                 subject.textContent = String(t.subject ?? "(no subject)");
+                middle.appendChild(subject);
+                if (t?.updated_at) {
+                  const when = document.createElement("span");
+                  when.className = "zendeskTaskWhen";
+                  when.textContent = "Updated " + formatRelativeTimeShort(t.updated_at);
+                  when.title = zdAbsTime(t.updated_at);
+                  middle.appendChild(when);
+                }
 
                 const meta = document.createElement("span");
                 meta.className = "zendeskTaskMeta";
                 meta.textContent = "#" + t.id;
 
                 row.appendChild(statusEl);
-                row.appendChild(subject);
+                row.appendChild(middle);
                 row.appendChild(meta);
                 list.appendChild(row);
               }
