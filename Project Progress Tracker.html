@@ -699,6 +699,68 @@
         white-space: pre-wrap;
         overflow-wrap: anywhere;
       }
+      /* Inline images from markdown ![alt](url) inside the body */
+      .zendeskMsgBody img.zendeskMsgInlineImg {
+        max-width: 100%;
+        max-height: 280px;
+        border-radius: 6px;
+        display: block;
+        margin: 4px 0;
+        border: 1px solid var(--border);
+      }
+      /* Attachment row underneath the comment body — file chips and image thumbs. */
+      .zendeskMsgAttachments {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px dashed var(--hairline);
+      }
+      .zendeskMsgImgThumb {
+        display: inline-block;
+        line-height: 0;
+        border-radius: 6px;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.2);
+        transition: border-color 120ms ease;
+      }
+      .zendeskMsgImgThumb:hover { border-color: var(--accent-stroke); }
+      .zendeskMsgImgThumb img {
+        max-width: 200px;
+        max-height: 140px;
+        display: block;
+      }
+      .zendeskMsgFile {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 6px;
+        background: var(--surface-1);
+        border: 1px solid var(--border);
+        color: var(--text);
+        text-decoration: none;
+        font-size: 11px;
+        font-weight: 500;
+        max-width: 280px;
+        overflow: hidden;
+      }
+      .zendeskMsgFile:hover {
+        background: var(--surface-2);
+        border-color: var(--hairline-strong);
+      }
+      .zendeskMsgFileName {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .zendeskMsgFileSize {
+        color: var(--muted2);
+        font-size: 10px;
+        white-space: nowrap;
+      }
       /* Compose area for posting a reply */
       .zendeskCompose {
         display: grid;
@@ -17567,6 +17629,109 @@
               // by default. A "Show earlier replies (N more)" button at
               // the top expands the full thread.
               const SHOW_RECENT_COUNT = 3;
+              // Format bytes as a human-readable size (KB/MB).
+              const formatBytes = (n) => {
+                const v = Number(n);
+                if (!Number.isFinite(v) || v <= 0) return "";
+                if (v < 1024) return v + " B";
+                if (v < 1024 * 1024) return Math.round(v / 1024) + " KB";
+                return (v / (1024 * 1024)).toFixed(1) + " MB";
+              };
+              // Render the comment body into a fragment: plain text +
+              // inline images parsed from markdown ![alt](url) syntax.
+              // Only https:// URLs are turned into <img>; other URLs are
+              // kept as text so we don't accidentally render data:/javascript:.
+              const renderCommentBody = (text) => {
+                const frag = document.createDocumentFragment();
+                const src = String(text ?? "");
+                const re = /!\[([^\]]*)\]\((https:\/\/[^)\s]+)\)/g;
+                let lastIdx = 0;
+                let m;
+                while ((m = re.exec(src)) !== null) {
+                  if (m.index > lastIdx) {
+                    frag.appendChild(document.createTextNode(src.slice(lastIdx, m.index)));
+                  }
+                  const img = document.createElement("img");
+                  img.className = "zendeskMsgInlineImg";
+                  img.src = m[2];
+                  img.alt = m[1] || "";
+                  img.loading = "lazy";
+                  img.referrerPolicy = "no-referrer";
+                  img.addEventListener("error", () => {
+                    // If the image can't load (e.g. session lost or
+                    // CSP), gracefully degrade to a download link.
+                    const link = document.createElement("a");
+                    link.href = m[2];
+                    link.target = "_blank";
+                    link.rel = "noopener noreferrer";
+                    link.className = "zendeskMsgFile";
+                    link.innerHTML = "📎 <span class=\"zendeskMsgFileName\"></span>";
+                    link.querySelector(".zendeskMsgFileName").textContent = m[1] || "image";
+                    img.replaceWith(link);
+                  });
+                  frag.appendChild(img);
+                  lastIdx = m.index + m[0].length;
+                }
+                if (lastIdx < src.length) {
+                  frag.appendChild(document.createTextNode(src.slice(lastIdx)));
+                }
+                return frag;
+              };
+              // Render a row of attachments below the body. Image MIME
+              // types render as clickable thumbnails; other types as
+              // file chips with name + size. All open in a new tab.
+              const renderAttachments = (attachments) => {
+                if (!Array.isArray(attachments) || attachments.length === 0) return null;
+                const row = document.createElement("div");
+                row.className = "zendeskMsgAttachments";
+                for (const a of attachments) {
+                  const url = String(a?.content_url ?? "").trim();
+                  if (!url) continue;
+                  const mime = String(a?.content_type ?? "").toLowerCase();
+                  const fname = String(a?.file_name ?? "attachment");
+                  const isImage = mime.startsWith("image/");
+                  if (isImage) {
+                    const link = document.createElement("a");
+                    link.href = url;
+                    link.target = "_blank";
+                    link.rel = "noopener noreferrer";
+                    link.className = "zendeskMsgImgThumb";
+                    link.title = fname + (a?.size ? " — " + formatBytes(a.size) : "");
+                    const thumbUrl =
+                      (Array.isArray(a?.thumbnails) && a.thumbnails[0]?.content_url) || url;
+                    const img = document.createElement("img");
+                    img.src = thumbUrl;
+                    img.alt = fname;
+                    img.loading = "lazy";
+                    img.referrerPolicy = "no-referrer";
+                    link.appendChild(img);
+                    row.appendChild(link);
+                  } else {
+                    const link = document.createElement("a");
+                    link.href = url;
+                    link.target = "_blank";
+                    link.rel = "noopener noreferrer";
+                    link.className = "zendeskMsgFile";
+                    link.title = fname;
+                    const icon = document.createElement("span");
+                    icon.textContent = "📎";
+                    icon.setAttribute("aria-hidden", "true");
+                    const name = document.createElement("span");
+                    name.className = "zendeskMsgFileName";
+                    name.textContent = fname;
+                    link.appendChild(icon);
+                    link.appendChild(name);
+                    if (a?.size) {
+                      const sz = document.createElement("span");
+                      sz.className = "zendeskMsgFileSize";
+                      sz.textContent = formatBytes(a.size);
+                      link.appendChild(sz);
+                    }
+                    row.appendChild(link);
+                  }
+                }
+                return row.childNodes.length ? row : null;
+              };
               const renderComment = (c) => {
                 const author = userById[c?.author_id];
                 const authorName = (author?.name || ("User #" + (c?.author_id ?? "?"))).trim();
@@ -17594,9 +17759,11 @@
                 }
                 const body = document.createElement("div");
                 body.className = "zendeskMsgBody";
-                body.textContent = String(c?.body ?? "");
+                body.appendChild(renderCommentBody(c?.body));
                 msg.appendChild(head);
                 msg.appendChild(body);
+                const attRow = renderAttachments(c?.attachments);
+                if (attRow) msg.appendChild(attRow);
                 return msg;
               };
 
