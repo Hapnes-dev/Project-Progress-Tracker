@@ -1714,6 +1714,69 @@
         white-space: nowrap;
       }
 
+      /* Oneflow auto-find row inside the Edit project dialog: the input
+         takes most of the width, the "🔎 Find" button hugs the right. */
+      .oneflowFindRow {
+        display: flex;
+        gap: 6px;
+        align-items: stretch;
+      }
+      .oneflowFindRow .input { flex: 1; min-width: 0; }
+      .oneflowFindBtn {
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+      .oneflowFindStatus {
+        margin-top: 6px;
+        font-size: 11px;
+        color: var(--muted2);
+        min-height: 14px;
+      }
+      .oneflowFindStatus.error { color: rgba(251, 113, 133, 0.95); }
+      .oneflowFindStatus.success { color: rgba(52, 211, 153, 0.95); }
+      /* Multi-match picker list — appears below the input when more than
+         one plausible Oneflow document matches the project. */
+      .oneflowFindPicker {
+        margin-top: 8px;
+        max-height: 240px;
+        overflow-y: auto;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.18);
+        display: grid;
+        gap: 4px;
+        padding: 4px;
+      }
+      .oneflowFindPickerItem {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        align-items: center;
+        padding: 8px 10px;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid transparent;
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--text);
+        text-align: left;
+      }
+      .oneflowFindPickerItem:hover {
+        background: rgba(255, 255, 255, 0.08);
+        border-color: var(--hairline-strong);
+      }
+      .oneflowFindPickerName {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 600;
+      }
+      .oneflowFindPickerMeta {
+        font-size: 10.5px;
+        color: var(--muted2);
+        white-space: nowrap;
+      }
+
       /* Compact toolbar row of project link buttons (Zendesk / Oneflow /
          Younium / HubSpot / Rocketlane). Mirrors the .btn style used by
          "🚀 Rocketlane", "📁 Files", "📦 Order info" in the project header. */
@@ -6151,14 +6214,23 @@
               inputmode="url"
             />
           </div>
-          <div>
+          <div class="oneflowLinkBlock">
             <label class="small" for="fOneflowUrl">Oneflow link</label>
-            <input
-              class="input"
-              id="fOneflowUrl"
-              placeholder="Paste Oneflow link (or keep empty)"
-              inputmode="url"
-            />
+            <div class="oneflowFindRow">
+              <input
+                class="input"
+                id="fOneflowUrl"
+                placeholder="Paste Oneflow link (or keep empty)"
+                inputmode="url"
+              />
+              <button
+                type="button"
+                class="btn oneflowFindBtn"
+                id="btnFindOneflow"
+                title="Search Oneflow for a contract matching this project (plant ID + name)"
+              >🔎 Find</button>
+            </div>
+            <div class="oneflowFindStatus" id="oneflowFindStatus" aria-live="polite"></div>
           </div>
           <div>
             <label class="small" for="fYouniumUrl">Younium link</label>
@@ -7586,14 +7658,222 @@
         return await oneflowApiRequest("GET", "/positions/me");
       }
 
+      /**
+       * Search Oneflow for agreements (Oneflow's internal name for
+       * contracts/documents). Returns an array of items with at minimum
+       * `{ id, name, state, parties }`. Empty array on no results, throws
+       * on bridge/auth errors.
+       *
+       * @param {string} query  Free-text search (Oneflow uses ?q=…)
+       * @param {number} [limit=20]
+       */
+      async function oneflowSearchAgreements(query, limit) {
+        const q = String(query ?? "").trim();
+        if (!q) return [];
+        const url = "/agreements/?q=" + encodeURIComponent(q) + "&limit=" + (limit || 20);
+        const json = await oneflowApiRequest("GET", url);
+        // Response shape: { collection: [...], count: N }
+        const list = Array.isArray(json?.collection) ? json.collection : [];
+        return list;
+      }
+
+      /**
+       * Build the public Oneflow URL for an agreement id. Verified via
+       * Playwright: the canonical link Oneflow's own UI uses for
+       * contract rows is `/documents/{id}`, which redirects to the
+       * agreement view in whatever collection it belongs to.
+       */
+      function oneflowDocumentUrl(agreementId) {
+        const id = String(agreementId ?? "").trim();
+        if (!id) return "";
+        return "https://app.oneflow.com/documents/" + encodeURIComponent(id);
+      }
+
+      /**
+       * Score how well an Oneflow agreement matches a tracker project.
+       * Higher = better match. Components:
+       *   • Plant-ID prefix match (strong signal):    +50
+       *   • Token overlap on names (Jaccard-ish):     0..+30
+       *   • Partner name appears in agreement parties: +20
+       * Anything ≥ 60 is considered "high confidence" → auto-fill OK.
+       */
+      function oneflowMatchScore(agreement, project, plantId, partner) {
+        const aName = String(agreement?.name ?? "").toLowerCase();
+        const pName = String(project?.name ?? "").toLowerCase();
+        let score = 0;
+        if (plantId) {
+          // Plant ID at start of both names = strongest indicator.
+          const aPrefix = (aName.match(/^\s*(\d+)/) || [])[1];
+          if (aPrefix && aPrefix === String(plantId)) score += 50;
+        }
+        // Token overlap on stripped names (ignore plant ID, punctuation).
+        const tokenize = (s) => String(s ?? "")
+          .toLowerCase()
+          .replace(/^\s*\d+\s*[-–:]?\s*/, "") // strip leading plant id
+          .replace(/[^a-zà-ÿæøå0-9\s]/gi, " ")
+          .split(/\s+/)
+          .filter((t) => t && t.length > 1);
+        const aTok = new Set(tokenize(agreement?.name));
+        const pTok = new Set(tokenize(project?.name));
+        if (aTok.size && pTok.size) {
+          let intersect = 0;
+          for (const t of pTok) if (aTok.has(t)) intersect += 1;
+          const denom = Math.max(aTok.size, pTok.size);
+          score += Math.round((intersect / denom) * 30);
+        }
+        if (partner) {
+          const partyMatch = Array.isArray(agreement?.parties) &&
+            agreement.parties.some((p) =>
+              String(p?.name ?? "").toLowerCase().includes(String(partner).toLowerCase())
+            );
+          if (partyMatch) score += 20;
+        }
+        return score;
+      }
+
+      const ONEFLOW_STATE_LABEL = {
+        0: "Draft",
+        1: "Pending",
+        2: "Overdue",
+        3: "Declined",
+        4: "Signed",
+        5: "Cancelled",
+      };
+
+      /**
+       * Auto-find the best Oneflow agreement for the project currently
+       * being edited. Reads values directly from the form fields so the
+       * user gets a match against whatever they've typed (even unsaved).
+       * If exactly one high-confidence match is found, fills the URL
+       * field. Otherwise renders a picker list under the field.
+       */
+      async function findOneflowDocumentForEditDialog() {
+        const statusEl = els?.oneflowFindStatus;
+        const inputEl = els?.fOneflowUrl;
+        if (!statusEl || !inputEl) return;
+        statusEl.className = "oneflowFindStatus";
+        statusEl.textContent = "Searching Oneflow…";
+        // Clear any prior picker.
+        const oldPicker = statusEl.parentElement?.querySelector(".oneflowFindPicker");
+        if (oldPicker) oldPicker.remove();
+
+        const projName = String(els?.fName?.value ?? "").trim();
+        const partner = String(els?.fPartner?.value ?? "").trim();
+        const plantMatch = projName.match(/^\s*(\d+)/);
+        const plantId = plantMatch ? plantMatch[1] : "";
+        if (!plantId && !projName) {
+          statusEl.className = "oneflowFindStatus error";
+          statusEl.textContent = "Need at least a project name (or plant ID) to search.";
+          return;
+        }
+
+        // Search by plant ID first (most precise); fall back to project
+        // name if plant ID returns nothing.
+        const projectShape = { name: projName };
+        let results = [];
+        try {
+          if (plantId) {
+            results = await oneflowSearchAgreements(plantId, 30);
+          }
+          if (results.length === 0 && projName) {
+            // Drop the plant-id prefix to widen the search.
+            const stripped = projName.replace(/^\s*\d+\s*[-–:]?\s*/, "").trim();
+            if (stripped && stripped.length > 2) {
+              results = await oneflowSearchAgreements(stripped, 30);
+            }
+          }
+        } catch (e) {
+          statusEl.className = "oneflowFindStatus error";
+          statusEl.textContent = String(e?.message ?? e ?? "Oneflow search failed.");
+          return;
+        }
+        if (results.length === 0) {
+          statusEl.className = "oneflowFindStatus error";
+          statusEl.textContent = "No matching Oneflow documents found.";
+          return;
+        }
+
+        // Score + sort.
+        const scored = results
+          .map((a) => ({ a, score: oneflowMatchScore(a, projectShape, plantId, partner) }))
+          .sort((x, y) => y.score - x.score);
+        const best = scored[0];
+        const second = scored[1];
+
+        // Auto-fill if best is high-confidence AND clearly better than #2.
+        const HIGH_CONFIDENCE = 60;
+        const CLEAR_LEAD = 20;
+        if (best.score >= HIGH_CONFIDENCE &&
+            (!second || best.score - second.score >= CLEAR_LEAD)) {
+          inputEl.value = oneflowDocumentUrl(best.a.id);
+          statusEl.className = "oneflowFindStatus success";
+          statusEl.textContent = "Matched: " + (best.a.name ?? "(no name)");
+          return;
+        }
+
+        // Otherwise show a picker with the top candidates.
+        statusEl.className = "oneflowFindStatus";
+        statusEl.textContent =
+          scored.length === 1
+            ? "Low-confidence match — confirm:"
+            : "Multiple candidates — pick one:";
+        const picker = document.createElement("div");
+        picker.className = "oneflowFindPicker";
+        for (const entry of scored.slice(0, 8)) {
+          const item = document.createElement("button");
+          item.type = "button";
+          item.className = "oneflowFindPickerItem";
+          const left = document.createElement("div");
+          const name = document.createElement("div");
+          name.className = "oneflowFindPickerName";
+          name.textContent = entry.a.name ?? "(no name)";
+          const meta = document.createElement("div");
+          meta.className = "oneflowFindPickerMeta";
+          const stateLabel = ONEFLOW_STATE_LABEL[entry.a.state] ?? "state " + entry.a.state;
+          const partyList = Array.isArray(entry.a.parties)
+            ? entry.a.parties.map((p) => p.name).filter(Boolean).join(", ")
+            : "";
+          meta.textContent = stateLabel + (partyList ? " · " + partyList : "");
+          left.appendChild(name);
+          left.appendChild(meta);
+          const scoreTag = document.createElement("div");
+          scoreTag.className = "oneflowFindPickerMeta";
+          scoreTag.textContent = entry.score + "%";
+          item.appendChild(left);
+          item.appendChild(scoreTag);
+          item.addEventListener("click", () => {
+            inputEl.value = oneflowDocumentUrl(entry.a.id);
+            statusEl.className = "oneflowFindStatus success";
+            statusEl.textContent = "Selected: " + (entry.a.name ?? "(no name)");
+            picker.remove();
+          });
+          picker.appendChild(item);
+        }
+        statusEl.parentElement?.appendChild(picker);
+      }
+
+      // Wire the 🔎 Find button click. Fire-and-forget; the function
+      // updates the status line + picker on its own.
+      try {
+        if (els?.btnFindOneflow) {
+          els.btnFindOneflow.addEventListener("click", () => {
+            void findOneflowDocumentForEditDialog();
+          });
+        }
+      } catch (_) {}
+
       // Diagnostic: window.__of for DevTools testing:
       //   await window.__of.me()                 // current user
       //   await window.__of.api("GET", "/dashboard/?collection_id=…")
       //   await window.__of.csrf()               // CSRF capture status
+      //   await window.__of.search("3299")       // agreement search
       try {
         window.__of = {
           api: oneflowApiRequest,
           me: oneflowFetchCurrentUser,
+          search: oneflowSearchAgreements,
+          score: oneflowMatchScore,
+          docUrl: oneflowDocumentUrl,
           async csrf() { return await window.OneflowBridge?.getCsrfStatus?.(); },
         };
       } catch (_) {}
@@ -14546,6 +14826,8 @@
         fDue: document.getElementById("fDue"),
         fOverviewUrl: document.getElementById("fOverviewUrl"),
         fOneflowUrl: document.getElementById("fOneflowUrl"),
+        btnFindOneflow: document.getElementById("btnFindOneflow"),
+        oneflowFindStatus: document.getElementById("oneflowFindStatus"),
         fYouniumUrl: document.getElementById("fYouniumUrl"),
         fHubspotUrl: document.getElementById("fHubspotUrl"),
         fRocketlaneUrl: document.getElementById("fRocketlaneUrl"),
@@ -20857,6 +21139,14 @@
         els.fDue.value = p.due ?? "";
         els.fOverviewUrl.value = p.overviewUrl ?? "";
         if (els.fOneflowUrl) els.fOneflowUrl.value = p.oneflowUrl ?? "";
+        // Clear any previous "🔎 Find" search status / picker when the
+        // dialog is reopened for a different project.
+        if (els.oneflowFindStatus) {
+          els.oneflowFindStatus.className = "oneflowFindStatus";
+          els.oneflowFindStatus.textContent = "";
+          const stalePicker = els.oneflowFindStatus.parentElement?.querySelector(".oneflowFindPicker");
+          if (stalePicker) stalePicker.remove();
+        }
         if (els.fYouniumUrl) els.fYouniumUrl.value = p.youniumUrl ?? "";
         if (els.fHubspotUrl) els.fHubspotUrl.value = p.hubspotUrl ?? "";
         els.fRocketlaneUrl.value = p.rocketlaneUrl ?? "";
