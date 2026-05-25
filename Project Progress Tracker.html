@@ -8298,42 +8298,46 @@
        * @param {(info: { page: number, fetched: number, total?: number, hasMore: boolean }) => void} [onProgress]
        */
       async function rocketlaneFetchAllProjects(onProgress) {
-        if (getSavedSessionKey()) {
-          return rocketlaneFetchAllProjectsLightV1(onProgress);
+        // ALWAYS prefer lightV1: it's the only endpoint that returns the
+        // `teamMembers` array on each project (the public /projects list
+        // ignores `includeFields=teamMembers` — verified via PowerShell).
+        // Without teamMembers we can't detect team membership for the
+        // +RL Project picker, which leaves member-projects invisible.
+        // lightV1 also paginates correctly via offset+limit (the public
+        // /projects endpoint ignores pageToken — we use page=N elsewhere
+        // for the lighter workload fetch).
+        if (typeof rocketlaneFetchAllProjectsLightV1 === "function") {
+          try {
+            return await rocketlaneFetchAllProjectsLightV1(onProgress);
+          } catch (e) {
+            console.warn("[Rocketlane] lightV1 failed, falling back to /projects + page=N", e);
+          }
         }
 
-        let pageToken = /** @type {string | undefined} */ (undefined);
-        let page = 0;
+        // Fallback: page=N pagination on the public /projects list.
+        // Note: teamMembers will be MISSING here, so membership detection
+        // will be empty and the picker will fall through to the task-
+        // assignee inference path.
+        let pageNum = 0;
         /** @type {any[]} */
         const all = [];
 
-        // Safety limit to prevent infinite loops if pagination breaks
         const MAX_PAGES = 250;
         const PAGE_SIZE = 100;
-        const seenTokens = new Set();
-
         const includeFields = await rocketlaneDetectProjectsIncludeFields();
 
-        while (true) {
-          page += 1;
+        while (pageNum < MAX_PAGES) {
+          pageNum += 1;
           const json = await rocketlaneFetchJson("/projects", {
             pageSize: PAGE_SIZE,
-            pageToken,
+            page: pageNum,
             includeFields: includeFields || undefined,
           });
-          const { data, pagination } = rocketlaneUnwrapList(json);
-          if (Array.isArray(data) && data.length) all.push(...data);
-
-          const nextToken = rocketlanePaginationNextToken(pagination);
-          const hasMore = Boolean(pagination?.hasMore) || !!nextToken;
-          const total = typeof pagination?.totalRecordCount === "number" ? pagination.totalRecordCount : undefined;
-          if (onProgress) onProgress({ page, fetched: all.length, total, hasMore });
-
-          if (!nextToken) break;
-          if (seenTokens.has(nextToken)) break;
-          seenTokens.add(nextToken);
-          if (page >= MAX_PAGES) break;
-          pageToken = nextToken;
+          const { data } = rocketlaneUnwrapList(json);
+          if (!Array.isArray(data) || data.length === 0) break;
+          all.push(...data);
+          if (onProgress) onProgress({ page: pageNum, fetched: all.length, total: undefined, hasMore: data.length === PAGE_SIZE });
+          if (data.length < PAGE_SIZE) break;
         }
 
         return all;
@@ -9210,9 +9214,85 @@
       //
       // Concurrency: serial chunked at MEMBER_FETCH_CHUNK so we don't
       // hammer the API with N parallel requests.
+      /**
+       * Aggregate per-teammate workload counts from a list of lightV1
+       * projects (each carrying its own `teamMembers` array). Honors the
+       * user-stated rule: a project counts toward a user's "in progress"
+       * total only if (a) the user is in the project's teamMembers AND
+       * (b) the project's Status field is "In progress".
+       *
+       * Side-effects: updates teamWorkloadCache, window.__rlTeam,
+       * persists to localStorage, and triggers a UI re-render.
+       *
+       * @param {any[]} projects — lightV1 project list (full payloads)
+       * @returns {Promise<{ok: boolean, members: number, activeProjects: number}>}
+       */
+      async function rocketlaneAggregateTeamWorkloadFromLight(projects) {
+        /** @type {Record<string, {firstName:string,lastName:string,fullName:string,total:number,inProgress:number,projectIds:string[],inProgressProjectIds:string[]}>} */
+        const byUserId = {};
+        let activeCount = 0;
+        for (const pr of projects) {
+          if (pr?.deleted || pr?.archived) continue;
+          if (!rocketlaneProjectIsActiveForWorkload(pr)) continue;
+          activeCount += 1;
+          const inProg = rocketlaneProjectIsInProgress(pr);
+          const pid = String(pr?.projectId ?? "").trim();
+          // teamMembers is inline on lightV1 — no extra /members call.
+          const members = Array.isArray(pr?.teamMembers) ? pr.teamMembers : [];
+          // The project's OWNER also counts as a participant — owners are
+          // not always duplicated into teamMembers.
+          const owner = pr?.projectOwner;
+          const participants = owner ? [...members, owner] : members;
+          // Dedup by userId within this single project (in case owner
+          // also appears in teamMembers).
+          const seenInProject = new Set();
+          for (const u of participants) {
+            const uid = String(u?.userId ?? "").trim();
+            if (!uid || seenInProject.has(uid)) continue;
+            const userType = String(u?.userType ?? "").toUpperCase();
+            if (userType && userType !== "NATIVE") continue;
+            seenInProject.add(uid);
+            if (!byUserId[uid]) {
+              const firstName = String(u?.firstName ?? "").trim();
+              const lastName  = String(u?.lastName ?? "").trim();
+              const fullName  = [firstName, lastName].filter(Boolean).join(" ").trim() || ("User #" + uid);
+              byUserId[uid] = { firstName, lastName, fullName, total: 0, inProgress: 0, projectIds: [], inProgressProjectIds: [] };
+            }
+            byUserId[uid].total += 1;
+            if (pid) byUserId[uid].projectIds.push(pid);
+            if (inProg) {
+              byUserId[uid].inProgress += 1;
+              if (pid) byUserId[uid].inProgressProjectIds.push(pid);
+            }
+          }
+        }
+        const payload = { byUserId, fetchedAt: new Date().toISOString() };
+        teamWorkloadCache = payload;
+        try { window.__rlTeam = payload; } catch (_) {}
+        saveTeamWorkloadToStorage(payload);
+        console.log("[TeamWorkload] (lightV1)", Object.keys(byUserId).length, "team members across", activeCount, "active projects");
+        try { await rocketlaneFetchWorkloadSync(); } catch (_) {}
+        try { renderOwnerStatusOverview(); } catch (_) {}
+        return { ok: true, members: Object.keys(byUserId).length, activeProjects: activeCount };
+      }
+
       async function rocketlaneFetchTeamWorkload() {
         const auth = getRocketlaneAuth();
         if (!auth) return { skipped: true, reason: "missing_api_key" };
+
+        // Prefer lightV1: returns teamMembers inline so we don't have to
+        // fan out N member-fetches (~365 extra calls). Falls back to
+        // the page=N path if lightV1 errors.
+        const lightProjects = await (async () => {
+          try { return await rocketlaneFetchAllProjectsLightV1(); }
+          catch (e) {
+            console.warn("[TeamWorkload] lightV1 unavailable, falling back to page=N fetch:", e?.message ?? e);
+            return null;
+          }
+        })();
+        if (lightProjects) {
+          return rocketlaneAggregateTeamWorkloadFromLight(lightProjects);
+        }
 
         const PAGE_SIZE = 100; // Rocketlane caps the projects list at 100
         const MAX_PAGES = 50;  // safety cap; tenant currently has ~11 pages
