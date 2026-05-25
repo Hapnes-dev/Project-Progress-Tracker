@@ -4,25 +4,65 @@ This file is read by Claude Code on every session start. It documents the archit
 
 ## Tech stack
 
-- **Vanilla HTML + CSS + JS** in a single file: `Project Progress Tracker.html` (~21k lines).
+- **Vanilla HTML + CSS + JS** in a single file: `Project Progress Tracker.html` (~25k lines).
 - No build step, no framework, no bundler. All state in `localStorage`.
-- **Tampermonkey userscript** bridge (`rocketlane-chat-bridge/`) for cross-origin Rocketlane API calls from a `file://` or `https://github.io` page.
-- Designed to run from either a `file://` URL on the user's desktop or `https://hapnes-dev.github.io/Project-Progress-Tracker/`.
+- **Tampermonkey userscript** bridge (`rocketlane-chat-bridge/`) handles cross-origin API calls to FIVE platforms: Rocketlane, Zendesk, Oneflow, HubSpot, Younium. Bridge version is v1.9.7+ as of this writing.
+- Designed to run from either `file://` on the user's desktop or `https://hapnes-dev.github.io/Project-Progress-Tracker/`.
 
 ## File layout inside `Project Progress Tracker.html`
 
 | Approximate line range | Section |
 |---|---|
-| 1–4500 | CSS (light + dark, status pills, layout primitives, chat styles, dialogs, animations) |
-| 4500–6200 | HTML body markup (toolbar, panels, dialogs, install modal) |
-| 6200–6500 | State constants, storage keys, auth helpers (`getRocketlaneAuth`, `tryAutoSyncSessionKeyFromBridge`) |
-| 6500–7500 | Rocketlane request layer (`rocketlaneRequestJson`, bridge routing, 401 auto-retry) |
-| 7500–10000 | Owner-aware import + sync logic, body-shape builders for task/phase/project endpoints |
-| 10000–12500 | Render orchestration (`render()`, `renderList`, `renderOwnerStatusOverview`, `renderDetail`) |
-| 12500–14000 | `renderDetail` body — KPIs, notes, chat history, link toolbar, PANG/BAF buttons |
-| 14000–15500 | Task category rendering (`.areaBox`), task expand UI, status picker, mention picker |
-| 15500–17500 | Dialogs (edit project, Younium import), context menus, notifications drawer |
-| 17500–end | Event wiring, sync timers, file-load handlers, install-prompt modal, init flow |
+| 1–4500 | CSS (light + dark, status pills, layout primitives, chat styles, dialogs, animations, Zendesk task / fullscreen styles, Younium/Oneflow/HubSpot find buttons) |
+| 4500–6300 | HTML body markup (toolbar, panels, dialogs, Edit project form including 🔎 Find buttons for Oneflow/HubSpot/Younium, install modal) |
+| 6300–6800 | State constants, storage keys, auth helpers (`getRocketlaneAuth`, `tryAutoSyncSessionKeyFromBridge`) |
+| 6800–8000 | Rocketlane request layer (`rocketlaneRequestJson`, bridge routing, 401 auto-retry, github.io direct-fetch optimisation) — Zendesk / Oneflow / HubSpot / Younium API client helpers + window.__zd / __of / __hs / __yn diagnostics |
+| 8000–10000 | Owner-aware import + sync logic, deal-description writer (`buildProjectLinksHtml`, `rocketlaneFetchHubspotDealDescription` with tenant-fields fallback), team workload aggregation via lightV1 |
+| 10000–13000 | Render orchestration (`render()`, `renderList`, `renderOwnerStatusOverview` with team groups, `renderDetail`) |
+| 13000–14500 | `renderDetail` body — KPIs, notes, chat history, link toolbar, PANG/BAF buttons, Zendesk Tasks section |
+| 14500–16500 | Task category rendering (`.areaBox`), task expand UI, status picker, mention picker |
+| 16500–18500 | Dialogs (edit project, Younium import), context menus, notifications drawer |
+| 18500–end | Event wiring, sync timers, file-load handlers, install-prompt modal, init flow |
+
+## Five platform bridges
+
+Each platform has its own auth shape but uses the same architectural pattern: capture credentials on the platform's own pages (via `@match`), expose a `<Platform>Bridge` object on the tracker page (via `unsafeWindow` or isolated-world forwarder), and route API calls through `GM_xmlhttpRequest`.
+
+| Platform | API host | Bridge object | Auth | Token storage |
+|---|---|---|---|---|
+| Rocketlane | `kiona.api.rocketlane.com/api/v1` | `RocketlaneBridge` | api-key (UUID from `localStorage.__api_key`) | `GM_setValue("rlApiKey")` |
+| Zendesk | `iwmac.zendesk.com/api/v2` (same-origin only) | `ZendeskBridge` | Session cookie + CSRF from `<meta name="csrf-token">` | Cookie via browser; CSRF in `GM_setValue("zdCsrfToken")` |
+| Oneflow | `app.oneflow.com/api` (same-origin only) | `OneflowBridge` | Session cookie + `xsrf-token` cookie (double-submit) | Cookie via browser; xsrf in `GM_setValue("ofXsrfToken")` |
+| HubSpot | `app.hubspot.com/api/*` or `app-eu1.hubspot.com/api/*` (same-origin only) | `HubSpotBridge` | Session cookie + `hubspotapi-csrf` cookie + portal ID | Cookie via browser; CSRF/portal/host in `GM_setValue("hsCsrfToken"/"hsPortalId"/"hsHost")` |
+| Younium | `api.younium.com` (Frontegg JWT bearer) | `YouniumBridge` | Frontegg HttpOnly refresh cookie → minted JWT | JWT cached in `GM_setValue("ynAccessToken")` with expiry timestamp |
+
+### Tracker-side helpers (DevTools diagnostics)
+
+| Object | Helpers |
+|---|---|
+| `window.__rlSyncStats` | Recent Rocketlane auto-sync outcomes |
+| `window.__rlTeam` | Cached team workload aggregation |
+| `window.__zd` | `api(method, path, body)`, `fetchTicket(id)`, `me()`, `csrf()` |
+| `window.__of` | `api(...)`, `me()`, `search(query)`, `score(...)`, `docUrl(id)`, `csrf()` |
+| `window.__hs` | `api(...)`, `me()`, `search(query)`, `score(...)`, `dealUrl(id)`, `csrf()` |
+| `window.__yn` | `api(...)`, `me()`, `search(query)`, `orderUrl(id)`, `token()`, `refresh()` |
+
+### Bridge file layout
+
+The single userscript handles all five platforms:
+- **Side A (per-host capture)**: `if (location.hostname === "...") { captureX(); return; }` — runs on each platform's pages, captures auth state into `GM_setValue`, then bails before reaching the tracker-side code.
+- **Side B (bridge expose)**: assigns `target.RocketlaneBridge / ZendeskBridge / OneflowBridge / HubSpotBridge / YouniumBridge` to `unsafeWindow`.
+- **Isolated-world forwarder**: when `unsafeWindow` doesn't reach the page's real `window` (browser/Tampermonkey combo quirk), the bridge injects a `<script>` shim that proxies method calls via `CustomEvent` to a userscript-side listener. Each bridge object has its own request/response event pair.
+
+### Adding a new platform bridge
+
+1. Add `@match` for the platform's web app + `@connect` for the API host(s).
+2. Add a Side A capture block: `if (location.hostname === "...") { captureX(); return; }`.
+3. Add `gmXRequest(method, path, body)` modelled on `gmZendeskRequest` (cookies) or `gmYouniumRequest` (Bearer token).
+4. Expose `target.XBridge = { ... }` with `apiRequest`, `getCurrentUser`, plus any convenience methods.
+5. Replicate the forwarder shim for the new bridge.
+6. Bump bridge version (`@version` + `@description`).
+7. Tracker side: add `xApiRequest(method, path, body)` + `xFetchCurrentUser()` + `window.__x` diagnostics that throw a clear error if the bridge isn't available.
 
 ## Key conventions
 
@@ -30,180 +70,246 @@ This file is read by Claude Code on every session start. It documents the archit
 - One global `render()` function rebuilds owner overview + project list + detail panel.
 - `render()` is wrapped in a window-scrollY-preserve harness so async re-renders don't yank the page mid-interaction.
 - `renderDetail()` constructs the entire detail panel offscreen in a `root` div, then atomically swaps it into `els.detailBody` with `innerHTML = ""` + `appendChild(root)`.
-- Most user actions trigger a `render()` call. Some local-only actions (task expand/collapse, category expand/collapse, scroll, owner-group collapse) skip render and just toggle a class or rebuild a small subtree.
+- Most user actions trigger a `render()` call. Some local-only actions (task expand/collapse, category expand/collapse, scroll, owner-group collapse) skip render and just toggle a class.
 
 ### State persistence
 - `state` is the in-memory app state; persisted to `localStorage` under `progress_tracker_state_v1` via `saveState(state)`.
-- UI-only state (sort/filter/search prefs, chat scroll positions, expanded task IDs, expanded categories per project) lives in separate `localStorage` keys or in-memory Sets.
+- UI-only state (sort/filter/search prefs, chat scroll positions, expanded task IDs, expanded categories per project, team-group collapse state, Zendesk-section collapse state) lives in separate `localStorage` keys or in-memory Sets.
 - `touchProject(id)` updates `updatedAt` AND queues a Rocketlane sync.
 - `touchProjectLocal(id)` updates `updatedAt` ONLY — does not sync. Used for owner renames, category removal, task removal of unlinked tasks.
 
 ### Rocketlane integration
-- **API base**: `https://kiona.api.rocketlane.com/api/v1` (tenant API; public `api.rocketlane.com` doesn't accept session keys)
-- **Auth**: api-key header. Captured by the bridge from `localStorage.__api_key` on Rocketlane pages, stored as `rlApiKey` in Tampermonkey GM storage.
-- **Auto-renew**: `tryAutoSyncSessionKeyFromBridge()` pulls the bridge's key into local storage on every auth check. 401 errors trigger one automatic retry after re-pulling.
-- **All write calls route through the bridge** via `window.RocketlaneBridge.apiRequest(method, path, body)`. CORS blocks direct fetch from github.io / file://.
-- **Bridge methods used**:
-  - `apiRequest(method, path, body)` — generic; preferred for any new endpoint
-  - `listProjectConversations`, `fetchChatComments`, `postChatComment` (uses `contentHtml` opt for @mentions)
-  - `uploadAttachment`, `fetchAttachment`, `downloadAttachmentBlob`, `fetchProjectAttachments`
-  - `fetchProjectMembers` (for @mention picker)
-  - `fetchProjectFolders` (Files popover)
-  - `fetchNotificationGroups({filter, status, count, groupSize, start, exclusions})` — pass `filter=Mentions` AND `filter=All` and merge for full coverage
-  - `getNotificationLastSeen`, `markNotificationsSeen`
-  - Synchronous accessors: `bridge.userId`, `bridge.apiKey`, `bridge.version`
+- **Tenant API base**: `https://kiona.api.rocketlane.com/api/v1` (public `api.rocketlane.com` doesn't accept session keys).
+- **github.io optimisation**: tracker has a CORS-allowed direct-fetch path to the tenant API (verified — Rocketlane's `Access-Control-Allow-Origin` allows `hapnes-dev.github.io`). Falls back to the bridge for `file://` runs.
 - **Sync architecture** (poll + push):
-  - **Pull**: `setInterval(rocketlaneMaybeRunLiveSync, 5 * 60 * 1000)` + immediate fire on `visibilitychange` when tab becomes visible.
+  - **Pull**: `setInterval(rocketlaneMaybeRunLiveSync, 5 * 60 * 1000)` + immediate fire on `visibilitychange`.
   - **Push**: `touchProject(id)` → debounced `rocketlaneQueueSyncForProjectChange` → `rocketlaneMaybeRunLiveSync({force: true})`.
-  - **Single-project sync**: `rocketlaneSyncLinkedProjectsNow({onlyProjectId})` — used by the clickable "RL sync" chip.
-  - Cooldown: 30 seconds between non-forced syncs (so periodic + focus don't double-fire).
+  - **Single-project sync**: `rocketlaneSyncLinkedProjectsNow({onlyProjectId})` — fires on project click + on the "RL sync" chip.
 - **Tenant-specific custom field names** use a numeric suffix: e.g., `HubspotDealDescription_480568`. Always match by `startsWith()` of the stable prefix.
+- **Custom fields without a value are OMITTED from project responses**. When fetching a field, if it isn't on `project.fields[]`, fall back to the tenant-wide `/fields` endpoint to find its ID — `rocketlaneFindDealDescriptionFieldId()` is the reference implementation.
 - **S3 attachment URLs** expire after ~5 minutes (X-Amz-Expires=299). Always re-fetch via `fetchAttachment(id)` right before opening a link.
 
 ### Rocketlane API field-name gotchas
 
-The Rocketlane tenant API and public API use DIFFERENT field names. The tracker must accept BOTH on read but emit the TENANT shape on write.
+The tenant and public APIs use DIFFERENT field names. The tracker must accept BOTH on read but emit the TENANT shape on write.
 
-| Public API | Tenant API (kiona.api.rocketlane.com) | Helper |
+| Public API | Tenant API | Helper |
 |---|---|---|
 | `phaseId`, `phaseName` | `projectPhaseId`, `projectPhaseName` | `rocketlanePhaseId()`, `rocketlanePhaseName()` accept both |
 | Task POST: `phase: {phaseId}` | Task POST: `projectPhase: {projectPhaseId}` | First body shape in `rocketlaneCreateTaskInRocketlane` is the tenant shape |
 | Phases list: `/phases?projectId.eq=X` | Phases list: `/projects/{id}/phases` | `rocketlaneFetchPhasesForProject` tries the tenant endpoint first |
 
-**Verified working task-create body** (from real curl test):
+### lightV1 vs /projects (team workload)
 
-```json
-POST /api/v1/tasks
-{
-  "taskName": "...",
-  "project": { "projectId": 1113681 },
-  "projectPhase": { "projectPhaseId": 4496756 },
-  "startDate": "2026-05-01",
-  "dueDate": "2026-06-30",
-  "type": "Task"
-}
+For the Owner Workload Overview's per-teammate counts, use `POST /api/v1/projects/lightV1?offset=N&limit=200`. This endpoint:
+- Returns `teamMembers` **inline** on each project (the regular `/projects` endpoint silently ignores `includeFields=teamMembers`).
+- Paginates correctly via `offset` + `limit` (the regular `/projects` endpoint ignores `pageToken` — must use `page=N`).
+- Returns 700+ projects in `data` array.
+
+For other reads where teamMembers isn't needed, the regular `/projects?pageSize=100&page=N` works fine.
+
+### Hubspot Deal Description writer
+
+On project save with `rocketlaneProjectId`:
+1. Try `rocketlaneFetchHubspotDealDescription(rlProjectId)`.
+2. If field is on `project.fields[]` → use that fieldId.
+3. Else fall back to `rocketlaneFindDealDescriptionFieldId()` which walks the tenant `/fields` endpoint for a PROJECT-type field with name `HubspotDealDescription_*` or label "Hubspot Deal Description". FieldId cached in module scope (`_rocketlaneDealDescriptionFieldId`) so we only walk `/fields` once per session.
+4. PUT `/projects/<id>` with `{ fields: [{ fieldId, fieldValue: html }] }`.
+
+The HTML format from `buildProjectLinksHtml`:
+```html
+<p><strong>Links:</strong></p>
+<p>Oneflow: <a href="…">…</a></p>
+<p>Younium: <a href="…">…</a></p>
+<p>HubSpot: <a href="…">…</a></p>
 ```
+
+Zendesk + Rocketlane links are intentionally excluded — Zendesk lives in the per-project Zendesk Tasks section, and a Rocketlane self-link inside Rocketlane's own field is noise.
+
+### Zendesk Tasks section (per project)
+
+- Lives in `picWrap` right under "Chat history" (so it inherits the chat-collapse animations).
+- Renders only when the project name starts with a numeric plant ID (extracted via `/^\s*(\d+)\b/`).
+- Search endpoint: `GET /api/v2/search.json?query=type:ticket+<plantId>` (browser auto-sends Zendesk session cookie via the bridge).
+- Hydrates each ticket with `lastReplyAt` by fetching `/api/v2/tickets/<id>/comments.json?include=users&sort_order=desc&per_page=20` per ticket. Concurrency capped at 8 via `mapWithConcurrency`.
+- Sorts by `lastReplyAt desc` (newest reply first) — NOT by generic `updated_at` which fires on tag/status changes too.
+- Inline preview shows only the newest comment + hint pill. Right-click anywhere on the card → fullscreen overlay (portal-mounted to `<body>` to escape `.chatHistoryBody { contain: layout paint style }` clipping).
+- Comment body rendered via `sanitizeZendeskHtml(c.html_body)` — allowlist tags + style attributes, strips inline `color:` (would otherwise appear black on dark theme).
+- Reply submission via `PUT /api/v2/tickets/<id>.json` with `{ ticket: { comment: { body, public: true|false } } }`. Public/Internal switch uses a sliding-thumb pill (yellow when internal, accent when public).
+- Timestamps: 24-hour Norwegian (Europe/Oslo) format via `Intl` API; "DD.MM HH:MM" always shown with `(i dag)` / `(i går)` / weekday context tags.
+
+### Auto-find buttons (🔎)
+
+Each link field in the Edit dialog has a 🔎 Find button. They use **document delegation** for the click handler:
+
+```js
+document.addEventListener("click", (e) => {
+  if (e.target?.id === "btnFindOneflow") { ... }
+});
+```
+
+The reason: the `els` object is built ~6000 lines later in the file, so direct `els.btnFindOneflow.addEventListener(...)` at script load fires before `els` exists. Document delegation sidesteps the timing entirely.
+
+Matching strategies (all extract plant ID from project name first):
+
+| Field | Matcher |
+|---|---|
+| Oneflow | Plant-ID prefix `^<plantId>` +50, name token overlap +0..30, partner in `parties` +20 → threshold ≥60 + clear-lead ≥20 for auto-fill |
+| HubSpot | Plant ID anywhere in `dealname` (word-boundary regex) +50, name token overlap +0..30, partner in name +20 → same threshold |
+| Younium | Exact `plant_id` field match (native column) — 1 hit → auto-fill, 2+ → picker (newest first) |
 
 ### CSS conventions
 - Dark mode + light mode via `@media (prefers-color-scheme: light)`.
-- Use `var(--surface-1)`, `var(--surface-2)`, `var(--surface-3)`, `var(--hairline)`, `var(--hairline-strong)`, `var(--text)`, `var(--muted)`, `var(--muted2)`, `var(--accent)`, `var(--accent-soft)`, `var(--accent-stroke)`, `var(--bad)`, `var(--bad-soft)`, `var(--good)`, `var(--good-soft)`, `var(--warn)`, `var(--warn-soft)`.
+- Use `var(--surface-1/2/3)`, `var(--hairline)`, `var(--hairline-strong)`, `var(--text)`, `var(--muted)`, `var(--muted2)`, `var(--accent)`, `var(--accent-soft)`, `var(--accent-stroke)`, `var(--bad)`, `var(--bad-soft)`, `var(--good)`, `var(--good-soft)`, `var(--warn)`, `var(--warn-soft)`.
 - Floating panels (drawers, popovers, lightboxes) use opaque hex colors `#0f1424` (dark) / `#ffffff` (light) — not rgba — to avoid bleed-through.
-- Animation easing: `cubic-bezier(0.4, 0, 0.2, 1)` for Material standard; `cubic-bezier(0.16, 1, 0.3, 1)` for expo-out (decelerate). FLIP-style layout animations use the standard curve; per-element clip-path reveals use expo-out.
+- Animation easing: `cubic-bezier(0.4, 0, 0.2, 1)` for Material standard; `cubic-bezier(0.16, 1, 0.3, 1)` for expo-out (decelerate).
 
 ### Avoid `contain: layout` on items with positioned descendants
-- `contain: layout` creates a stacking context. If you put it on `.task`, the status picker dropdown can no longer paint over neighboring task rows. Use it sparingly and never on elements that contain absolute-positioned menus.
+- `contain: layout` creates a containing block for `position: fixed` descendants, so any fullscreen overlay inside a contained ancestor gets clipped. This is why Zendesk ticket cards (which live inside `.chatHistoryBody` which has `contain: layout paint style`) use a **portal pattern**: while fullscreen, the card is moved to `<body>` and restored to its original parent on exit.
 
 ### Dropdown menu z-index
 - Status picker menu: `z-index: 1500` on both `.statusPicker.open` and `.statusMenu`.
-- Mention picker popup: `z-index: 1500`, `position: fixed`, appended to `document.body` to escape `overflow:hidden` of the compose box.
+- Mention picker popup: `z-index: 1500`, `position: fixed`, appended to `document.body` to escape `overflow:hidden`.
+- Fullscreen overlays: `z-index: 1200`; their pinned controls: `1300`.
 
 ### Mention chip styling
 - Chips use `class="rl__mention"` (and `rl__mention__self` for self-mentions) — Rocketlane's native class names.
-- The tracker overrides Rocketlane's lavender/blue colors with its own dark-theme palette via CSS scoped to those class names.
-- `::before { content: "@" }` adds the `@` glyph visually without modifying the underlying text (Rocketlane stores the bare name).
+- `::before { content: "@" }` adds the `@` glyph visually without modifying the underlying text.
 
 ## Gotchas
 
-### Bridge body-shape ordering
-- `rocketlaneCreateTaskInRocketlane` tries multiple body shapes. The **tenant-correct shape** (`projectPhase: {projectPhaseId}`) MUST be tried first — Rocketlane silently accepts the legacy `phase: ...` shape and returns 201 but creates a **phaseless task**. The loop then thinks it succeeded and never tries the correct shape.
-- When the project has assignees, an assignee-aware prefix is prepended. That prefix MUST also use the tenant shape first; previously it used the legacy shape which caused all assigneed projects to create phaseless tasks.
+### Bridge body-shape ordering (Rocketlane)
+- `rocketlaneCreateTaskInRocketlane` tries multiple body shapes. The **tenant-correct shape** (`projectPhase: {projectPhaseId}`) MUST be tried first — Rocketlane silently accepts the legacy `phase: ...` and returns 201 but creates a **phaseless task**.
 
 ### Render rebuilds break in-flight animations
-- Any animation that takes >1 frame can be interrupted by `render()`. For DOM that gets rebuilt on every render (chat, categories, tasks), prefer instant state changes or use one-shot CSS keyframes triggered by class markers on the new DOM.
-- The categories grid uses **instant layout change** (no transition) because attempted FLIP / View Transitions / scaleY animations all caused jitter from async re-renders fired by the sync layer.
+- For DOM that gets rebuilt on every render (chat, categories, tasks), prefer instant state changes or one-shot CSS keyframes triggered by class markers.
+- The categories grid uses **instant layout change** because attempted FLIP / View Transitions caused jitter from async re-renders.
 
 ### Chat scroll preservation across renders
-- `renderDetail()` rebuilds the chat body element. Auto-scroll to bottom must happen **after** `appendChild(root)` runs, not inside `renderMsgs()` (where chatBody is still detached and `scrollTop` is a no-op).
-- Sticky-bottom logic: if the user was near the bottom (within 40px) at the previous render, snap to the NEW bottom (handles "auto-sync arrived a new message, scroll down").
-- Re-snap on every `<img>` `load` event for fresh fetches — image decode is async and grows `scrollHeight` AFTER the initial snap.
-
-### Mouse back-button as close gesture
-- For fullscreen overlays (chat, notes, task), listen for `mousedown` with capture phase AND `auxclick` AND `popstate` — different browsers route the side-button differently.
-- Push `history.pushState({...sentinel...})` when opening, `history.back()` when closing via user action. Skip the `history.back()` if the close was already triggered by a `popstate`.
+- `renderDetail()` rebuilds the chat body. Auto-scroll to bottom must happen **after** `appendChild(root)`, not inside `renderMsgs()`.
+- Sticky-bottom logic: if user was near the bottom (within 40px), snap to NEW bottom on re-render.
+- Re-snap on every `<img>` `load` event for fresh fetches — image decode is async.
 
 ### Tampermonkey `@connect` allowlist
-- The userscript can only call hosts listed in `@connect`. For file downloads via S3, this MUST include `s3.us-east-1.amazonaws.com`, `s3.amazonaws.com`, and `amazonaws.com`. Adding a new host requires re-saving the script, and Tampermonkey may prompt the user to approve.
+- The userscript can only call hosts listed in `@connect`. Current list: `kiona.api.rocketlane.com`, `iwmac.zendesk.com`, `app.oneflow.com`, `app.hubspot.com`, `app-eu1.hubspot.com`, `auth.eu.younium.com`, `auth.us.younium.com`, `api.younium.com`, plus AWS hosts for Rocketlane attachments. Adding a host requires re-saving the script.
 
 ### File:// page CORS + cross-context exposure
-- `fetch()` from a `file://` page is blocked from cross-origin requests. ALL Rocketlane API calls go through `RocketlaneBridge` which proxies via `GM_xmlhttpRequest`.
-- The bridge publishes `window.RocketlaneBridge` via `unsafeWindow` so the page can call it directly. To prevent ANY local HTML from inheriting bridge access:
-  - The tracker declares `<meta name="rocketlane-tracker" content="hapnes-dev/Project-Progress-Tracker">`.
-  - The bridge only publishes on `file://` URLs when that meta tag is present.
-  - HTTPS targets are narrowly scoped by `@match` so no marker check needed there.
+- ALL cross-origin API calls go through bridges via `GM_xmlhttpRequest`.
+- The `file:///*` match is **gated by a meta tag** — `<meta name="rocketlane-tracker" content="hapnes-dev/Project-Progress-Tracker">`. Any other local HTML you open gets no bridge.
 
 ### Bridge cross-context publishing (forwarder fallback)
-- On some Tampermonkey/browser combos, the userscript's `unsafeWindow.RocketlaneBridge = {...}` assignment doesn't propagate to the page's real window.
-- The bridge probes via a synthetic `<script>` tag whether `window.RocketlaneBridge` is visible to the page. If not, it installs a `<script>`-tag forwarder that proxies method calls back via `CustomEvent`.
-- Synchronous getters (`apiKey`, `userId`) work through unsafeWindow but NOT through the forwarder. The tracker has both a sync read path (preferred) and an async `getApiKey()` fallback.
+- On some Tampermonkey/browser combos, `unsafeWindow.XBridge = {...}` doesn't reach the page's real window.
+- The bridge probes via a synthetic `<script>` tag whether `window.XBridge` is visible. If not, it installs a `<script>`-tag forwarder that proxies method calls via `CustomEvent`. Each bridge has its own request/response event pair.
+- Synchronous getters (`apiKey`, `userId` on `RocketlaneBridge`) work through unsafeWindow but NOT through the forwarder. Tracker has both a sync read path (preferred) and an async fallback.
 
-### Notification rich preview
-- The notifications drawer renders three preview sources in priority order: `meta.message.content` (chat), `meta.note` (automation), `meta.description` (task update).
-- Emoji shortcodes (`<span class="emoji">:blush:</span>`) are decoded to Unicode chars via a 160-entry map before sanitization.
-- The verb text is generated per `systemRuleIdentifier` (e.g., `CHANGE_PROJECT_STATUS` → `"changed project Status from X to Y"`) with embedded inline HTML for from/to labels, week ranges, etc.
+### Listening for clicks on dynamic elements
+- For buttons inside dialogs (Edit project, etc.) that are populated AFTER the script's main run, prefer `document.addEventListener("click", e => { if (e.target.matches("#myBtn")) ... })`. Direct `getElementById("myBtn").addEventListener(...)` at script load can run before the `els` object is built and silently no-op.
+
+### Rocketlane custom field that doesn't yet exist on a project
+- A project's `fields[]` array only contains fields that have a value. Empty/never-written custom fields are OMITTED.
+- To write to such a field, look up its ID via the tenant `/fields` endpoint first. Pattern: `rocketlaneFindDealDescriptionFieldId()`.
+
+### Younium JWT lifecycle
+- Frontegg refresh endpoint: `POST https://auth.<region>.younium.com/frontegg/identity/resources/auth/v1/user/token/refresh` with `{}` body. Returns `{ accessToken, expiresIn: 86400 }`.
+- Bridge caches the token in `GM_setValue("ynAccessToken")` with expiry timestamp. Refreshes proactively when within 60s of expiry, OR on 401 with one retry.
+- Cooldown: 30s between refresh attempts to prevent stampedes.
+
+### HubSpot region split + portal scoping
+- US users: `app.hubspot.com`, EU users: `app-eu1.hubspot.com`. Bridge stores the captured `location.origin` so calls reach the right region.
+- Every internal API call needs `?portalId=<id>` in the query string. Bridge auto-injects it if not already present.
+- CSRF header name: `X-HubSpot-CSRF-hubspotapi` (matches cookie name `hubspotapi-csrf`).
+
+### Zendesk session renewal
+- 401 on a Zendesk call → bridge tries `POST /api/v2/users/me.json` with `X-Zendesk-Renew-Session: true` (Zendesk's documented session-refresh mechanism). If renew succeeds, retries the original call once with the same header.
+- Concurrent failed calls coalesce on a single in-flight renew (5s cooldown).
+
+### Oneflow CSRF
+- `xsrf-token` cookie is NOT HttpOnly. Capture via `document.cookie` on `app.oneflow.com` pages, attach as `X-XSRF-Token` header on all non-GET requests. The Spring/Laravel double-submit pattern.
 
 ## Common tasks and where to look
 
 ### Add a new Rocketlane field
-1. Add `rocketlaneFetch<FieldName>(rlProjectId)` and `rocketlaneUpdate<FieldName>(rlProjectId, fieldId, value)` helpers near line 7000.
-2. Match field by prefix in `rocketlaneFindProjectNotesField` / similar pattern.
-3. Hook into `openDlgEdit` to fetch on open + `els.projectForm` submit handler to push on save.
+1. Add `rocketlaneFetch<FieldName>(rlProjectId)` and `rocketlaneUpdate<FieldName>(rlProjectId, fieldId, value)` helpers near line 9000.
+2. Match field by prefix on `project.fields[]`; fall back to tenant `/fields` lookup if the project hasn't been written yet.
+3. Hook into `openDlgEdit` to fetch on open + the `els.projectForm` submit handler to push on save.
 
-### Add a new notification type label
-- `notifVerbHtmlFor(n)` in the notifications section — extend the `switch (rule)` with the new `systemRuleIdentifier`. Return controlled HTML (inline `<em>`/`<strong>`) with `escapeHtml()` on every variable.
-
-### Change chat compose behavior
-- The compose box is built around line 14800; `sendMessage()` handles upload + post; the @mention picker is at line 14900+; paste / drop handlers near the compose textarea.
+### Add a 🔎 Find button for a new external system
+1. Build the search helper (e.g., `xSearchYThings(query)`) modelled on `youniumSearchOrders` (exact-field) or `oneflowSearchAgreements` (free-text + scoring).
+2. Build the matcher score function modelled on `oneflowMatchScore` / `hubspotMatchScore`.
+3. Add the HTML row in the Edit dialog: clone the `oneflowLinkBlock` div structure with `id="btnFindX"` + `id="xFindStatus"`.
+4. Register the elements in the `els = { ... }` block.
+5. Add the orchestrator `findXForEditDialog()` mirroring `findOneflowDocumentForEditDialog`.
+6. Wire the click via document delegation, not direct `els.btnFindX.addEventListener` (timing issue).
+7. Reset the status line in the dialog-open handler so it doesn't carry stale values across projects.
 
 ### Add a new toolbar button next to PANG/BAF
 - HTML markup: search for `id="btnOpenPang"` and clone the pattern.
 - `els` registry: add to the `getElementById` block.
-- Show/hide logic: in `renderDetail` near the PANG/BAF show block — gate on whatever condition the new button needs.
+- Show/hide logic: in `renderDetail` near the PANG/BAF show block.
 - Click handler: in the event-wiring section near `els.btnOpenPang.addEventListener`.
-
-### Tweak the Files popover
-- `els.btnOpenRocketlaneFiles.addEventListener("click", ...)` around line 19500.
 
 ## Things that DON'T sync to Rocketlane
 
 By design, these are local-only — they modify your browser's copy without touching Rocketlane:
 
-- **Project removal** ("Remove" button) — `deleteSelected()` is explicitly local-only; never calls a Rocketlane delete endpoint
+- **Project removal** ("Remove" button) — `deleteSelected()` is explicitly local-only
 - **Owner renames** (`renameOwnerGroupEverywhere`)
-- **Category removal** (`removeCategory`)
-- **Category rename** (`renameArea`)
+- **Category removal** (`removeCategory`) and **category rename** (`renameArea`)
 - Category and task UI expand/collapse state
-- Owner workload pill (`state.ownerLoads`)
+- **Team-group collapse state** (Owner Workload Overview)
+- **Zendesk Tasks section collapse state**
 - Custom area labels
 
 ## Things that DO sync to Rocketlane
 
-- Status, due date, project notes, custom links — all propagate via the sync flow
+- Status, due date, project notes, custom links — propagate via the sync flow
 - **Task add** — creates the task in Rocketlane in the correct phase
-- **Task removal of LINKED tasks** — propagates the upstream DELETE (with a loud ⚠ warning confirm)
-- Task description updates (when ROCKETLANE_SYNC_PRIVATE_NOTES is enabled — disabled by default)
+- **Task removal of LINKED tasks** — propagates the upstream DELETE (with a loud ⚠ warning)
+- **Hubspot Deal Description** — auto-updated on every save with the project's external links (Oneflow / Younium / HubSpot)
+- **Owner Workload pill** — syncs via the `[Tracker] Workload Sync` meta-project (one task per user; workload token in `taskDescription`)
+
+## Things that sync to OTHER platforms
+
+- **Zendesk reply** (from the Zendesk Tasks fullscreen view) — PUT to `/api/v2/tickets/<id>.json` with a new `comment` field. Public reply or internal note.
 
 ## Security model
 
-- **Zero hardcoded secrets** in the HTML — credentials live only in Tampermonkey GM storage.
-- **`file:///*` is gated** by a meta-tag marker so the bridge only publishes on the legitimate tracker.
-- **Untrusted Rocketlane HTML** is sanitized through `sanitizeHtmlForChatMessage` before any `innerHTML =` write.
+- **Zero hardcoded secrets** in the HTML — credentials live only in Tampermonkey GM storage and the browser's cookie jar.
+- **`file:///*` is gated** by a meta-tag marker so the bridges only publish on the legitimate tracker.
+- **Untrusted HTML** is sanitised through allowlists before any `innerHTML =` write:
+  - `sanitizeHtmlForChatMessage` for Rocketlane chat
+  - `sanitizeZendeskHtml` for Zendesk comments
+  - `sanitizeHtmlForEditor` for general rich-text content
 - **All interpolated values in `innerHTML` template strings** go through `escapeHtml()` / `escapeForHtml()`.
-- **Console logs never expose credentials** — only presence + length. Avoid logging userId either (low-sensitivity but appears in shared screenshots).
-- **Internal-API diagnostic logs** (`rl-chat-discover` etc.) use `console.debug` so they're filtered by default.
+- **Console logs never expose credentials** — only presence + length.
+- **Internal-API diagnostic logs** use `console.debug` so they're filtered by default.
 
-When adding new code that calls Rocketlane:
-- Route through `rocketlaneRequestJson` (which uses the bridge if available, falls back to fetch otherwise)
-- Never embed an api-key in source — read via `getRocketlaneAuth()` which pulls from the bridge → localStorage chain
-- If logging a request body for debugging, redact `api-key`, `Authorization`, and any field with `*key*` / `*token*` / `*secret*` in its name
+When adding new code that calls Rocketlane / Zendesk / Oneflow / HubSpot / Younium:
+- Route through `rocketlaneRequestJson` / `zendeskApiRequest` / `oneflowApiRequest` / `hubspotApiRequest` / `youniumApiRequest`. Never call `fetch()` directly.
+- Never embed secrets in source.
+- If logging a request body for debugging, redact `Authorization`, `api-key`, `xsrf-token`, `X-CSRF-*`, and any field with `*key*` / `*token*` / `*secret*` in its name.
 
 ## When working with Claude
 
 - Prefer minimal, surgical edits. The file is large and any unrelated change is high-risk.
-- Test changes in the browser using Playwright when available — Tampermonkey isn't injectable into Playwright, so use the **mock-bridge-with-call-log** pattern: install `window.RocketlaneBridge` with a recording stub, exercise the UI, then verify the captured `apiRequest` calls match what the real bridge would emit. End-to-end verification still requires curl against Rocketlane.
-- For animations: less is more. Multiple attempts at animating category expand/collapse have all caused glitches because `render()` rebuilds DOM. Instant toggle is the most reliable.
-- The Rocketlane API has tenant-specific field IDs. Never hardcode them — always look up by name prefix.
-- When debugging "task created but doesn't appear in Rocketlane Plan view," CHECK THE PHASE — Rocketlane silently drops the wrong-field-name `phase` parameter and creates a phaseless task. The verification fix: `curl /api/v1/tasks/{id}` and check `projectPhase` is set.
+- Test changes in the browser using Playwright when available — Tampermonkey isn't injectable into Playwright, so use the **mock-bridge-with-call-log** pattern: install `window.XBridge` with a recording stub, exercise the UI, then verify captured `apiRequest` calls match what the real bridge would emit. End-to-end verification still requires curl or a separate Playwright tab on the platform itself.
+- For animations: less is more. `render()` rebuilds DOM. Instant toggle is the most reliable.
+- The Rocketlane API has tenant-specific field IDs. Never hardcode them — always look up by name prefix. AND check both project.fields[] AND the tenant /fields endpoint, since custom fields without values are omitted from project responses.
+- HubSpot's internal API is undocumented and region-split — be ready for breaking changes between UI versions. For load-bearing integrations, prefer a Private App access token + `api.hubspot.com/crm/v3/*`.
 - When the user says "X doesn't work," ask for THREE specific things:
-  1. `location.href` of the page they're testing on (to catch local-file-vs-live-URL confusion)
-  2. `window.RocketlaneBridge?.version` + `typeof window.RocketlaneBridge?.apiRequest` (to confirm bridge is loaded)
-  3. Network tab screenshot showing the actual outbound request (to distinguish "code didn't fire" from "code fired but API errored")
+  1. `location.href` of the page they're testing on (catches local-file vs live-URL confusion)
+  2. `window.RocketlaneBridge?.version` (and the relevant other bridge's version) + `typeof window.XBridge?.apiRequest`
+  3. Network tab screenshot showing the actual outbound request (distinguishes "code didn't fire" from "code fired but API errored")
+- For "silent skip" bugs (push appears to run but nothing changes downstream): look for `if (!fieldId)` / `if (!key)` / `if (!something)` fallthroughs that swallow the failure. Add a `console.warn` AT EVERY such fallthrough so you can see WHY it skipped.
+
+## Recent significant changes (chronological)
+
+- **Zendesk Tasks section** (per-project, sorted by last public reply, with inline preview + fullscreen reply)
+- **Auto-find buttons** for Oneflow / HubSpot / Younium in the Edit dialog
+- **Owner Workload Overview** team groups (Team kulde + Others), collapsible
+- **Team workload via lightV1** (eliminates N+1 /members calls)
+- **24h Norwegian timestamps** in Zendesk preview
+- **Click project → instant single-project sync**
+- **Drag-and-drop removed** from the project list
+- **Hubspot Deal Description writer** — auto-updates the Rocketlane custom field on save with a `Links:` block; falls back to tenant /fields lookup when the field hasn't been written to the project yet
+- **Bridge consolidation**: single userscript now bridges all five platforms

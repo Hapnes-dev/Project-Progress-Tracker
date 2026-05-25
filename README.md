@@ -1,145 +1,183 @@
 # Project Progress Tracker
 
-A single-file HTML dashboard for tracking project delivery progress, with deep integration into [Rocketlane](https://www.rocketlane.com/) for syncing project data, chat history, attachments, and notifications.
+A single-file HTML dashboard for tracking project delivery progress, with deep integration into [Rocketlane](https://www.rocketlane.com/), [Zendesk](https://www.zendesk.com/), [Oneflow](https://oneflow.com/), [HubSpot](https://www.hubspot.com/), and [Younium](https://younium.com/) — all routed through a single Tampermonkey bridge that re-uses each platform's existing browser session.
 
 ## 🌐 Try it live
 
 **[hapnes-dev.github.io/Project-Progress-Tracker](https://hapnes-dev.github.io/Project-Progress-Tracker/)**
 
-The hosted version always runs the latest commit on `main`. State is still stored in *your* browser's `localStorage` — nothing leaves your device. You still need to install the Tampermonkey bridge below for Rocketlane integration to work.
+The hosted version always runs the latest commit on `main`. State is stored in *your* browser's `localStorage` — nothing leaves your device. You still need to install the Tampermonkey bridge below for cross-origin API calls to work.
 
 Prefer a local copy? Download `Project Progress Tracker.html` and open it from your desktop — it works the same way.
 
 ## Features
 
-- **Project list with status pills, owner grouping, sorting & filtering**
-- **Per-project detail view**: notes, status, due dates, custom links (Zendesk / Oneflow / Younium / HubSpot / Rocketlane), task categories with sub-tasks
-- **Per-project toolbar shortcuts**: 🚀 Rocketlane, 📁 Files, 📦 Order info, ☄️ PANG (plant control), 👥 BAF (user database), Edit, Remove
-- **Rocketlane sync (bidirectional where appropriate)**:
-  - Pull on a **5-minute interval** when the tab is visible (resumes immediately on tab focus)
-  - Push on any local data change (status, due, notes, tasks) within 2.5 seconds
-  - **Click the "RL sync" chip** on any project to force a manual sync of just that one project
-- **Add / remove tasks** that propagate to Rocketlane:
-  - Add task in the tracker → appears in the same phase in Rocketlane
-  - Remove a linked task → ⚠ confirms upstream delete before propagating
-- **Chat history viewer**: live private + general chats, file attachments, inline image previews, lightbox, sortable Project Files browser, compose box with image paste + file upload
-- **@-mention picker** in chat compose with project members, diacritic-insensitive search, blue mention chips (matching Rocketlane's native rendering)
-- **Notifications drawer**: bell icon in the toolbar with unread badge; Rocketlane-style left-side panel with filter chips (All / Tasks I'm assigned to / Mentions / Assigned to the team); rich preview rendering with `:emoji:` decoding and mention chips
-- **Fullscreen modes**: chat history, notes, task details — all toggleable via right-click or dedicated buttons, dismissible via Esc / mouse back-button / close button
-- **Owner workload overview**: per-owner project counts and in-progress totals
-- **Plant ID quick-link**: project titles with a numeric prefix open Pang automatically
+### Project management
+- **Project list with status pills**, team-group workload sections (Team kulde + Others), sorting & filtering, plant ID quick-link to PANG.
+- **Per-project detail view**: notes, status, due dates, custom links (Oneflow / Younium / HubSpot), task categories with sub-tasks, expandable task notes & descriptions, in-progress / blocked / waiting-on-partner / need-assistance status.
+- **Per-project toolbar shortcuts**: 🚀 Rocketlane, 📁 Files, 📦 Order info, ☄️ PANG (plant control), 👥 BAF (user database), Edit, Remove.
+
+### Owner Workload Overview (collapsible)
+- **Team groups**: Team kulde lists a fixed roster (configured at `OWNER_TEAM_GROUPS`); everyone else falls into Others.
+- **Collapsible sections** (whole overview + each team) with per-localStorage state.
+- **Live counts from Rocketlane**: total active projects + "In progress" specifically per teammate, fetched from `/projects/lightV1` (which returns `teamMembers` inline so we don't have to fan out to /members).
+- **Cross-user workload sharing**: each agent's Low / Normal / High / Need Work / On Hold selection is stored in a hidden `[Tracker] Workload Sync` Rocketlane meta-project (one task per user, plain-text token in `taskDescription`). Pull on every 5-min sync; push on every picker change.
+
+### Rocketlane integration
+- **Sync (bidirectional)**: 5-min pull when tab is visible (resumes on focus), push-on-change within 2.5s, manual single-project sync via the "RL sync" chip.
+- **Click any project → instant single-project sync** of just that one (no fan-out).
+- **Tasks**: add / remove with upstream propagation (delete is gated by ⚠ confirm).
+- **Chat history viewer** for project conversations: Private + General tabs, file attachments, inline image previews, lightbox, @-mention picker (diacritic-insensitive), notifications drawer with filter chips and rich previews.
+- **Hubspot Deal Description writer**: when you save a project, the Rocketlane custom field "Hubspot Deal Description" is updated with a plain `Links:` block listing the project's Oneflow / Younium / HubSpot URLs. Field is discovered via the tenant `/fields` endpoint when it doesn't yet exist on the project.
+
+### Zendesk Tasks (per project)
+- **Section** under "Chat history" in the project detail panel, sorted by **last public reply** (not generic `updated_at`).
+- Each row shows status pill + subject + "Last reply 25.05 14:17 (i dag)" (24-h Oslo timezone, Norwegian locale).
+- **Inline preview** shows the newest comment + a "Right-click to open fullscreen — read full thread & reply" hint.
+- **Right-click anywhere on a ticket card** → fullscreen overlay (portal-mounted to `<body>` to escape `contain: layout` clipping). Full conversation rendered from sanitized `html_body` (signatures, inline images, attachments), with a Public reply / Internal note toggle and Ctrl+Enter shortcut.
+- **Auto session renewal** on 401 via the documented `X-Zendesk-Renew-Session: true` header.
+
+### Auto-find buttons (🔎)
+The Edit project dialog has a **🔎 Find** button next to the Oneflow / HubSpot / Younium link fields. Each one extracts the plant ID prefix from the project name and searches the corresponding system:
+
+| Field | Endpoint | Match strategy |
+|---|---|---|
+| Oneflow | `GET /api/agreements/?q=<plantId>` | Plant-ID prefix +50, name token overlap +0..30, partner in parties +20. Threshold ≥60 + clear-lead. |
+| HubSpot | `POST /api/crm-search/search` (objectTypeId `0-3`) | Plant ID anywhere in `dealname` +50, token overlap +0..30, partner in name +20. Same threshold logic. |
+| Younium | `POST /api/data/query/order` | Native `plant_id` field — exact string match. 1 match → auto-fill; 2+ → picker (newest first). |
+
+High-confidence matches fill the URL automatically; multiple candidates show an inline picker.
+
+### Per-platform bridges (Tampermonkey userscript v1.9.7+)
+
+| Platform | Auth model | Capture |
+|---|---|---|
+| Rocketlane | api-key in `localStorage.__api_key` | UUID + userId from the parsed array, stored in `GM_setValue("rlApiKey")`. |
+| Zendesk | HttpOnly session cookie + CSRF in meta tag | `<meta name="csrf-token">` value re-captured every 60s when an `iwmac.zendesk.com` tab is open. |
+| Oneflow | HttpOnly session cookie + `xsrf-token` cookie (Spring-style double-submit) | Cookie value via `document.cookie`, refreshed every 60s. |
+| HubSpot | HttpOnly session cookie + `hubspotapi-csrf` cookie + portal ID | Portal ID extracted from URL path, CSRF from cookie, hublet host (US vs EU) from `location.origin`. |
+| Younium | Frontegg HttpOnly refresh cookie → JWT bearer | Bridge calls `/frontegg/.../token/refresh` on demand and caches the 24h-lived access token. Region (eu/us) captured from page hostname. |
+
+All bridges route through `GM_xmlhttpRequest`, which is exempt from CORS — no tokens are stored in the tracker HTML.
 
 ## Architecture overview
 
 | Component | Where it lives |
 |---|---|
-| App UI + Rocketlane API client | `Project Progress Tracker.html` (single file, no external dependencies beyond fonts) |
-| Cross-origin / `file://` bridge | `rocketlane-chat-bridge/rocketlane-chat-bridge.user.js` (Tampermonkey userscript v1.8.1+) |
+| App UI + API clients | `Project Progress Tracker.html` (single file, no build) |
+| Cross-origin bridge | `rocketlane-chat-bridge/rocketlane-chat-bridge.user.js` (Tampermonkey userscript v1.9.7+) |
 | State storage | Browser `localStorage` (per-browser, never leaves the device) |
-| Rocketlane session key | Tampermonkey GM storage (never embedded in HTML) |
+| Per-platform secrets | Tampermonkey GM storage (never embedded in HTML) |
 
-The bridge is required for **any** cross-origin Rocketlane API call (chat, attachments, notifications, task create/delete, etc.) because the tracker page is loaded from a `file://` or `https://github.io` URL and the browser's CORS policy blocks direct `fetch()` to `kiona.api.rocketlane.com`. The userscript runs with `GM_xmlhttpRequest` which is exempt from CORS.
+The bridge is required for **any** cross-origin API call from `github.io` or `file://`. The tracker on `github.io` has a CORS-allowed direct-fetch path to Rocketlane's tenant API as an optimisation, but for Zendesk / Oneflow / HubSpot / Younium the bridge is the only option (their CORS policies only allow same-origin).
 
 ## Install
 
 ### 1. Download the tracker HTML (or use the live URL)
 
 - **Live URL** (auto-updates): https://hapnes-dev.github.io/Project-Progress-Tracker/
-- **Local file**: download `Project Progress Tracker.html` from this repo to your Desktop and double-click — opens in Chrome.
+- **Local file**: download `Project Progress Tracker.html` from this repo and open it from your Desktop.
 
 ### 2. Install Tampermonkey (Chrome extension)
 
 [Tampermonkey Chrome Web Store](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo).
 
-### 3. Install the Rocketlane Chat Bridge userscript
+### 3. Install the Rocketlane Chat Bridge userscript (covers all five integrations)
 
 **One-click install (recommended — auto-updates):**
 
 👉 [**Install Rocketlane Chat Bridge**](https://raw.githubusercontent.com/hapnes-dev/tampermonkey-scripts/main/rocketlane-chat-bridge/rocketlane-chat-bridge.user.js)
 
-Click the link above. Tampermonkey will open an install prompt — confirm **Install**. The script will auto-update whenever a new version is pushed.
+Despite the name, this single userscript also bridges Zendesk, Oneflow, HubSpot, and Younium. Tampermonkey will open an install prompt — confirm **Install**. The script auto-updates on every push.
 
 The userscript is hosted in a separate repo: [Hapnes-dev/tampermonkey-scripts → rocketlane-chat-bridge](https://github.com/Hapnes-dev/tampermonkey-scripts/tree/main/rocketlane-chat-bridge).
 
-<details>
-<summary>Manual install (without auto-update)</summary>
+### 4. Enable file URL access (only for local file mode)
 
-1. Open the Tampermonkey dashboard (puzzle icon → Tampermonkey → Dashboard).
-2. Click the **+** tab to create a new script.
-3. Open `rocketlane-chat-bridge/rocketlane-chat-bridge.user.js` from this repo in a text editor.
-4. Select all (Ctrl+A) → copy → paste into Tampermonkey → **File → Save** (Ctrl+S).
+`chrome://extensions` → Tampermonkey → Details → **Allow access to file URLs**.
 
-This copy doesn't auto-update — you'll need to manually paste new versions when this repo's bridge file changes.
-</details>
+Skip this if you only use the live GitHub Pages URL.
 
-### 4. Enable file URL access (only if running from a local file)
+### 5. Visit each platform once while logged in
 
-The userscript needs to inject `window.RocketlaneBridge` into the local HTML page:
+Each bridge captures auth state from the user's existing session — you don't paste any keys. Just visit these once after installing the userscript:
 
-1. Open `chrome://extensions`
-2. Find **Tampermonkey** → click **Details**
-3. Toggle **Allow access to file URLs** → **ON**
+| Visit | Why |
+|---|---|
+| `https://kiona.rocketlane.com` | Capture api-key from `localStorage.__api_key`. |
+| `https://iwmac.zendesk.com` | Capture CSRF token from `<meta name="csrf-token">`. |
+| `https://app.oneflow.com` | Capture `xsrf-token` cookie value. |
+| `https://app-eu1.hubspot.com` (or `app.hubspot.com` for US) | Capture portal ID + CSRF cookie + hublet host. |
+| `https://eu.younium.com` (or `us.younium.com`) | Record region; bridge mints JWTs from there. |
 
-> **Note:** If you only use the live URL (`https://hapnes-dev.github.io/...`), you can skip this step.
+Refresh the tracker — all five integrations should now work.
 
-### 5. Capture your Rocketlane session
-
-1. Open [https://kiona.rocketlane.com](https://kiona.rocketlane.com) and log in once.
-2. The userscript automatically captures your api-key + userId from `localStorage.__api_key` and stores them in Tampermonkey's persistent storage.
-3. Refresh the tracker — chat, attachments, notifications, and write actions should now all work.
-
-The key auto-renews — visit any Rocketlane page while logged in and the bridge re-captures within seconds.
-
-### 6. (Optional) Tenant customization
-
-If your Rocketlane tenant is not `kiona.rocketlane.com`, edit the userscript's `@match` directives and the `TENANT_API` constant at the top, then save.
+The Rocketlane key auto-renews; Zendesk & Oneflow re-capture their CSRF every 60s while their tabs are open; HubSpot does the same for CSRF + portal; Younium mints fresh JWTs on demand and caches them for 24h.
 
 ## Day-to-day usage
 
-- **Refresh** projects: click **Sync** in the toolbar (or just wait — auto-sync runs every 5 min).
-- **Refresh one project**: click the **RL sync** chip on the project's detail panel.
-- **Add Rocketlane projects**: click **+ RL Project** in the toolbar, paste the URL.
-- **View chat**: select a project → scroll to "Chat history" → click Private or General tab.
-- **Send a message**: type in the compose box; Enter sends, Shift+Enter for a new line. Paste an image with Ctrl+V or click the 📎 to attach a file. Type `@` to mention a teammate.
-- **Expand chat fullscreen**: click the ⤢ in the chat header, or right-click the chat area.
-- **Project files**: click 📁 Files in the toolbar of a selected project — sortable list with image previews and PDF lightbox.
-- **Notifications**: click the 🔔 in the toolbar; left-side drawer with filter chips. Click any notification to open it in Rocketlane.
-- **Add a task**: scroll to a category → click **+ Add task** → type the name. The task is created locally AND in Rocketlane in the same phase.
-- **Remove a task**: click **Remove** next to the task. If linked to Rocketlane, you get an explicit ⚠ warning before propagating the delete upstream.
+- **Refresh** projects: click **Sync** in the toolbar (or wait — auto-sync runs every 5 min).
+- **Refresh one project**: click anywhere on the project card → instant background sync.
+- **Add Rocketlane projects**: **+ RL Project** in the toolbar, paste the URL.
+- **View chat**: select a project → "Chat history" → Private or General tab.
+- **Send a chat message**: type in the compose box; Enter sends, Shift+Enter for newline. Paste an image with Ctrl+V or click 📎. Type `@` to mention.
+- **Expand chat fullscreen**: click ⤢ in the chat header or right-click the chat area.
+- **Project files**: 📁 Files in the toolbar.
+- **Notifications**: 🔔 in the toolbar.
+- **Add a task**: scroll to a category → **+ Add task**. Created locally AND in Rocketlane in the same phase.
+- **Remove a task**: **Remove** next to the task. If linked, ⚠ confirms upstream delete.
+
+### Zendesk Tasks (per project)
+- Section appears in projects whose name starts with a numeric plant ID.
+- **Click a ticket** → inline preview of the latest comment.
+- **Right-click anywhere on the ticket card** → fullscreen with full thread + reply compose.
+- Public reply / Internal note toggle; **Ctrl+Enter** sends.
+
+### Owner Workload Overview
+- Click any teammate's pill to set their workload (syncs to other tracker users via the meta-project).
+- Click a section header chevron to collapse / expand.
+
+### Edit project dialog — auto-find external links
+- **🔎 Find** next to each link field searches the corresponding system and auto-fills the URL (or shows a picker if multiple candidates).
+- On **Save**, the project's Rocketlane "Hubspot Deal Description" field is updated with a `Links:` block listing the populated Oneflow / Younium / HubSpot URLs.
 
 ## Data & privacy
 
 - All app state stays in your browser's `localStorage` (key: `progress_tracker_state_v1`).
-- **No api keys or secrets are ever embedded in the HTML.** The Rocketlane session key lives only in the Tampermonkey extension's GM storage.
-- No telemetry, no analytics, no external services besides Rocketlane itself.
+- **No api keys or secrets are embedded in the HTML.** Tokens / cookies / CSRF values live only in Tampermonkey's GM storage and the browser's cookie jar.
+- No telemetry, no analytics, no external services besides the integrated platforms themselves.
 - The "Local-only" rule:
   - **Project remove** never deletes from Rocketlane — only hides locally.
-  - **Owner renames**, **category renames**, and **category removal** never sync upstream.
-  - **Task removal** DOES sync upstream when the task is linked — with a loud ⚠ confirmation first.
+  - **Owner renames** and **category renames / removal** never sync upstream.
+  - **Task removal** DOES sync upstream when the task is linked — with a loud ⚠ confirm first.
   - All other edits (status, due date, links, notes, task add) DO push to Rocketlane.
 
 ## Security model
 
-- The bridge userscript ships with a tight `@match` list: `https://kiona.rocketlane.com/*`, `file:///*`, and `https://hapnes-dev.github.io/Project-Progress-Tracker/*`.
-- The `file:///*` match is the broadest — it would normally inject `window.RocketlaneBridge` into ANY local HTML file. To prevent this:
-  - The tracker declares itself via `<meta name="rocketlane-tracker" content="hapnes-dev/Project-Progress-Tracker">`.
-  - The bridge **only publishes the bridge object on `file://` URLs when that meta tag is present**.
-  - Any other local HTML file you open gets no bridge access — your session key stays scoped to the tracker.
-- The session key is never logged in plaintext; diagnostic logs only report presence + length.
-- Untrusted Rocketlane HTML (chat messages, mention markup, notification previews) is sanitized through a strict allowlist before insertion.
+- **Bridge `@match` allowlist**: `kiona.rocketlane.com`, `iwmac.zendesk.com`, `app.oneflow.com`, `app.hubspot.com`, `app-eu1.hubspot.com`, `eu.younium.com`, `us.younium.com`, `app.younium.com`, `file:///*`, `https://hapnes-dev.github.io/Project-Progress-Tracker/*`.
+- The broad `file:///*` match is **gated by a meta tag** — the bridge only publishes its API to `file://` pages that include `<meta name="rocketlane-tracker" content="hapnes-dev/Project-Progress-Tracker">`. Any other local HTML you open gets nothing.
+- Tokens / cookies are never logged in plaintext; diagnostic logs only report presence + length.
+- Untrusted HTML (Rocketlane chat, Zendesk comments, mention markup, notification previews) is sanitised through strict allowlists before insertion into the DOM.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| Chat fetch shows "Rocketlane bridge unavailable" | Install Tampermonkey + userscript (steps 2–3); enable file URL access (step 4) if running locally. |
-| Bridge installed but chat / tasks empty | Visit `kiona.rocketlane.com` once while logged in so the userscript can capture the session key. |
-| 401 errors in the console | Session expired — log back into Rocketlane and the bridge will auto-renew. |
-| `window.RocketlaneBridge is undefined` on tracker DevTools | (a) "Allow access to file URLs" not enabled in Tampermonkey's extension settings, OR (b) you've opened the tracker in a private/incognito window without the extension enabled. |
-| Files don't download | Userscript must include the AWS hosts in `@connect` — re-install the bridge from the @downloadURL above if you've edited an older copy. |
-| Add task creates the task in Rocketlane but with no phase | Update bridge to v1.8.1+ AND hard-refresh the tracker. Older code sent `phase: {...}` instead of `projectPhase: {...}` and Rocketlane silently dropped the field. |
+| `RocketlaneBridge` undefined | Install Tampermonkey + userscript; for local file: enable "Allow access to file URLs" in Tampermonkey's extension settings. |
+| Bridge installed but data empty | Visit each platform's page once while logged in (see Install step 5). |
+| 401 errors in console | Session expired — log back into the relevant platform; the bridge auto-renews on next attempt. |
+| Younium calls fail with "session expired" | Visit `eu.younium.com` once; the Frontegg refresh cookie is needed for JWT minting. |
+| HubSpot Find returns "CSRF token not captured" | Visit any `app-eu1.hubspot.com` page once. |
+| Zendesk Tasks shows "bridge unavailable" | Update bridge to v1.9.0+ and visit `iwmac.zendesk.com` once. |
+| Save doesn't fill "Hubspot Deal Description" | Update tracker to commit `2c08956`+ (tenant-fields fallback for projects where the field hasn't been written yet). |
+| Add task creates phaseless task | Update bridge to v1.8.1+ AND hard-refresh — older code sent `phase: {...}` instead of `projectPhase: {...}`. |
 
-For deeper diagnostic info, check `window.__rlSyncStats.ticks` in DevTools for recent auto-sync outcomes.
+For deeper diagnostics in DevTools:
+- `window.__rlSyncStats.ticks` — recent auto-sync outcomes
+- `window.__zd.csrf()` — Zendesk CSRF capture status
+- `window.__of.csrf()` — Oneflow CSRF capture status
+- `window.__hs.csrf()` — HubSpot CSRF + portal capture status
+- `window.__yn.token()` — Younium JWT cache status
 
 ## Project structure
 
@@ -148,7 +186,7 @@ project-progress-tracker/
 ├── Project Progress Tracker.html       # The entire app
 ├── index.html                          # Identical copy for GitHub Pages
 ├── rocketlane-chat-bridge/
-│   ├── rocketlane-chat-bridge.user.js  # Tampermonkey userscript bridge
+│   ├── rocketlane-chat-bridge.user.js  # Local snapshot of the bridge (canonical copy lives in Hapnes-dev/tampermonkey-scripts)
 │   └── README.md                       # Bridge-specific docs
 ├── README.md                           # This file
 └── CLAUDE.md                           # Architecture notes for Claude Code
