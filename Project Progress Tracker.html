@@ -7882,6 +7882,53 @@
         };
       } catch (_) {}
 
+      // ──────────────────────────────────────────────────────────────────
+      // HubSpot API access (via Tampermonkey HubSpotBridge).
+      // HubSpot's web UI uses an internal API at app.hubspot.com (US) or
+      // app-eu1.hubspot.com (EU). The bridge captures portalId + hublet
+      // host + the hubspotapi-csrf cookie value when the user has a
+      // HubSpot tab open; the tracker calls go through GM_xmlhttpRequest.
+      // Note: HubSpot's internal API is undocumented and can change with
+      // any UI release — for stability, prefer the public Private App
+      // token + api.hubspot.com if you're building anything load-bearing.
+      // ──────────────────────────────────────────────────────────────────
+
+      /**
+       * Generic HubSpot internal API call routed through the Tampermonkey
+       * bridge. portalId is auto-injected if not already in the path.
+       *   await hubspotApiRequest("GET", "/properties/v4/groups/0-1/properties");
+       *
+       * @param {string} method
+       * @param {string} path   Relative to /api, e.g. "/properties/…"
+       * @param {object} [body] JSON body for non-GET requests.
+       */
+      async function hubspotApiRequest(method, path, body) {
+        const bridge = (typeof window !== "undefined" ? window.HubSpotBridge : null);
+        if (!bridge || typeof bridge.apiRequest !== "function") {
+          throw new Error("HubSpotBridge unavailable. Install/update the Rocketlane Chat Bridge userscript (v1.9.4+) and open https://app.hubspot.com (or app-eu1.hubspot.com) once while logged in.");
+        }
+        return await bridge.apiRequest(method, path, body);
+      }
+
+      /** Sanity-check HubSpot session is valid. */
+      async function hubspotFetchCurrentUser() {
+        const bridge = window.HubSpotBridge;
+        if (bridge?.getCurrentUser) return await bridge.getCurrentUser();
+        return await hubspotApiRequest("GET", "/login-verify/hub-user-info?early=true");
+      }
+
+      // Diagnostic: window.__hs for DevTools testing:
+      //   await window.__hs.me()                 // session probe
+      //   await window.__hs.api("GET", "/properties/v4/groups/0-1/properties")
+      //   await window.__hs.csrf()               // capture status
+      try {
+        window.__hs = {
+          api: hubspotApiRequest,
+          me: hubspotFetchCurrentUser,
+          async csrf() { return await window.HubSpotBridge?.getCsrfStatus?.(); },
+        };
+      } catch (_) {}
+
       async function rocketlaneRequestJson(method, path, params, body) {
         // Direct-fetch path for hapnes-dev.github.io — Rocketlane's
         // tenant API explicitly allows CORS from this origin, so we
