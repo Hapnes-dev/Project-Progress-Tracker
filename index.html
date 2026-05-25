@@ -2525,11 +2525,14 @@
       .ownerTeamGroupBody.collapsed { display: none; }
       .ownerStatusRows {
         display: grid;
-        /* Smaller minimum card width so cards flow horizontally before
-           wrapping to a new row. On a 1440px viewport this fits ~5 cards
-           per row instead of ~3. */
-        grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+        /* Each card needs ~280px for the name + workload pill + at least
+           one chip on the same row before wrapping. With auto-fill + 1fr,
+           the row fits as many cards as it can and the rest distribute
+           extra space. The `min(...)` clamp keeps single-card-per-row
+           behavior on narrow viewports. */
+        grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
         gap: 10px;
+        width: 100%;
       }
 
       /* Card layout for each owner row */
@@ -2634,21 +2637,20 @@
 
       /* Stat chips: outlined, calm by default; a tiny colored dot on the left
          carries the status signal so the whole pill doesn't need to be loud.
-         Kept on a single horizontal line for a clean dashboard rhythm.
-         No scrollbar — chips that don't fit are clipped invisibly (the inner
-         row is still scrollable by touch/wheel but there's no visible bar). */
+         Chips WRAP onto multiple lines inside the card if they don't fit —
+         this prevents the silent clipping that produced "14 proje..." truncation. */
       .ownerStatusMeta {
         display: flex;
-        flex-wrap: nowrap;
+        flex-wrap: wrap;
         gap: 6px;
         align-items: center;
-        overflow-x: auto;
-        overflow-y: hidden;
-        scrollbar-width: none;        /* Firefox */
-        -ms-overflow-style: none;     /* IE/old Edge */
+        min-width: 0;
       }
-      .ownerStatusMeta::-webkit-scrollbar { display: none; height: 0; width: 0; }
-      .ownerStatusMeta .tag { flex-shrink: 0; white-space: nowrap; }
+      .ownerStatusMeta .tag {
+        flex-shrink: 0;
+        white-space: nowrap;
+        max-width: 100%;
+      }
       .ownerStatusMeta .tag {
         display: inline-flex;
         align-items: center;
