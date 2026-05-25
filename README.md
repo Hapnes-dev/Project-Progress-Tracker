@@ -35,7 +35,7 @@ Prefer a local copy? Download `Project Progress Tracker.html` and open it from y
 - Each row shows status pill + subject + "Last reply 25.05 14:17 (i dag)" (24-h Oslo timezone, Norwegian locale).
 - **Inline preview** shows the newest comment + a "Right-click to open fullscreen — read full thread & reply" hint.
 - **Right-click anywhere on a ticket card** → fullscreen overlay (portal-mounted to `<body>` to escape `contain: layout` clipping). Full conversation rendered from sanitized `html_body` (signatures, inline images, attachments), with a Public reply / Internal note toggle and Ctrl+Enter shortcut.
-- **Auto session renewal** on 401 via the documented `X-Zendesk-Renew-Session: true` header.
+- **Auto session renewal** on 401 via the documented `X-Zendesk-Renew-Session: true` header — and the same auto-retry pattern is now in place for Oneflow, HubSpot, and Younium too.
 
 ### Auto-find buttons (🔎)
 The Edit project dialog has a **🔎 Find** button next to the Oneflow / HubSpot / Younium link fields. Each one extracts the plant ID prefix from the project name and searches the corresponding system:
@@ -48,7 +48,11 @@ The Edit project dialog has a **🔎 Find** button next to the Oneflow / HubSpot
 
 High-confidence matches fill the URL automatically; multiple candidates show an inline picker.
 
-### Per-platform bridges (Tampermonkey userscript v1.9.7+)
+### Per-platform bridges (Tampermonkey userscript v1.9.8+)
+
+All four cookie/JWT bridges share the same auto-retry contract: on 401, the bridge fires one credential-refresh call (Zendesk's renew-session header, Oneflow's `/positions/me` warmup, HubSpot's `/login-verify/v1/info` warmup, or Younium's Frontegg token mint) and retries the original request exactly once before giving up. You shouldn't see "session expired" errors as long as you have the relevant tab open or — for Younium — a valid Frontegg refresh cookie.
+
+
 
 | Platform | Auth model | Capture |
 |---|---|---|
@@ -65,7 +69,7 @@ All bridges route through `GM_xmlhttpRequest`, which is exempt from CORS — no 
 | Component | Where it lives |
 |---|---|
 | App UI + API clients | `Project Progress Tracker.html` (single file, no build) |
-| Cross-origin bridge | `rocketlane-chat-bridge/rocketlane-chat-bridge.user.js` (Tampermonkey userscript v1.9.7+) |
+| Cross-origin bridge | `rocketlane-chat-bridge/rocketlane-chat-bridge.user.js` (Tampermonkey userscript v1.9.8+) |
 | State storage | Browser `localStorage` (per-browser, never leaves the device) |
 | Per-platform secrets | Tampermonkey GM storage (never embedded in HTML) |
 
@@ -165,7 +169,7 @@ The Rocketlane key auto-renews; Zendesk & Oneflow re-capture their CSRF every 60
 |---|---|
 | `RocketlaneBridge` undefined | Install Tampermonkey + userscript; for local file: enable "Allow access to file URLs" in Tampermonkey's extension settings. |
 | Bridge installed but data empty | Visit each platform's page once while logged in (see Install step 5). |
-| 401 errors in console | Session expired — log back into the relevant platform; the bridge auto-renews on next attempt. |
+| 401 errors in console | Bridge tries to auto-renew on the very next attempt. If you still see 401, the underlying session is dead — log back into the relevant platform tab and retry. |
 | Younium calls fail with "session expired" | Visit `eu.younium.com` once; the Frontegg refresh cookie is needed for JWT minting. |
 | HubSpot Find returns "CSRF token not captured" | Visit any `app-eu1.hubspot.com` page once. |
 | Zendesk Tasks shows "bridge unavailable" | Update bridge to v1.9.0+ and visit `iwmac.zendesk.com` once. |

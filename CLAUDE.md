@@ -6,7 +6,7 @@ This file is read by Claude Code on every session start. It documents the archit
 
 - **Vanilla HTML + CSS + JS** in a single file: `Project Progress Tracker.html` (~25k lines).
 - No build step, no framework, no bundler. All state in `localStorage`.
-- **Tampermonkey userscript** bridge (`rocketlane-chat-bridge/`) handles cross-origin API calls to FIVE platforms: Rocketlane, Zendesk, Oneflow, HubSpot, Younium. Bridge version is v1.9.7+ as of this writing.
+- **Tampermonkey userscript** bridge (`rocketlane-chat-bridge/`) handles cross-origin API calls to FIVE platforms: Rocketlane, Zendesk, Oneflow, HubSpot, Younium. Bridge version is v1.9.8+ as of this writing.
 - Designed to run from either `file://` on the user's desktop or `https://hapnes-dev.github.io/Project-Progress-Tracker/`.
 
 ## File layout inside `Project Progress Tracker.html`
@@ -209,19 +209,31 @@ Matching strategies (all extract plant ID from project name first):
 - A project's `fields[]` array only contains fields that have a value. Empty/never-written custom fields are OMITTED.
 - To write to such a field, look up its ID via the tenant `/fields` endpoint first. Pattern: `rocketlaneFindDealDescriptionFieldId()`.
 
+### Auto-renew-on-401 pattern (all four cookie/JWT bridges)
+
+All four non-Rocketlane bridges retry a stale-credential failure exactly once before throwing. The mechanism differs per platform but the shape is identical: a single in-flight promise coalesces concurrent renewals, a 5s cooldown prevents stampedes, and a successful renewal triggers exactly one retry of the original call.
+
+| Bridge | Renew mechanism | Helper |
+|---|---|---|
+| Zendesk | `GET /api/v2/users/me.json` with `X-Zendesk-Renew-Session: true` (documented session-refresh) | `zendeskRenewSession()` |
+| Oneflow | Warmup `GET /api/positions/me` — cookie jar picks up rotated `xsrf-token`, on-site capture re-reads it within ~800ms | `oneflowRenewSession()` |
+| HubSpot | Warmup `GET /api/login-verify/v1/info?portalId=…` — same idea, refreshes `hubspotapi-csrf` cookie | `hubspotRenewSession()` |
+| Younium | `POST .../frontegg/.../token/refresh` with HttpOnly refresh cookie, mints a fresh JWT | `gmYouniumRefreshToken(forceRefresh)` |
+
+Younium's refresh has TWO modes via the `forceRefresh` flag:
+- **Passive** (token "expiring soon" pre-flight): honors the 30s cooldown, hands back the cached token if a recent refresh ran. Prevents stampedes.
+- **Active** (401 retry path passes `forceRefresh=true`): bypasses the cooldown because the cached token was just rejected — returning it would loop.
+
+For Oneflow/HubSpot, the warmup can't directly mint new credentials (sessions are HttpOnly + browser-managed), but it does two useful things: it forces the server to issue any pending `Set-Cookie` refreshes into the browser jar that `GM_xmlhttpRequest` uses, and it gives the on-site capture script's 60s polling loop a chance to re-read the rotated CSRF value into GM storage.
+
 ### Younium JWT lifecycle
 - Frontegg refresh endpoint: `POST https://auth.<region>.younium.com/frontegg/identity/resources/auth/v1/user/token/refresh` with `{}` body. Returns `{ accessToken, expiresIn: 86400 }`.
-- Bridge caches the token in `GM_setValue("ynAccessToken")` with expiry timestamp. Refreshes proactively when within 60s of expiry, OR on 401 with one retry.
-- Cooldown: 30s between refresh attempts to prevent stampedes.
+- Bridge caches the token in `GM_setValue("ynAccessToken")` with expiry timestamp. Refreshes proactively when within 60s of expiry, OR on 401 with `forceRefresh=true` to bypass the 30s passive cooldown.
 
 ### HubSpot region split + portal scoping
 - US users: `app.hubspot.com`, EU users: `app-eu1.hubspot.com`. Bridge stores the captured `location.origin` so calls reach the right region.
 - Every internal API call needs `?portalId=<id>` in the query string. Bridge auto-injects it if not already present.
 - CSRF header name: `X-HubSpot-CSRF-hubspotapi` (matches cookie name `hubspotapi-csrf`).
-
-### Zendesk session renewal
-- 401 on a Zendesk call → bridge tries `POST /api/v2/users/me.json` with `X-Zendesk-Renew-Session: true` (Zendesk's documented session-refresh mechanism). If renew succeeds, retries the original call once with the same header.
-- Concurrent failed calls coalesce on a single in-flight renew (5s cooldown).
 
 ### Oneflow CSRF
 - `xsrf-token` cookie is NOT HttpOnly. Capture via `document.cookie` on `app.oneflow.com` pages, attach as `X-XSRF-Token` header on all non-GET requests. The Spring/Laravel double-submit pattern.
