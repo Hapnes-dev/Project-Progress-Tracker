@@ -6241,14 +6241,23 @@
               inputmode="url"
             />
           </div>
-          <div>
+          <div class="hubspotLinkBlock">
             <label class="small" for="fHubspotUrl">HubSpot link</label>
-            <input
-              class="input"
-              id="fHubspotUrl"
-              placeholder="Paste HubSpot link (or keep empty)"
-              inputmode="url"
-            />
+            <div class="oneflowFindRow">
+              <input
+                class="input"
+                id="fHubspotUrl"
+                placeholder="Paste HubSpot link (or keep empty)"
+                inputmode="url"
+              />
+              <button
+                type="button"
+                class="btn oneflowFindBtn"
+                id="btnFindHubspot"
+                title="Search HubSpot for a deal matching this project (plant ID + name)"
+              >🔎 Find</button>
+            </div>
+            <div class="oneflowFindStatus" id="hubspotFindStatus" aria-live="polite"></div>
           </div>
           <div>
             <!-- Rocketlane link + projectId hidden from the UI — both are
@@ -7917,14 +7926,199 @@
         return await hubspotApiRequest("GET", "/login-verify/hub-user-info?early=true");
       }
 
+      /**
+       * Search HubSpot deals (object type 0-3) by free text.
+       * Returns the raw API response: { results, total, hasMore, offset }.
+       * Each result has `objectId` and `properties.<name>.value` shape.
+       */
+      async function hubspotSearchDeals(query, limit) {
+        const bridge = window.HubSpotBridge;
+        if (!bridge?.searchDeals) {
+          throw new Error("HubSpotBridge.searchDeals not available — update userscript to v1.9.5+.");
+        }
+        return await bridge.searchDeals(query, { count: limit || 10 });
+      }
+
+      /**
+       * Build the canonical deal URL. HubSpot's modern URL is
+       *   https://<host>/contacts/<portalId>/record/0-3/<dealId>
+       */
+      async function hubspotDealUrl(dealId) {
+        const csrfStatus = await window.HubSpotBridge?.getCsrfStatus?.();
+        if (!csrfStatus?.host || !csrfStatus?.portalId) return "";
+        return csrfStatus.host + "/contacts/" + csrfStatus.portalId + "/record/0-3/" + encodeURIComponent(dealId);
+      }
+
+      /**
+       * Score a HubSpot deal against a project. Same shape as the
+       * Oneflow matcher so the auto-fill threshold logic stays
+       * consistent. Tokens-overlap on dealname + plant-ID prefix +
+       * partner-name in deal name (optional bonus).
+       */
+      function hubspotMatchScore(deal, project, plantId, partner) {
+        // HubSpot deal properties come as `{ value: "..." }`. Extract.
+        const dealName = String(deal?.properties?.dealname?.value ?? "").toLowerCase();
+        const pName = String(project?.name ?? "").toLowerCase();
+        let score = 0;
+        if (plantId) {
+          // Plant ID anywhere in deal name (HubSpot deal naming is less
+          // consistent than Oneflow agreement naming — could be at start
+          // or middle, e.g. "Coolteam AS - 3299 ny regulator").
+          const re = new RegExp("\\b" + String(plantId) + "\\b");
+          if (re.test(dealName)) score += 50;
+        }
+        const tokenize = (s) => String(s ?? "")
+          .toLowerCase()
+          .replace(/^\s*\d+\s*[-–:]?\s*/, "")
+          .replace(/[^a-zà-ÿæøå0-9\s]/gi, " ")
+          .split(/\s+/)
+          .filter((t) => t && t.length > 1);
+        const aTok = new Set(tokenize(dealName));
+        const pTok = new Set(tokenize(pName));
+        if (aTok.size && pTok.size) {
+          let intersect = 0;
+          for (const t of pTok) if (aTok.has(t)) intersect += 1;
+          const denom = Math.max(aTok.size, pTok.size);
+          score += Math.round((intersect / denom) * 30);
+        }
+        if (partner) {
+          if (dealName.includes(String(partner).toLowerCase())) score += 20;
+        }
+        return score;
+      }
+
+      // HubSpot deal stage IDs are portal-specific — we don't try to
+      // resolve them to labels here. The picker just shows the deal name
+      // + amount + a generic "Deal" tag (extending is easy if the user
+      // wants stage names later).
+      const HUBSPOT_DEAL_TAG = "Deal";
+
+      /**
+       * Auto-find the best HubSpot deal for the project currently being
+       * edited. Reads form fields directly (live, no save needed).
+       * High-confidence match (>=60 AND >=20 lead) auto-fills. Otherwise
+       * picker. Mirrors findOneflowDocumentForEditDialog's flow.
+       */
+      async function findHubspotDealForEditDialog() {
+        const statusEl = els?.hubspotFindStatus;
+        const inputEl = els?.fHubspotUrl;
+        if (!statusEl || !inputEl) return;
+        statusEl.className = "oneflowFindStatus";
+        statusEl.textContent = "Searching HubSpot…";
+        const oldPicker = statusEl.parentElement?.querySelector(".oneflowFindPicker");
+        if (oldPicker) oldPicker.remove();
+
+        const projName = String(els?.fName?.value ?? "").trim();
+        const partner = String(els?.fPartner?.value ?? "").trim();
+        const plantMatch = projName.match(/^\s*(\d+)/);
+        const plantId = plantMatch ? plantMatch[1] : "";
+        if (!plantId && !projName) {
+          statusEl.className = "oneflowFindStatus error";
+          statusEl.textContent = "Need at least a project name (or plant ID) to search.";
+          return;
+        }
+
+        let json;
+        try {
+          if (plantId) {
+            json = await hubspotSearchDeals(plantId, 20);
+          }
+          if (!json?.results?.length && projName) {
+            const stripped = projName.replace(/^\s*\d+\s*[-–:]?\s*/, "").trim();
+            if (stripped && stripped.length > 2) {
+              json = await hubspotSearchDeals(stripped, 20);
+            }
+          }
+        } catch (e) {
+          statusEl.className = "oneflowFindStatus error";
+          statusEl.textContent = String(e?.message ?? e ?? "HubSpot search failed.");
+          return;
+        }
+        const results = Array.isArray(json?.results) ? json.results : [];
+        if (results.length === 0) {
+          statusEl.className = "oneflowFindStatus error";
+          statusEl.textContent = "No matching HubSpot deals found.";
+          return;
+        }
+
+        const projectShape = { name: projName };
+        const scored = results
+          .map((d) => ({ d, score: hubspotMatchScore(d, projectShape, plantId, partner) }))
+          .sort((x, y) => y.score - x.score);
+        const best = scored[0];
+        const second = scored[1];
+        const HIGH_CONFIDENCE = 60;
+        const CLEAR_LEAD = 20;
+
+        if (best.score >= HIGH_CONFIDENCE &&
+            (!second || best.score - second.score >= CLEAR_LEAD)) {
+          inputEl.value = await hubspotDealUrl(best.d.objectId);
+          statusEl.className = "oneflowFindStatus success";
+          statusEl.textContent = "Matched: " + (best.d.properties?.dealname?.value ?? "(no name)");
+          return;
+        }
+
+        statusEl.className = "oneflowFindStatus";
+        statusEl.textContent =
+          scored.length === 1
+            ? "Low-confidence match — confirm:"
+            : "Multiple candidates — pick one:";
+        const picker = document.createElement("div");
+        picker.className = "oneflowFindPicker";
+        for (const entry of scored.slice(0, 8)) {
+          const item = document.createElement("button");
+          item.type = "button";
+          item.className = "oneflowFindPickerItem";
+          const left = document.createElement("div");
+          const name = document.createElement("div");
+          name.className = "oneflowFindPickerName";
+          name.textContent = entry.d.properties?.dealname?.value ?? "(no name)";
+          const meta = document.createElement("div");
+          meta.className = "oneflowFindPickerMeta";
+          const amount = entry.d.properties?.amount?.value;
+          const amountText = amount ? Number(amount).toLocaleString(undefined, { maximumFractionDigits: 0 }) + " NOK" : "";
+          meta.textContent = HUBSPOT_DEAL_TAG + (amountText ? " · " + amountText : "");
+          left.appendChild(name);
+          left.appendChild(meta);
+          const scoreTag = document.createElement("div");
+          scoreTag.className = "oneflowFindPickerMeta";
+          scoreTag.textContent = entry.score + "%";
+          item.appendChild(left);
+          item.appendChild(scoreTag);
+          item.addEventListener("click", async () => {
+            inputEl.value = await hubspotDealUrl(entry.d.objectId);
+            statusEl.className = "oneflowFindStatus success";
+            statusEl.textContent = "Selected: " + (entry.d.properties?.dealname?.value ?? "(no name)");
+            picker.remove();
+          });
+          picker.appendChild(item);
+        }
+        statusEl.parentElement?.appendChild(picker);
+      }
+
+      // Wire 🔎 Find for HubSpot via document delegation (same reason as
+      // the Oneflow one — els is built after this script runs).
+      document.addEventListener("click", (e) => {
+        const t = /** @type {HTMLElement | null} */ (e.target);
+        if (!t) return;
+        if (t.id === "btnFindHubspot" || t.closest?.("#btnFindHubspot")) {
+          e.preventDefault();
+          void findHubspotDealForEditDialog();
+        }
+      });
+
       // Diagnostic: window.__hs for DevTools testing:
       //   await window.__hs.me()                 // session probe
       //   await window.__hs.api("GET", "/properties/v4/groups/0-1/properties")
       //   await window.__hs.csrf()               // capture status
+      //   await window.__hs.search("3299")       // deal search
       try {
         window.__hs = {
           api: hubspotApiRequest,
           me: hubspotFetchCurrentUser,
+          search: hubspotSearchDeals,
+          score: hubspotMatchScore,
+          dealUrl: hubspotDealUrl,
           async csrf() { return await window.HubSpotBridge?.getCsrfStatus?.(); },
         };
       } catch (_) {}
@@ -14879,6 +15073,8 @@
         fOneflowUrl: document.getElementById("fOneflowUrl"),
         btnFindOneflow: document.getElementById("btnFindOneflow"),
         oneflowFindStatus: document.getElementById("oneflowFindStatus"),
+        btnFindHubspot: document.getElementById("btnFindHubspot"),
+        hubspotFindStatus: document.getElementById("hubspotFindStatus"),
         fYouniumUrl: document.getElementById("fYouniumUrl"),
         fHubspotUrl: document.getElementById("fHubspotUrl"),
         fRocketlaneUrl: document.getElementById("fRocketlaneUrl"),
@@ -21196,6 +21392,12 @@
           els.oneflowFindStatus.className = "oneflowFindStatus";
           els.oneflowFindStatus.textContent = "";
           const stalePicker = els.oneflowFindStatus.parentElement?.querySelector(".oneflowFindPicker");
+          if (stalePicker) stalePicker.remove();
+        }
+        if (els.hubspotFindStatus) {
+          els.hubspotFindStatus.className = "oneflowFindStatus";
+          els.hubspotFindStatus.textContent = "";
+          const stalePicker = els.hubspotFindStatus.parentElement?.querySelector(".oneflowFindPicker");
           if (stalePicker) stalePicker.remove();
         }
         if (els.fYouniumUrl) els.fYouniumUrl.value = p.youniumUrl ?? "";
