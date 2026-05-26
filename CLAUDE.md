@@ -270,6 +270,28 @@ Note the three money values differ (RL labor 31238, signed contract 16377, deal 
 
 ## Gotchas
 
+### Tracker HTML lives in THREE places — sync all three on every change
+
+When editing the tracker, the working copy is `C:\Users\Thomas\Desktop\Project Progress Tracker.html` but the live deploy needs both:
+
+1. `C:\Users\Thomas\Desktop\project-progress-tracker\Project Progress Tracker.html` (download copy in the repo)
+2. `C:\Users\Thomas\Desktop\project-progress-tracker\index.html` (the file GitHub Pages serves at `https://hapnes-dev.github.io/Project-Progress-Tracker/`)
+
+If you commit only CLAUDE.md / README.md, the live site stays on the previous code. Pattern after editing:
+
+```bash
+cp "C:/Users/Thomas/Desktop/Project Progress Tracker.html" \
+   "C:/Users/Thomas/Desktop/project-progress-tracker/Project Progress Tracker.html"
+cp "C:/Users/Thomas/Desktop/Project Progress Tracker.html" \
+   "C:/Users/Thomas/Desktop/project-progress-tracker/index.html"
+cd "C:/Users/Thomas/Desktop/project-progress-tracker"
+git add "Project Progress Tracker.html" index.html CLAUDE.md README.md
+git commit -m "..." && git push
+```
+
+Same pattern for the bridge — `rocketlane-chat-bridge.user.js` lives in **two** repos (the working dir at `Desktop\rocketlane-chat-bridge\` and the clone at `Desktop\tampermonkey-scripts-clone\rocketlane-chat-bridge\`); only the clone is what `@updateURL` pulls from, so the userscript MUST be copied to the clone before `git push`.
+
+
 ### Bridge body-shape ordering (Rocketlane)
 - `rocketlaneCreateTaskInRocketlane` tries multiple body shapes. The **tenant-correct shape** (`projectPhase: {projectPhaseId}`) MUST be tried first — Rocketlane silently accepts the legacy `phase: ...` and returns 201 but creates a **phaseless task**.
 
