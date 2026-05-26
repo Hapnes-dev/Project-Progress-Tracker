@@ -27113,6 +27113,20 @@
         return valid[0];
       }
 
+      /**
+       * Put the toolbar Younium chip into an "in-flight" / loading state.
+       * Used while the verdict is being computed (modal open, refresh,
+       * or background fetch on project select). Doesn't touch the cached
+       * verdict on the project — just changes the visible chip face.
+       */
+      function setYouniumToolbarChecking() {
+        const btn = els.btnYouniumStatus;
+        if (!btn) return;
+        btn.className = "btn youniumStatusBtn youniumStatus-gray";
+        btn.textContent = "Younium: ⏳ Checking…";
+        btn.title = "Fetching latest Younium status…";
+      }
+
       function applyYouniumVerdictToToolbar(project, verdict) {
         const btn = els.btnYouniumStatus;
         if (!btn) return;
@@ -27211,6 +27225,10 @@
           !youniumStatusFetchedThisSession.has(p.id)
         ) {
           youniumStatusFetchInFlight.add(p.id);
+          // Show the in-flight chip state so the user sees that a
+          // refresh is in progress, instead of looking at a stale
+          // cached label that may be wrong until the verdict returns.
+          setYouniumToolbarChecking();
           computeYouniumStatus(p)
             .then((verdict) => {
               applyYouniumVerdictToToolbar(p, verdict);
@@ -27524,7 +27542,9 @@
         if (!p) return;
         currentYouniumStatusProject = p;
         currentYouniumStatusVerdict = null;
-        // Initial loading state
+        // Initial loading state — modal body + toolbar chip both flip
+        // to a checking face so the user sees the in-flight state.
+        setYouniumToolbarChecking();
         els.dlgYouniumStatusBody.innerHTML =
           '<div style="padding: 24px; text-align: center; color: var(--muted); font-style: italic;">Checking Younium…</div>';
         if (els.btnYouniumStatusOpenOrder) els.btnYouniumStatusOpenOrder.style.display = "none";
@@ -27691,6 +27711,8 @@
         const p = currentYouniumStatusProject;
         if (!p) return;
         youniumStatusFetchedThisSession.delete(p.id);
+        // Modal body + toolbar chip both flip to checking state.
+        setYouniumToolbarChecking();
         els.dlgYouniumStatusBody.innerHTML =
           '<div style="padding: 24px; text-align: center; color: var(--muted); font-style: italic;">Refreshing…</div>';
         try {
