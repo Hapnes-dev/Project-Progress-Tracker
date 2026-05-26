@@ -6628,7 +6628,20 @@
     <dialog id="dlgYouniumStatus" class="dlgYouniumStatus" aria-labelledby="dlgYouniumStatusTitle">
       <div class="dlgHd dlgYouniumStatusHd">
         <strong id="dlgYouniumStatusTitle">Younium status details</strong>
-        <button class="btn btnCloseIcon" id="btnCloseYouniumStatus" type="button" aria-label="Close" title="Close (Esc)">✕</button>
+        <!--
+          Inline onclick is the canonical bulletproof close path for
+          native <dialog>. JS module listeners can be silently dropped
+          if a sibling event handler throws — inline onclick survives
+          all of those scenarios because the browser wires it directly.
+        -->
+        <button
+          class="btn btnCloseIcon"
+          id="btnCloseYouniumStatus"
+          type="button"
+          aria-label="Close"
+          title="Close (Esc)"
+          onclick="document.getElementById('dlgYouniumStatus').close();"
+        >✕</button>
       </div>
       <div class="dlgYouniumStatusBody" id="dlgYouniumStatusBody">
         <!-- Populated by openYouniumStatusModal() -->
@@ -6639,7 +6652,12 @@
         <a class="btn" id="btnYouniumStatusOpenOrder" target="_blank" rel="noopener noreferrer" style="display: none;">Open Younium order</a>
         <a class="btn" id="btnYouniumStatusOpenSub" target="_blank" rel="noopener noreferrer" style="display: none;">Open subscription</a>
         <span style="flex: 1;"></span>
-        <button class="btn primary" type="button" id="btnCloseYouniumStatus2">Close</button>
+        <button
+          class="btn primary"
+          type="button"
+          id="btnCloseYouniumStatus2"
+          onclick="document.getElementById('dlgYouniumStatus').close();"
+        >Close</button>
       </div>
     </dialog>
 
