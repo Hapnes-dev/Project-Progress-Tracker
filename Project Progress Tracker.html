@@ -27026,7 +27026,21 @@
 
       els.btnYouniumStatus.addEventListener("click", openYouniumStatusModal);
 
-      // Close handlers
+      // Close handlers — defense in depth. Each layer is independent
+      // so any single failure can't lock the modal open.
+      //
+      //   Layer 1: inline onclick on the buttons (in HTML, line 6629/6645)
+      //   Layer 2: addEventListener handlers below (function-call binding)
+      //   Layer 3: backdrop-click on the dialog element
+      //   Layer 4: document-level capture-phase listener (NUCLEAR OPTION
+      //            below) — fires before ANY other handler in the DOM
+      //            tree, so even a broken inline onclick + broken
+      //            addEventListener + Tampermonkey interference can't
+      //            block it.
+      //   Layer 5: window.closeYouniumModal() — emergency console
+      //            command. Tell user "type closeYouniumModal() in the
+      //            DevTools console" if all else fails.
+      //   Native: Escape key (browser-native for <dialog>)
       const closeYouniumStatusDialog = () => {
         if (els.dlgYouniumStatus?.open) els.dlgYouniumStatus.close();
       };
@@ -27045,6 +27059,50 @@
           }
         } catch (_) {}
       });
+
+      // Layer 4: document-level capture-phase listener. Catches clicks
+      // that target either close button (by id or by ancestor chain),
+      // works before any other handler in the DOM tree gets a chance
+      // to swallow the event. Last-resort safety net.
+      document.addEventListener("click", function youniumModalForceClose(ev) {
+        try {
+          const t = ev.target;
+          if (!t || !(t instanceof Element)) return;
+          // closest() walks up the ancestor chain — catches both
+          // direct clicks on the button and clicks on inner elements
+          // (e.g., the ✕ glyph itself, if it ever gets wrapped).
+          const btn = t.closest("#btnCloseYouniumStatus, #btnCloseYouniumStatus2");
+          if (!btn) return;
+          const dlg = document.getElementById("dlgYouniumStatus");
+          if (dlg && dlg.open) {
+            // Direct call on the dialog element — bypasses any wrapper
+            // function that might have been replaced.
+            dlg.close();
+            // Also remove the open attribute defensively, in case .close()
+            // somehow fails silently (e.g., dialog polyfill quirks).
+            dlg.removeAttribute("open");
+            try {
+              if (typeof window !== "undefined" && window.__matchDebug !== false) {
+                console.log("[Younium status] modal closed (capture-phase fallback)");
+              }
+            } catch (_) {}
+          }
+        } catch (_) {}
+      }, true /* useCapture — runs BEFORE any bubble-phase listener */);
+
+      // Layer 5: emergency console command. If the user is on an old
+      // cached page or hits a truly weird browser bug, tell them to
+      // run this from DevTools to force the modal closed.
+      try {
+        window.closeYouniumModal = function closeYouniumModal() {
+          const dlg = document.getElementById("dlgYouniumStatus");
+          if (!dlg) return "Younium modal not found in DOM";
+          if (!dlg.open) return "Already closed";
+          dlg.close();
+          dlg.removeAttribute("open");
+          return "Closed";
+        };
+      } catch (_) {}
 
       // Refresh action — force re-fetch
       els.btnYouniumStatusRefresh?.addEventListener("click", async () => {
