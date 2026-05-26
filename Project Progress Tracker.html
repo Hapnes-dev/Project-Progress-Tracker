@@ -9682,16 +9682,40 @@
           .replace(/:.*$/, "")        // drop ": New Store" etc.
           .trim();
 
-        // Run order + quote searches in PARALLEL. If either fails,
-        // fall through with the other's results — partial data beats
-        // none.
-        const [orderJson, quoteJsonPlant, quoteJsonName] = await Promise.allSettled([
+        // Run order + quote searches in PARALLEL across multiple
+        // search terms. Each can independently fail — Promise.allSettled
+        // means partial data beats none.
+        //
+        // Verified via Playwright on the live Younium UI:
+        //   - quote search by accountName works (Coolteam → 605 hits)
+        //   - quote search by plant_name works (token-level, indexed)
+        //   - quote search by plant_id when populated works
+        //   - many quotes have EMPTY plant_id so accountName/plant_name
+        //     coverage is essential.
+        //
+        // Terms tried per query — in priority order:
+        //   1. Orders by plant ID (exact filter applied afterwards)
+        //   2. Quotes by plant ID
+        //   3. Quotes by stripped project name (e.g. "Kesko SM Mylly Harjavalta")
+        //   4. Quotes by partner / customer name (e.g. "Vakkakylmä Oy")
+        const partnerTrim = String(ctx.partner || "").trim();
+        const partnerQuery = partnerTrim && partnerTrim.length >= 3
+          ? partnerTrim.replace(/\s+(?:as|asa|oy|ab)\s*$/i, "").trim() || partnerTrim
+          : "";
+        const searchTermsAttempted = {
+          plantIdOrders: ctx.plantId || null,
+          plantIdQuotes: ctx.plantId || null,
+          nameQuote: projectStripped && projectStripped.length >= 3 ? projectStripped : null,
+          partnerQuote: partnerQuery && partnerQuery.length >= 3 ? partnerQuery : null,
+        };
+        const [orderJson, quoteJsonPlant, quoteJsonName, quoteJsonPartner] = await Promise.allSettled([
           youniumSearchOrders(ctx.plantId, 20),
           youniumSearchQuotes(ctx.plantId, 20),
-          // Only fire the secondary quote-by-name query when there's
-          // something useful to search for (≥3 chars).
-          projectStripped && projectStripped.length >= 3
-            ? youniumSearchQuotes(projectStripped, 20)
+          searchTermsAttempted.nameQuote
+            ? youniumSearchQuotes(searchTermsAttempted.nameQuote, 20)
+            : Promise.resolve({ result: [] }),
+          searchTermsAttempted.partnerQuote
+            ? youniumSearchQuotes(searchTermsAttempted.partnerQuote, 20)
             : Promise.resolve({ result: [] }),
         ]);
         const orderResults = orderJson.status === "fulfilled" && Array.isArray(orderJson.value?.result)
@@ -9700,14 +9724,29 @@
         const quoteResultsRaw = [
           ...(quoteJsonPlant.status === "fulfilled" && Array.isArray(quoteJsonPlant.value?.result) ? quoteJsonPlant.value.result : []),
           ...(quoteJsonName.status  === "fulfilled" && Array.isArray(quoteJsonName.value?.result)  ? quoteJsonName.value.result  : []),
+          ...(quoteJsonPartner.status === "fulfilled" && Array.isArray(quoteJsonPartner.value?.result) ? quoteJsonPartner.value.result : []),
         ];
-        // Dedupe quotes by id (the two search runs can overlap).
+        // Dedupe quotes by id (the three search runs can overlap).
         const seenQuoteIds = new Set();
         const quoteResults = [];
         for (const q of quoteResultsRaw) {
           const id = String(q?.id || "");
           if (id && !seenQuoteIds.has(id)) { seenQuoteIds.add(id); quoteResults.push(q); }
         }
+        // Debug breadcrumb so the user can see exactly which terms
+        // were tried + how many raw hits each returned — invaluable
+        // when the picker ends up empty.
+        try {
+          if (typeof window !== "undefined" && window.__matchDebug !== false) {
+            // eslint-disable-next-line no-console
+            console.log("[Younium Find] search terms tried:", {
+              orders_by_plantId: { term: searchTermsAttempted.plantIdOrders, hits: orderResults.length, status: orderJson.status, error: orderJson.reason?.message },
+              quotes_by_plantId: { term: searchTermsAttempted.plantIdQuotes, hits: (quoteJsonPlant.value?.result || []).length, status: quoteJsonPlant.status, error: quoteJsonPlant.reason?.message },
+              quotes_by_name:    { term: searchTermsAttempted.nameQuote,     hits: (quoteJsonName.value?.result  || []).length, status: quoteJsonName.status,  error: quoteJsonName.reason?.message },
+              quotes_by_partner: { term: searchTermsAttempted.partnerQuote,  hits: (quoteJsonPartner.value?.result || []).length, status: quoteJsonPartner.status, error: quoteJsonPartner.reason?.message },
+            });
+          }
+        } catch (_) {}
 
         // ── Filter orders strictly by plant_id — the Younium text
         //    search returns "O-0xxxxx" false-positives.
@@ -9743,9 +9782,20 @@
         });
 
         if (orderMatches.length === 0 && quoteMatches.length === 0) {
+          // Be specific about what we tried so the user can tell at a
+          // glance whether the data is missing in Younium vs. a flaky
+          // search. Frequent cause: the plant exists in HubSpot but
+          // hasn't been promoted into Younium yet, OR the customer is
+          // in a different Younium tenant (e.g. Finland subsidiary).
+          const bits = [];
+          if (searchTermsAttempted.plantIdOrders) bits.push("plant " + searchTermsAttempted.plantIdOrders);
+          if (searchTermsAttempted.nameQuote) bits.push('name "' + searchTermsAttempted.nameQuote + '"');
+          if (searchTermsAttempted.partnerQuote) bits.push('customer "' + searchTermsAttempted.partnerQuote + '"');
+          const triedLine = bits.length ? "Tried " + bits.join(", ") + ". " : "";
           statusEl.className = "oneflowFindStatus error";
           statusEl.textContent =
-            "No matching Younium orders or quotes for plant " + ctx.plantId + ".";
+            "No Younium orders or quotes found. " + triedLine +
+            "If the quote exists elsewhere (e.g. another tenant), paste the link manually.";
           return;
         }
 
