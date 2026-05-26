@@ -19254,12 +19254,10 @@
           meta.appendChild(ow);
         }
 
-        if (p.due) {
-          const du = document.createElement("span");
-          du.className = "tag " + (due?.cls ?? "");
-          du.textContent = due?.text ?? ("Due: " + p.due);
-          meta.appendChild(du);
-        }
+        // The due-date chip used to live here in the project detail meta
+        // row. Removed per user request — the same due-date info is
+        // already shown under the Status KPI (k2Sub above: "No due date"
+        // or "Overdue (...)" / "Due: ...").
 
         const upd = document.createElement("span");
         upd.className = "tag";
