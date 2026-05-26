@@ -10210,13 +10210,19 @@
           !subOrderNumberStr ||
           subOrderNumberStr.toLowerCase() === "draft" ||
           /^draft\b/i.test(subOrderNumberStr);
-        // Younium subscription Active state is status === 9. We've also
-        // seen status === 0 on un-activated subscriptions in this tenant
-        // (with orderNumber = "Draft"). Anything that isn't 9 on a
-        // subscription order means it hasn't been activated yet —
-        // bundle 0/5 + the "no orderNumber" signal as Draft.
-        const subIsRawDraft   = subOrder.status === 5 || subOrder.status === 0 || subOrderNumberLooksDraft;
-        const subIsRawCreated = subOrder.status === 1;
+        // Younium subscription Draft signals:
+        //   - status === 5 (documented Draft)
+        //   - orderNumber missing/null/"Draft" (Younium UI Draft heuristic;
+        //     also catches the status === 0 + no real orderNumber case
+        //     we saw on the plant 4729 Draft subscription)
+        //
+        // status === 1 alone is NOT a reliable "not finalized" signal —
+        // Younium uses it on versioned orders that ARE Active (e.g.
+        // "Order O-004389 / Version 4" shown as Active in Younium UI
+        // carries status 1). Only treat it as "not finalized" if other
+        // signals (no real orderNumber) ALSO say so.
+        const subIsRawDraft   = subOrder.status === 5 || subOrderNumberLooksDraft;
+        const subIsRawCreated = subOrder.status === 1 && subOrderNumberLooksDraft;
         dbg("subscription order:", {
           id: subOrder.id, orderNumber: subOrder.orderNumber,
           status: subOrder.status, isLastVersion: subOrder.isLastVersion,
