@@ -10055,25 +10055,35 @@
        *   userEmail / email / userDisplayName / userName / user
        *   description / message / event / type
        */
-      function extractLatestEvent(events) {
-        if (!Array.isArray(events) || events.length === 0) return null;
-        const getTs = (e) =>
-          Date.parse(e?.timestamp || e?.createdDate || e?.eventDate ||
-                     e?.created || e?.when || e?.date || "") || 0;
-        // Sort descending by timestamp — most recent first.
-        const sorted = events.slice().sort((a, b) => getTs(b) - getTs(a));
-        const top = sorted[0];
+      function pickEventTs(e) {
+        return Date.parse(e?.timestamp || e?.createdDate || e?.eventDate ||
+                          e?.created || e?.when || e?.date || "") || 0;
+      }
+      function normalizeEvent(top) {
         if (!top) return null;
         return {
           timestamp: top.timestamp || top.createdDate || top.eventDate ||
                      top.created || top.when || top.date || null,
           user: top.userEmail || top.email || top.userDisplayName ||
                 top.userName || top.user || top.modifiedByUserDisplayName ||
-                top.modifiedBy || null,
+                top.modifiedBy || top.createdByUserDisplayName ||
+                top.createdBy || null,
           description: top.description || top.message || top.event ||
                        top.type || top.eventType || null,
           raw: top,
         };
+      }
+      function extractLatestEvent(events) {
+        if (!Array.isArray(events) || events.length === 0) return null;
+        // Sort descending by timestamp — most recent first.
+        const sorted = events.slice().sort((a, b) => pickEventTs(b) - pickEventTs(a));
+        return normalizeEvent(sorted[0]);
+      }
+      function extractFirstEvent(events) {
+        if (!Array.isArray(events) || events.length === 0) return null;
+        // Sort ascending by timestamp — earliest first (the "created" event).
+        const sorted = events.slice().sort((a, b) => pickEventTs(a) - pickEventTs(b));
+        return normalizeEvent(sorted[0]);
       }
 
       // Map invoice.status numeric → label. Status 3 was "posted/paid"
@@ -10213,22 +10223,46 @@
         out.subscriptionOrder = subscriptionOrder;
         out.subscriptionOrderIsSeparate = subscriptionOrderIsSeparate;
 
-        // Fetch the eventlog (timeline) for the subscription order so we
-        // can show 'Last updated by' on the modal. Bridge v1.9.11+.
-        // Fails silently if older bridge — non-fatal.
-        if (subscriptionOrder?.id) {
+        // Fetch the eventlog (timeline) for BOTH the primary order and
+        // (if different) the subscription order. Each populates two
+        // events on the verdict: the LATEST (most recent update) and
+        // the FIRST (the creation event). Bridge v1.9.11+; non-fatal
+        // if the bridge is older.
+        try {
+          const orderEvents = await youniumFetchOrderEventLog(order.id);
+          out.raw.orderEventLog = orderEvents;
+          out.orderLatestEvent = extractLatestEvent(orderEvents);
+          out.orderCreatedEvent = extractFirstEvent(orderEvents);
+          dbg("primary eventlog:", {
+            orderId: order.id,
+            eventCount: orderEvents.length,
+            latestEvent: out.orderLatestEvent,
+            createdEvent: out.orderCreatedEvent,
+          });
+        } catch (e) {
+          dbg("primary eventlog fetch failed:", e);
+        }
+        if (subscriptionOrder?.id && subscriptionOrder.id !== order.id) {
           try {
             const events = await youniumFetchOrderEventLog(subscriptionOrder.id);
             out.raw.subscriptionEventLog = events;
             out.subscriptionLatestEvent = extractLatestEvent(events);
+            out.subscriptionCreatedEvent = extractFirstEvent(events);
             dbg("subscription eventlog:", {
               orderId: subscriptionOrder.id,
               eventCount: events.length,
               latestEvent: out.subscriptionLatestEvent,
+              createdEvent: out.subscriptionCreatedEvent,
             });
           } catch (e) {
             dbg("subscription eventlog fetch failed:", e);
           }
+        } else if (subscriptionOrder?.id) {
+          // Same order — reuse the primary's events so the Subscription
+          // section can render Created by / Last updated by without
+          // an extra API call.
+          out.subscriptionLatestEvent = out.orderLatestEvent;
+          out.subscriptionCreatedEvent = out.orderCreatedEvent;
         }
         dbg("order:", {
           orderNumber: order.orderNumber, status: order.status,
@@ -27305,6 +27339,23 @@
         const orderBadgeClass = orderIsInvoiced ? "youniumSubBadge-green"
           : (orderIsBad ? "youniumSubBadge-red" : "youniumSubBadge-gray");
 
+        // Render an event entry (user + timestamp + optional description)
+        // as a HTML fragment suitable for a KV value cell. Returns '' on
+        // missing event so the row gets filtered out by renderKV.
+        const renderEvent = (ev) => {
+          if (!ev || !ev.user) return null;
+          let val = escHtml(String(ev.user));
+          if (ev.timestamp) {
+            val += ' <span style="color: var(--muted2); font-size: 11px; font-style: italic;">on ' +
+                   escHtml(new Date(ev.timestamp).toLocaleString(UI_LOCALE)) + '</span>';
+          }
+          if (ev.description) {
+            val += '<br><span style="color: var(--muted); font-size: 11px;">' +
+                   escHtml(String(ev.description)) + '</span>';
+          }
+          return val;
+        };
+
         const orderKV = [
           ["Younium link",                orderLink
             ? '<a href="' + escHtml(orderLink) + '" target="_blank" rel="noopener noreferrer">' + escHtml(orderLink) + "</a>"
@@ -27326,6 +27377,10 @@
           ["Created date",                fmtDate(order?.created)],
           ["Updated date",                fmtDate(order?.modified || order?.modifiedWithDependencies)],
           ["Last changed",                lastChangeStr + ' <span style="color: var(--muted2); font-size: 11px; font-style: italic;">(' + escHtml(lastChangeSource) + ")</span>"],
+          // Order audit-log attribution (bridge v1.9.11+). Filtered out
+          // automatically by renderKV when no eventlog data is available.
+          ["Created by",                  renderEvent(verdict.orderCreatedEvent)],
+          ["Last updated by",             renderEvent(verdict.orderLatestEvent)],
         ];
 
         // ── Subscription section ──
@@ -27357,35 +27412,11 @@
               ["Term (months)",            subOrder?.term ?? "—"],
               ["Created date",             fmtDate(subOrder?.created)],
               ["Updated date",             fmtDate(subOrder?.modified || subOrder?.modifiedWithDependencies)],
-              // 'Last updated by' from the eventlog endpoint (bridge
-              // v1.9.11+). When the timeline returns events, show the
-              // most recent event's user. Falls back to the order
-              // payload's modifiedBy* fields if eventlog isn't available.
-              ...(function () {
-                const ev = verdict.subscriptionLatestEvent;
-                if (ev && ev.user) {
-                  let val = escHtml(String(ev.user));
-                  if (ev.timestamp) {
-                    val += ' <span style="color: var(--muted2); font-size: 11px; font-style: italic;">on ' +
-                           escHtml(new Date(ev.timestamp).toLocaleString(UI_LOCALE)) + '</span>';
-                  }
-                  if (ev.description) {
-                    val += '<br><span style="color: var(--muted); font-size: 11px;">' +
-                           escHtml(String(ev.description)) + '</span>';
-                  }
-                  return [["Last updated by", val]];
-                }
-                // Fall back to direct order fields (rarely populated).
-                const v = subOrder?.modifiedByUserDisplayName ||
-                  subOrder?.modifiedByDisplayName ||
-                  subOrder?.modifiedByUser ||
-                  subOrder?.modifiedBy ||
-                  subOrder?.lastModifiedByUserDisplayName ||
-                  subOrder?.lastModifiedBy ||
-                  subOrder?.updatedByUserDisplayName ||
-                  subOrder?.updatedBy;
-                return v ? [["Last updated by", escHtml(String(v))]] : [];
-              })(),
+              // Subscription audit-log attribution from /api/eventlog.
+              // renderEvent returns null when no event data → row gets
+              // filtered out by renderKV automatically.
+              ["Created by",               renderEvent(verdict.subscriptionCreatedEvent)],
+              ["Last updated by",          renderEvent(verdict.subscriptionLatestEvent)],
             ]
           : [
               ["Note",                     "No order with IWMAC Abonnement / Subscription product found for this plant_id. This may be a one-time sale, or the plant_id custom field isn't set on the subscription order in Younium."],
