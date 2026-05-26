@@ -3115,7 +3115,10 @@
         padding: 0;
         border: 1px solid var(--hairline-strong);
         border-radius: 14px;
-        background: var(--panel);
+        /* Opaque background — --panel is intentionally rgba so the
+           dim-overlay backdrop shows through other surfaces. Modal
+           must be fully solid so its content reads cleanly. */
+        background: #0f1424;
         color: var(--text);
         box-shadow: var(--shadow-lg);
         display: flex;
@@ -3123,10 +3126,35 @@
         overflow: hidden;
       }
       dialog.dlgYouniumStatus::backdrop {
-        background: rgba(0, 0, 0, 0.55);
+        background: rgba(0, 0, 0, 0.6);
       }
       @media (prefers-color-scheme: light) {
         dialog.dlgYouniumStatus { background: #ffffff; }
+      }
+      /* Inner sections also need opaque-ish backgrounds so they
+         don't look "see-through" against the dialog's solid surface. */
+      dialog.dlgYouniumStatus .youniumSection {
+        background: rgba(255, 255, 255, 0.035);
+      }
+      @media (prefers-color-scheme: light) {
+        dialog.dlgYouniumStatus .youniumSection {
+          background: rgba(15, 23, 42, 0.035);
+        }
+      }
+      /* X-icon close button in the title bar — same compact icon
+         button style as the other dialogs in this app. Distinct from
+         the footer "Close" button so the user isn't confused by two
+         identical labels. */
+      .dlgYouniumStatusHd .btnCloseIcon {
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+        line-height: 1;
+        border-radius: 8px;
       }
       .dlgYouniumStatusHd {
         display: flex;
@@ -6579,7 +6607,7 @@
     <dialog id="dlgYouniumStatus" class="dlgYouniumStatus" aria-labelledby="dlgYouniumStatusTitle">
       <div class="dlgHd dlgYouniumStatusHd">
         <strong id="dlgYouniumStatusTitle">Younium status details</strong>
-        <button class="btn" id="btnCloseYouniumStatus" type="button" aria-label="Close">Close</button>
+        <button class="btn btnCloseIcon" id="btnCloseYouniumStatus" type="button" aria-label="Close" title="Close (Esc)">✕</button>
       </div>
       <div class="dlgYouniumStatusBody" id="dlgYouniumStatusBody">
         <!-- Populated by openYouniumStatusModal() -->
@@ -18713,7 +18741,7 @@
                 fill("hubspotUrl",  links.hubspot);
                 if (links.rocketlane) fill("rocketlaneUrl", links.rocketlane);
                 if (changed) {
-                  save();
+                  saveState(state);
                   // Re-render so the toolbar icons appear immediately,
                   // and also re-render the project LIST so list-view
                   // affordances reflect the new state.
@@ -26370,7 +26398,7 @@
             problems: verdict?.problems || [],
             lastCheckedAt: verdict?.lastCheckedAt,
           };
-          save();
+          saveState(state);
         }
       }
 
