@@ -3069,35 +3069,45 @@
 
       /* ── Younium status chip ──
          Lives in the project header meta row between the Updated chip
-         and the RL sync chip. Element is still a <button> so the
-         click handler + role stay intact, but visually it matches the
-         .tag chips around it: rounded pill, small font, subtle border.
-         Color tint per verdict comes from .youniumStatus-<color>. */
-      .youniumStatusBtn {
-        /* Override the .btn base so the chip matches .tag sizing. */
+         and the RL sync chip. The selector .btn.youniumStatusBtn has
+         specificity (0,2,0) — beats the plain .btn (0,1,0) rule
+         defined later in source order, so these properties actually
+         apply instead of being overridden by .btn defaults.
+         Metrics mirror the Partner / Owner / Updated .tag chips:
+            padding 5px 12px · font-size 11.5px · gap 7px · pill radius. */
+      .btn.youniumStatusBtn {
         height: auto;
-        padding: 5px 10px;
-        font-size: 11px;
+        padding: 5px 12px;
+        font-size: 11.5px;
         font-weight: 500;
-        line-height: 1.2;
+        line-height: 1.35;
         border-radius: 999px;
-        border: 1px solid var(--border);
-        background: rgba(255, 255, 255, 0.03);
-        color: var(--muted);
+        border: 1px solid transparent;
+        background: rgba(255, 255, 255, 0.07);
+        color: rgba(255, 255, 255, 0.66);
         white-space: nowrap;
         cursor: pointer;
         display: inline-flex;
         align-items: center;
-        gap: 4px;
+        gap: 7px;
       }
-      .youniumStatusBtn:hover:not(:disabled) {
+      @media (prefers-color-scheme: light) {
+        .btn.youniumStatusBtn {
+          background: rgba(15, 23, 42, 0.05);
+          color: rgba(15, 23, 42, 0.66);
+        }
+      }
+      .btn.youniumStatusBtn:hover:not(:disabled) {
         filter: brightness(1.15);
-        background: rgba(255, 255, 255, 0.05);
+        background: rgba(255, 255, 255, 0.1);
       }
-      .youniumStatus-green  { background: var(--good-soft);   color: var(--good);   border-color: rgba(52,211,153,0.45); }
-      .youniumStatus-yellow { background: var(--warn-soft);   color: var(--warn);   border-color: rgba(251,191,36,0.45); }
-      .youniumStatus-red    { background: var(--bad-soft);    color: var(--bad);    border-color: rgba(251,113,133,0.45); }
-      .youniumStatus-gray   { /* uses chip defaults above (subtle bg, muted text, hairline border) */ }
+      .btn.youniumStatusBtn:disabled { opacity: 0.55; cursor: not-allowed; }
+      /* Color tints — soft fill + matching text color, no aggressive
+         border (matches the .tag.good / .tag.warn / .tag.bad pattern). */
+      .btn.youniumStatusBtn.youniumStatus-green  { background: var(--good-soft); color: var(--good); border-color: transparent; }
+      .btn.youniumStatusBtn.youniumStatus-yellow { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+      .btn.youniumStatusBtn.youniumStatus-red    { background: var(--bad-soft);  color: var(--bad);  border-color: transparent; }
+      .btn.youniumStatusBtn.youniumStatus-gray   { /* chip defaults above */ }
 
       .youniumStatusPopover {
         position: fixed;
