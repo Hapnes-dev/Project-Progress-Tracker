@@ -10195,12 +10195,28 @@
         // Subscription verdict — derived from the SUBSCRIPTION order's
         // lifecycle (which may be a different order than the saved
         // primary one, if we found it via plant_id lookup).
+        //
         // Younium order.status enum (verified): 1=Created, 5=Draft, 9=Active.
-        // A subscription order saved as Draft will *not* be invoiced —
-        // even if the dates look fine. Check raw status FIRST.
+        // BUT Younium UI also displays "Draft" when an order has no
+        // assigned orderNumber yet — which can happen on orders that
+        // technically have status=9 but haven't been published. So we
+        // have to check BOTH the status enum AND the orderNumber.
+        // Whichever signal Younium itself uses to show "Draft" in its
+        // UI is the one we mirror.
         const subOrder = subscriptionOrder || order;
-        const subIsRawDraft   = subOrder.status === 5;
+        const subOrderNumberStr = String(subOrder.orderNumber || "").trim();
+        const subOrderNumberLooksDraft =
+          !subOrderNumberStr ||
+          subOrderNumberStr.toLowerCase() === "draft" ||
+          /^draft\b/i.test(subOrderNumberStr);
+        const subIsRawDraft   = subOrder.status === 5 || subOrderNumberLooksDraft;
         const subIsRawCreated = subOrder.status === 1;
+        dbg("subscription order:", {
+          id: subOrder.id, orderNumber: subOrder.orderNumber,
+          status: subOrder.status, isLastVersion: subOrder.isLastVersion,
+          effectiveStartDate: subOrder.effectiveStartDate,
+          subOrderNumberLooksDraft, subIsRawDraft, subIsRawCreated,
+        });
         const subTsStart = subOrder.effectiveStartDate ? Date.parse(subOrder.effectiveStartDate) : NaN;
         const subTsEnd   = subOrder.effectiveEndDate   ? Date.parse(subOrder.effectiveEndDate)   : NaN;
         const subTsCancelled = subOrder.cancellationDate ? Date.parse(subOrder.cancellationDate) : NaN;
@@ -27219,6 +27235,13 @@
         const subActive = verdict.subscriptionStatus === "Active";
         const subStatusBadgeColor = subActive ? "var(--good)" : "var(--bad)";
         const subOrderLink = subOrder?.id ? "https://eu.younium.com/orders/" + subOrder.id : null;
+        // Status enum lookup so we can show e.g. "Draft (5)" / "Active (9)"
+        const subStatusEnum = subOrder?.status;
+        const subStatusEnumLabel =
+          subStatusEnum === 5 ? "Draft" :
+          subStatusEnum === 9 ? "Active" :
+          subStatusEnum === 1 ? "Created" :
+          (subStatusEnum != null ? "status " + subStatusEnum : "—");
         const subscriptionKV = verdict.hasSubscriptionProduct
           ? [
               ["Has IWMAC subscription",   '<span style="color: var(--good);">Yes</span>'],
@@ -27228,6 +27251,10 @@
                   escHtml(subOrder?.orderNumber || subOrder?.id || "—") +
                   '</a> <span style="color: var(--muted2); font-size: 11px; font-style: italic;">(found via plant_id search — different from saved Younium link)</span>'
                 : '<span style="color: var(--muted2); font-style: italic;">Same as the order above</span>'],
+              ["Order number",             subOrder?.orderNumber
+                ? escHtml(String(subOrder.orderNumber))
+                : '<strong style="color: var(--bad);">— (no number assigned → Draft)</strong>'],
+              ["Younium raw status",       subStatusEnumLabel + (subStatusEnum != null ? " (" + subStatusEnum + ")" : "")],
               ["Subscription status",      '<strong style="color: ' + subStatusBadgeColor + ';">' + escHtml(verdict.subscriptionStatus) + '</strong>'],
               ["Expected status",          "Active"],
               ["Start date",               fmtDateOnly(subOrder?.effectiveStartDate)],
