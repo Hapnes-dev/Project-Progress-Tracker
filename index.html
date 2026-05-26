@@ -3282,6 +3282,31 @@
         color: var(--muted);
         margin-top: 6px;
       }
+      /* Compact rows for the "Other orders for this plant" section.
+         One line per sibling order with the order number, a status
+         badge, an optional description, and the start/end dates
+         below in muted text. */
+      .youniumRelatedRow {
+        padding: 8px 10px;
+        margin-top: 6px;
+        border: 1px solid var(--hairline);
+        border-radius: 8px;
+        font-size: 12.5px;
+        line-height: 1.4;
+      }
+      .youniumRelatedRow:first-of-type { margin-top: 4px; }
+      .youniumRelatedRow a {
+        color: var(--accent);
+        font-weight: 600;
+        text-decoration: none;
+      }
+      .youniumRelatedRow a:hover { text-decoration: underline; }
+      .youniumRelatedMeta {
+        color: var(--muted2);
+        font-size: 11px;
+        margin-top: 3px;
+      }
+
       /* Status badge next to the "Subscription" section title.
          Green = Active subscription, red = anything else, gray = no
          IWMAC subscription product on this order. */
@@ -10022,6 +10047,47 @@
           return null;
         }
       }
+
+      /**
+       * Find ALL Younium orders (summaries) for a given plant_id, so
+       * the modal can list every order that belongs to the same plant
+       * — not just the saved/subscription pair. Lighter weight than
+       * youniumFindSubscriptionByPlantId since it doesn't hydrate
+       * each order's full payload (the searchOrders summary fields
+       * are enough for a compact list row).
+       *
+       * Returns [] on failure (never throws).
+       */
+      async function youniumFindAllOrdersByPlantId(plantId) {
+        const bridge = window.YouniumBridge;
+        if (!bridge?.searchOrders) return [];
+        const pid = String(plantId || "").trim();
+        if (!pid) return [];
+        try {
+          const result = await bridge.searchOrders("", {
+            pageSize: 50,
+            // Ask for a richer field set than the default — we want
+            // to render compact rows without an extra getOrderById
+            // per order.
+            displayFields: [
+              "orderNumber", "description", "plant_id", "plant_name",
+              "accountname", "status", "orderType",
+              "effectiveStartDate", "effectiveEndDate",
+              "cancellationDate", "created", "modified",
+              "isLastVersion", "isAutoRenewed",
+              "id",
+            ],
+            conditions: [
+              { fieldName: "plant_id",      value: pid,  operator: 0 },
+              { fieldName: "isLastVersion", value: true, operator: 0 },
+            ],
+          });
+          return result?.result || [];
+        } catch (e) {
+          console.warn("[Younium status] plant_id all-orders search failed", e);
+          return [];
+        }
+      }
       async function youniumFetchInvoicesForOrder(orderNumber) {
         const bridge = window.YouniumBridge;
         if (!bridge?.getInvoicesForOrder) return [];
@@ -10226,6 +10292,23 @@
         out.hasSubscriptionProduct = !!subMatch;
         out.subscriptionOrder = subscriptionOrder;
         out.subscriptionOrderIsSeparate = subscriptionOrderIsSeparate;
+
+        // Fetch every order for this plant_id so the modal can show
+        // sibling orders (e.g. multiple change-orders or upgrades on
+        // the same plant). Fails silently — non-fatal.
+        const plantIdAll = extractPlantIdFromProjectName(project?.name);
+        if (plantIdAll) {
+          try {
+            const allOrders = await youniumFindAllOrdersByPlantId(plantIdAll);
+            out.relatedOrders = allOrders;
+            dbg("plant_id all-orders:", { plantId: plantIdAll, count: allOrders.length });
+          } catch (e) {
+            dbg("all-orders fetch failed:", e);
+            out.relatedOrders = [];
+          }
+        } else {
+          out.relatedOrders = [];
+        }
 
         // Fetch the eventlog (timeline) for BOTH the primary order and
         // (if different) the subscription order. Each populates two
@@ -27491,7 +27574,56 @@
                 : ' <span class="youniumSubBadge youniumSubBadge-gray">none</span>') +
             '</div>' +
             renderKV(subscriptionKV) +
-          '</div>';
+          '</div>' +
+          // ── Other orders for this plant_id ──
+          // Compact rows for sibling orders (excluding the saved primary
+          // + the IWMAC subscription order, which are already detailed
+          // above). Lets the user see every order on the plant without
+          // leaving the modal.
+          (function () {
+            const all = verdict.relatedOrders || [];
+            if (!all.length) return "";
+            const primaryId = order?.id;
+            const subId = subscriptionOrder?.id;
+            const others = all.filter((o) => o.id !== primaryId && o.id !== subId);
+            if (!others.length) return "";
+            // Sort newest first by effectiveStartDate (fallback: created).
+            others.sort((a, b) => {
+              const ta = Date.parse(a.effectiveStartDate || a.created || "") || 0;
+              const tb = Date.parse(b.effectiveStartDate || b.created || "") || 0;
+              return tb - ta;
+            });
+            // Status enum → human label (incl. unknowns).
+            const statusLabel = (s) =>
+              s === 9 ? "Active" :
+              s === 5 ? "Draft" :
+              s === 1 ? "Created" :
+              s === 0 ? "Draft" :
+              (s == null ? "—" : "status " + s);
+            const statusBadgeClass = (s) =>
+              s === 9 ? "youniumSubBadge-green" :
+              (s === 5 || s === 0 || s === 1) ? "youniumSubBadge-red" :
+              "youniumSubBadge-gray";
+            const rows = others.map((o) => {
+              const url = "https://eu.younium.com/orders/" + o.id;
+              const num = o.orderNumber || "Draft";
+              const desc = o.description ? " — " + escHtml(o.description) : "";
+              const start = o.effectiveStartDate ? fmtDateOnly(o.effectiveStartDate) : "—";
+              const end = o.effectiveEndDate ? fmtDateOnly(o.effectiveEndDate) : "—";
+              return '<div class="youniumRelatedRow">' +
+                '<a href="' + escHtml(url) + '" target="_blank" rel="noopener noreferrer">' + escHtml(num) + '</a>' +
+                ' <span class="youniumSubBadge ' + statusBadgeClass(o.status) + '">' + escHtml(statusLabel(o.status)) + '</span>' +
+                desc +
+                '<div class="youniumRelatedMeta">Start ' + escHtml(start) + ' · End ' + escHtml(end) + '</div>' +
+              '</div>';
+            }).join("");
+            return '<div class="youniumSection">' +
+              '<div class="youniumSectionTitle">Other orders for this plant ' +
+                '<span class="youniumSubBadge youniumSubBadge-gray">' + others.length + '</span>' +
+              '</div>' +
+              rows +
+            '</div>';
+          })();
 
         // Footer action buttons — show/hide based on what's available
         if (orderLink) {
