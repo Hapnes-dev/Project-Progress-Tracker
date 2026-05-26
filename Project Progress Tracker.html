@@ -10031,19 +10031,35 @@
         out.raw.invoices = invoices;
         dbg("invoices:", { total: invoices.length, posted: postedInvoices.length });
 
+        // Younium raw order.status enum: 1=Created, 5=Draft, 9=Active.
+        // status 5 means the order is saved as Draft in Younium itself
+        // — should never go to invoicing in that state. Flag explicitly
+        // and treat as red regardless of isLastVersion.
+        const isRawDraft = order.status === 5;
+        const isRawCreated = order.status === 1;
+
         if (isCancelled) {
           out.orderStatus = "Cancelled";
+        } else if (isRawDraft) {
+          out.orderStatus = "Draft";
+        } else if (isRawCreated) {
+          out.orderStatus = "Created (not finalized)";
         } else if (postedInvoices.length > 0) {
           out.orderStatus = "Invoiced";
         } else if (startsInFuture) {
           out.orderStatus = "Order (pending start)";
         } else if (order.isLastVersion) {
-          out.orderStatus = "Order";
+          out.orderStatus = "Order (not invoiced)";
         } else {
-          out.orderStatus = "Draft";
+          out.orderStatus = "Draft (outdated version)";
         }
 
         // ── Color verdict ──
+        // Expected end state: Invoiced. Anything else is a problem of
+        // varying severity:
+        //   red    = action required (Draft, Cancelled, Expired, Created)
+        //   yellow = waiting on something (pending start, not yet invoiced)
+        //   green  = Invoiced + Active subscription
         if (isCancelled) {
           out.color = "red";
           out.label = "Younium: Cancelled";
@@ -10052,14 +10068,18 @@
           out.color = "red";
           out.label = "Younium: Expired";
           out.problems.push("Order ended " + (order.effectiveEndDate || "").slice(0, 10) + " and is not auto-renewing");
-        } else if (out.orderStatus === "Draft") {
+        } else if (isRawDraft || out.orderStatus.startsWith("Draft")) {
           out.color = "red";
           out.label = "Younium: Draft";
-          out.problems.push("Order is in Draft state — not invoiced and not the latest version");
+          out.problems.push("Order is in Draft state — needs to be activated and invoiced");
+        } else if (isRawCreated) {
+          out.color = "red";
+          out.label = "Younium: Not finalized";
+          out.problems.push("Order is Created but not yet finalized — should be activated and invoiced");
         } else if (postedInvoices.length === 0) {
           out.color = "yellow";
           out.label = "Younium: Not invoiced";
-          out.problems.push("Order has no posted invoices yet");
+          out.problems.push("Order has no posted invoices yet — should be invoiced");
         } else if (out.subscriptionStatus === "Active") {
           out.color = "green";
           out.label = "Younium: OK";
