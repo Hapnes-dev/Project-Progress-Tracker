@@ -27047,51 +27047,57 @@
       els.btnYouniumStatus.addEventListener("click", openYouniumStatusModal);
 
       // ── Close handlers ──
-      // In the user's environment, BOTH <button> clicks AND the native
-      // Esc-to-close are blocked. Backdrop clicks (target === dialog)
-      // work. We add two more close paths that should survive the
-      // interception:
+      // The user's environment blocks pretty much everything: <button>
+      // clicks, <dialog> native Esc, even clicks on <span> elements
+      // inside the dialog. Something is calling stopPropagation on
+      // click events before they reach handlers attached inside the
+      // dialog tree.
       //
-      //   1. Backdrop click — works because target IS the dialog.
-      //   2. Clickable <span> "close" elements in the header + footer
-      //      — spans aren't <button> elements so the button-click
-      //      interception doesn't apply.
-      //   3. Document-level keydown for Escape — explicit JS listener
-      //      since the native <dialog> Esc handling isn't firing.
-      //   4. Backup: window.closeYouniumModal() in DevTools console.
-      els.dlgYouniumStatus?.addEventListener("click", (ev) => {
-        if (!els.dlgYouniumStatus.open) return;
+      // BUT backdrop clicks work — which means clicks DO reach the
+      // dialog element. So we attach a CAPTURE-PHASE listener on the
+      // document. Capture phase fires top-down, BEFORE any bubbling
+      // stopPropagation can run. We catch close clicks before anything
+      // in the page has a chance to swallow them.
+      //
+      // Also listen to mousedown + pointerdown as belt-and-braces in
+      // case it's specifically the "click" event that's being blocked.
+      function closeIfTargetIsCloseHint(ev) {
         const t = ev.target;
-        // (1) Backdrop click — target IS the dialog
-        if (t === els.dlgYouniumStatus) {
-          els.dlgYouniumStatus.close();
-          return;
+        if (!t || !t.closest) return;
+        const dlg = document.getElementById("dlgYouniumStatus");
+        if (!dlg || !dlg.open) return;
+        // Match any descendant of either close hint span (or the span
+        // itself). closest() walks up so the ✕-glyph inner text also
+        // matches.
+        if (t.closest("#closeYouniumHintTop, #closeYouniumHintBottom")) {
+          try {
+            // eslint-disable-next-line no-console
+            console.log("[Younium status] close hint", ev.type, "fired — closing dialog");
+          } catch (_) {}
+          dlg.close();
+          // Belt: also remove the open attr in case .close() fails
+          // silently in this environment.
+          try { dlg.removeAttribute("open"); } catch (_) {}
         }
-        // (2) Click on either "✕ Close" span (or any descendant of one)
-        if (t.closest && t.closest("#closeYouniumHintTop, #closeYouniumHintBottom")) {
+      }
+      // Three event types × capture phase × document level. If ANY of
+      // these get through, the dialog closes.
+      document.addEventListener("click",         closeIfTargetIsCloseHint, true);
+      document.addEventListener("mousedown",     closeIfTargetIsCloseHint, true);
+      document.addEventListener("pointerdown",   closeIfTargetIsCloseHint, true);
+
+      // Backdrop click (target IS the dialog itself) — already works.
+      els.dlgYouniumStatus?.addEventListener("click", (ev) => {
+        if (ev.target === els.dlgYouniumStatus && els.dlgYouniumStatus.open) {
           els.dlgYouniumStatus.close();
-          return;
         }
       });
-      // (3) Esc keydown — fallback if native <dialog> Esc handling is
-      // blocked. We listen at document level so it fires regardless
-      // of which element has focus.
+      // Esc keydown at capture phase — same reasoning.
       document.addEventListener("keydown", (ev) => {
         if (ev.key === "Escape" && els.dlgYouniumStatus?.open) {
           els.dlgYouniumStatus.close();
         }
-      });
-      // Also fire on Enter/Space when one of the hint spans is focused
-      // (keyboard accessibility for the span "buttons").
-      ["closeYouniumHintTop", "closeYouniumHintBottom"].forEach((id) => {
-        const el = document.getElementById(id);
-        el?.addEventListener("keydown", (ev) => {
-          if ((ev.key === "Enter" || ev.key === " ") && els.dlgYouniumStatus?.open) {
-            ev.preventDefault();
-            els.dlgYouniumStatus.close();
-          }
-        });
-      });
+      }, true);
 
       els.dlgYouniumStatus?.addEventListener("close", () => {
         try {
