@@ -27278,7 +27278,6 @@
               ["Younium link",             subOrderLink
                 ? '<a href="' + escHtml(subOrderLink) + '" target="_blank" rel="noopener noreferrer">' + escHtml(subOrderLink) + '</a>'
                 : '<em style="color: var(--muted);">none</em>'],
-              ["Has IWMAC subscription",   '<span style="color: var(--good);">Yes</span>'],
               ["Order ID",                 subOrder?.id || "—"],
               ["Order number",             subOrder?.orderNumber
                 ? escHtml(String(subOrder.orderNumber))
@@ -27313,8 +27312,7 @@
               })(),
             ]
           : [
-              ["Has IWMAC subscription",   '<span style="color: var(--muted);">No (searched by plant_id — no order with IWMAC Abonnement / Subscription product found)</span>'],
-              ["Note",                     "This may be a one-time sale, or the plant_id custom field isn't set on the subscription order in Younium. No subscription status to check."],
+              ["Note",                     "No order with IWMAC Abonnement / Subscription product found for this plant_id. This may be a one-time sale, or the plant_id custom field isn't set on the subscription order in Younium."],
             ];
 
         const renderKV = (rows) =>
