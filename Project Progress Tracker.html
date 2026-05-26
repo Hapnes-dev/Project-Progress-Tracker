@@ -9903,6 +9903,18 @@
       // Fetches happen via the v1.9.10 bridge methods getOrderById /
       // getInvoicesForOrder / getQuoteById.
 
+      // ── Plant ID extraction ──
+      // Project names follow "<plant_id> - <description>" (e.g.
+      // "4729 - Storcash Rudshøgda"). The Younium subscription order
+      // also carries a `plant_id` custom field that matches. We use
+      // this to find the subscription order even when the saved
+      // youniumUrl points to a different (one-off) order.
+      function extractPlantIdFromProjectName(name) {
+        if (!name) return null;
+        const m = String(name).trim().match(/^(\d{2,7})\s*[-–]\s+/);
+        return m ? m[1] : null;
+      }
+
       // ── Subscription-product detection ──
       // Per user spec: a Younium order that creates a subscription
       // always has a product line called "IWMAC Abonnement" or
@@ -9955,6 +9967,55 @@
           throw new Error("YouniumBridge.getOrderById not available — update userscript to v1.9.10+.");
         }
         return await bridge.getOrderById(id);
+      }
+
+      /**
+       * Find the Younium SUBSCRIPTION order for a given plant_id by:
+       *   1. Searching Younium orders with plant_id == <plantId>
+       *      (only `isLastVersion=true` rows so we ignore superseded
+       *      versions).
+       *   2. Fetching each candidate order in full and checking for an
+       *      IWMAC Abonnement / Subscription product line.
+       *   3. Returning the first match (ordered by effectiveStartDate
+       *      descending — newest subscription first).
+       *
+       * Returns { order, productName } or null.
+       */
+      async function youniumFindSubscriptionByPlantId(plantId) {
+        const bridge = window.YouniumBridge;
+        if (!bridge?.searchOrders || !bridge?.getOrderById) return null;
+        const pid = String(plantId || "").trim();
+        if (!pid) return null;
+        try {
+          // Younium's data-query endpoint takes conditions: operator 0
+          // is "equals". Asking for orders with plant_id == pid.
+          const result = await bridge.searchOrders("", {
+            pageSize: 50,
+            conditions: [
+              { fieldName: "plant_id",      value: pid,  operator: 0 },
+              { fieldName: "isLastVersion", value: true, operator: 0 },
+            ],
+          });
+          const summaries = result?.result || [];
+          // Hydrate each candidate and check for IWMAC product. Stop
+          // at the first match.
+          for (const summary of summaries) {
+            if (!summary?.id) continue;
+            try {
+              const full = await bridge.getOrderById(summary.id);
+              const match = findIwmacSubscriptionItem(full);
+              if (match) {
+                return { order: full, productName: match.productName };
+              }
+            } catch (e) {
+              console.warn("[Younium status] failed to hydrate order " + summary.id, e);
+            }
+          }
+          return null;
+        } catch (e) {
+          console.warn("[Younium status] subscription-by-plant_id search failed", e);
+          return null;
+        }
       }
       async function youniumFetchInvoicesForOrder(orderNumber) {
         const bridge = window.YouniumBridge;
@@ -10067,16 +10128,44 @@
         out.raw = { order };
 
         // ── Subscription product check ──
-        // If the order contains an IWMAC Abonnement / IWMAC Subscription
-        // product line, this order creates a subscription. Stash the
-        // product name (and the array we found it in) so the modal can
-        // render a Subscription section.
-        const subMatch = findIwmacSubscriptionItem(order);
+        // First look at the SAVED order — if it contains an IWMAC
+        // Abonnement / Subscription product line, this same order
+        // creates a subscription, no extra lookup needed.
+        let subMatch = findIwmacSubscriptionItem(order);
+        let subscriptionOrder = subMatch ? order : null;
+        let subscriptionOrderIsSeparate = false;
+
+        // Otherwise, hunt for the subscription order by plant_id —
+        // every IWMAC subscription order in this tenant carries a
+        // plant_id custom field that matches the project's plant
+        // (the 4-digit prefix on the project name).
+        if (!subMatch) {
+          const plantId = extractPlantIdFromProjectName(project?.name);
+          dbg("primary order has no IWMAC product, searching by plant_id", plantId);
+          if (plantId) {
+            const found = await youniumFindSubscriptionByPlantId(plantId);
+            if (found) {
+              subMatch = { item: null, productName: found.productName };
+              subscriptionOrder = found.order;
+              subscriptionOrderIsSeparate = true;
+              out.raw.subscriptionOrder = found.order;
+              dbg("found subscription order via plant_id search:", {
+                id: found.order?.id, number: found.order?.orderNumber,
+                productName: found.productName,
+              });
+            } else {
+              dbg("no IWMAC subscription order found for plant_id", plantId);
+            }
+          }
+        }
+
         out.subscriptionProduct = subMatch ? {
           productName: subMatch.productName,
           item: subMatch.item,
         } : null;
         out.hasSubscriptionProduct = !!subMatch;
+        out.subscriptionOrder = subscriptionOrder;
+        out.subscriptionOrderIsSeparate = subscriptionOrderIsSeparate;
         dbg("order:", {
           orderNumber: order.orderNumber, status: order.status,
           effectiveStartDate: order.effectiveStartDate,
@@ -10103,16 +10192,26 @@
         const isExpired = Number.isFinite(tsEnd) && tsEnd <= now && !order.isAutoRenewed && !order.isRenewed;
         const startsInFuture = Number.isFinite(tsStart) && tsStart > now;
 
-        // Subscription verdict (derived from order lifecycle)
-        if (isCancelled) {
+        // Subscription verdict — derived from the SUBSCRIPTION order's
+        // lifecycle (which may be a different order than the saved
+        // primary one, if we found it via plant_id lookup).
+        const subOrder = subscriptionOrder || order;
+        const subTsStart = subOrder.effectiveStartDate ? Date.parse(subOrder.effectiveStartDate) : NaN;
+        const subTsEnd   = subOrder.effectiveEndDate   ? Date.parse(subOrder.effectiveEndDate)   : NaN;
+        const subTsCancelled = subOrder.cancellationDate ? Date.parse(subOrder.cancellationDate) : NaN;
+        const subIsCancelled    = Number.isFinite(subTsCancelled) && subTsCancelled <= now;
+        const subIsExpired      = Number.isFinite(subTsEnd) && subTsEnd <= now && !subOrder.isAutoRenewed && !subOrder.isRenewed;
+        const subStartsInFuture = Number.isFinite(subTsStart) && subTsStart > now;
+
+        if (subIsCancelled) {
           out.subscriptionStatus = "Cancelled";
-        } else if (isExpired) {
+        } else if (subIsExpired) {
           out.subscriptionStatus = "Inactive";
-        } else if (startsInFuture) {
+        } else if (subStartsInFuture) {
           out.subscriptionStatus = "Order — not active yet";
-        } else if (order.isLastVersion && Number.isFinite(tsStart)) {
+        } else if (subOrder.isLastVersion && Number.isFinite(subTsStart)) {
           out.subscriptionStatus = "Active";
-        } else if (order.isLastVersion) {
+        } else if (subOrder.isLastVersion) {
           out.subscriptionStatus = "Order";
         } else {
           out.subscriptionStatus = "Unknown";
@@ -27084,30 +27183,36 @@
         ];
 
         // ── Subscription section ──
-        // Show whether this order has an IWMAC subscription product
-        // and what the lifecycle state of the subscription is.
+        // Use the actual SUBSCRIPTION order (may be a different order
+        // than the saved/primary one if we found it via plant_id lookup).
         // Per user spec: Active = good (green), anything else = bad (red).
+        const subOrder = verdict.subscriptionOrder || null;
         const subActive = verdict.subscriptionStatus === "Active";
         const subStatusBadgeColor = subActive ? "var(--good)" : "var(--bad)";
-        const subStatusBadgeText = subActive ? "● Active (good)" : "● " + verdict.subscriptionStatus + " (should be Active)";
+        const subOrderLink = subOrder?.id ? "https://eu.younium.com/orders/" + subOrder.id : null;
         const subscriptionKV = verdict.hasSubscriptionProduct
           ? [
               ["Has IWMAC subscription",   '<span style="color: var(--good);">Yes</span>'],
               ["Product name",             verdict.subscriptionProduct?.productName || "—"],
+              ["Subscription order",       verdict.subscriptionOrderIsSeparate
+                ? '<a href="' + escHtml(subOrderLink || "") + '" target="_blank" rel="noopener noreferrer">' +
+                  escHtml(subOrder?.orderNumber || subOrder?.id || "—") +
+                  '</a> <span style="color: var(--muted2); font-size: 11px; font-style: italic;">(found via plant_id search — different from saved Younium link)</span>'
+                : '<span style="color: var(--muted2); font-style: italic;">Same as the order above</span>'],
               ["Subscription status",      '<strong style="color: ' + subStatusBadgeColor + ';">' + escHtml(verdict.subscriptionStatus) + '</strong>'],
               ["Expected status",          "Active"],
-              ["Start date",               fmtDateOnly(order?.effectiveStartDate)],
-              ["End date",                 fmtDateOnly(order?.effectiveEndDate)],
-              ["Cancellation date",        order?.cancellationDate ? fmtDateOnly(order.cancellationDate) : "—"],
-              ["Auto-renew",               order?.isAutoRenewed ? "Yes" : "No"],
-              ["Renewed",                  order?.isRenewed ? "Yes" : "No"],
-              ["Latest version",           order?.isLastVersion ? "Yes" : "No"],
-              ["Term (months)",            order?.term ?? "—"],
-              ["Customer / account",       order?.accountname || "—"],
+              ["Start date",               fmtDateOnly(subOrder?.effectiveStartDate)],
+              ["End date",                 fmtDateOnly(subOrder?.effectiveEndDate)],
+              ["Cancellation date",        subOrder?.cancellationDate ? fmtDateOnly(subOrder.cancellationDate) : "—"],
+              ["Auto-renew",               subOrder?.isAutoRenewed ? "Yes" : "No"],
+              ["Renewed",                  subOrder?.isRenewed ? "Yes" : "No"],
+              ["Latest version",           subOrder?.isLastVersion ? "Yes" : "No"],
+              ["Term (months)",            subOrder?.term ?? "—"],
+              ["Customer / account",       subOrder?.accountname || "—"],
             ]
           : [
-              ["Has IWMAC subscription",   '<span style="color: var(--muted);">No (no IWMAC Abonnement / Subscription product found in this order)</span>'],
-              ["Note",                     "This may be a one-time sale rather than a subscription order. No subscription status to check."],
+              ["Has IWMAC subscription",   '<span style="color: var(--muted);">No (searched by plant_id — no order with IWMAC Abonnement / Subscription product found)</span>'],
+              ["Note",                     "This may be a one-time sale, or the plant_id custom field isn't set on the subscription order in Younium. No subscription status to check."],
             ];
 
         const renderKV = (rows) =>
