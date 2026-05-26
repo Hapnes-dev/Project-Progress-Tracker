@@ -3125,7 +3125,11 @@
          Replaces the small popover. Uses the native <dialog> element
          so we get Escape-close + backdrop scroll-lock for free, then
          the rest is styling. */
-      dialog.dlgYouniumStatus {
+      /* Style only applies when the dialog is open. Without the
+         [open] qualifier, our display:flex would override the user-
+         agent's `dialog:not([open]) { display: none }`, leaving an
+         empty dialog stuck in document flow at the bottom of the page. */
+      dialog.dlgYouniumStatus[open] {
         margin: auto;
         width: min(900px, 92vw);
         max-height: 88vh;
@@ -3146,15 +3150,15 @@
         background: rgba(0, 0, 0, 0.6);
       }
       @media (prefers-color-scheme: light) {
-        dialog.dlgYouniumStatus { background: #ffffff; }
+        dialog.dlgYouniumStatus[open] { background: #ffffff; }
       }
       /* Inner sections also need opaque-ish backgrounds so they
          don't look "see-through" against the dialog's solid surface. */
-      dialog.dlgYouniumStatus .youniumSection {
+      dialog.dlgYouniumStatus[open] .youniumSection {
         background: rgba(255, 255, 255, 0.035);
       }
       @media (prefers-color-scheme: light) {
-        dialog.dlgYouniumStatus .youniumSection {
+        dialog.dlgYouniumStatus[open] .youniumSection {
           background: rgba(15, 23, 42, 0.035);
         }
       }
