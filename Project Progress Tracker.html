@@ -3142,6 +3142,19 @@
         flex-direction: column;
         overflow: hidden;
       }
+      /* The dialog now wraps its content in <form method="dialog"> so
+         that the close buttons close natively (no JS needed). The form
+         needs to inherit the flex layout so the body scrolls between
+         a sticky header and footer. */
+      dialog.dlgYouniumStatus > form {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+        max-height: 100%;
+        margin: 0;
+        padding: 0;
+      }
       dialog.dlgYouniumStatus::backdrop {
         background: rgba(0, 0, 0, 0.6);
       }
@@ -6610,41 +6623,47 @@
       </form>
     </dialog>
 
-    <!-- Younium status details (fullscreen modal — opened by the top-bar Younium Status button) -->
+    <!-- Younium status details (fullscreen modal — opened by the top-bar Younium Status button)
+         The entire content is wrapped in <form method="dialog">. When a
+         button with type="submit" inside a form-method-dialog is clicked,
+         the browser AUTOMATICALLY closes the dialog. No JS required. This
+         is the W3C-native bulletproof close path — it works even if every
+         JS event listener on the page is broken. -->
     <dialog id="dlgYouniumStatus" class="dlgYouniumStatus" aria-labelledby="dlgYouniumStatusTitle">
-      <div class="dlgHd dlgYouniumStatusHd">
-        <strong id="dlgYouniumStatusTitle">Younium status details</strong>
-        <!--
-          Inline onclick is the canonical bulletproof close path for
-          native <dialog>. JS module listeners can be silently dropped
-          if a sibling event handler throws — inline onclick survives
-          all of those scenarios because the browser wires it directly.
-        -->
-        <button
-          class="btn btnCloseIcon"
-          id="btnCloseYouniumStatus"
-          type="button"
-          aria-label="Close"
-          title="Close (Esc)"
-          onclick="document.getElementById('dlgYouniumStatus').close();"
-        >✕</button>
-      </div>
-      <div class="dlgYouniumStatusBody" id="dlgYouniumStatusBody">
-        <!-- Populated by openYouniumStatusModal() -->
-      </div>
-      <div class="dlgYouniumStatusFooter" id="dlgYouniumStatusFooter">
-        <button class="btn" type="button" id="btnYouniumStatusRefresh">Refresh status</button>
-        <button class="btn" type="button" id="btnYouniumStatusCopy">Copy summary</button>
-        <a class="btn" id="btnYouniumStatusOpenOrder" target="_blank" rel="noopener noreferrer" style="display: none;">Open Younium order</a>
-        <a class="btn" id="btnYouniumStatusOpenSub" target="_blank" rel="noopener noreferrer" style="display: none;">Open subscription</a>
-        <span style="flex: 1;"></span>
-        <button
-          class="btn primary"
-          type="button"
-          id="btnCloseYouniumStatus2"
-          onclick="document.getElementById('dlgYouniumStatus').close();"
-        >Close</button>
-      </div>
+      <form method="dialog" id="formYouniumStatus">
+        <div class="dlgHd dlgYouniumStatusHd">
+          <strong id="dlgYouniumStatusTitle">Younium status details</strong>
+          <!-- type="submit" + parent <form method="dialog"> ⇒ native close on click.
+               Inline onclick is a redundant safety net. -->
+          <button
+            class="btn btnCloseIcon"
+            id="btnCloseYouniumStatus"
+            type="submit"
+            aria-label="Close"
+            title="Close (Esc)"
+            onclick="document.getElementById('dlgYouniumStatus').close();"
+          >✕</button>
+        </div>
+        <div class="dlgYouniumStatusBody" id="dlgYouniumStatusBody">
+          <!-- Populated by openYouniumStatusModal() -->
+        </div>
+        <div class="dlgYouniumStatusFooter" id="dlgYouniumStatusFooter">
+          <!-- These three are type="button" so they DON'T submit the form
+               (otherwise clicking Refresh would close the dialog). -->
+          <button class="btn" type="button" id="btnYouniumStatusRefresh">Refresh status</button>
+          <button class="btn" type="button" id="btnYouniumStatusCopy">Copy summary</button>
+          <a class="btn" id="btnYouniumStatusOpenOrder" target="_blank" rel="noopener noreferrer" style="display: none;">Open Younium order</a>
+          <a class="btn" id="btnYouniumStatusOpenSub" target="_blank" rel="noopener noreferrer" style="display: none;">Open subscription</a>
+          <span style="flex: 1;"></span>
+          <!-- type="submit" + parent <form method="dialog"> ⇒ native close on click. -->
+          <button
+            class="btn primary"
+            id="btnCloseYouniumStatus2"
+            type="submit"
+            onclick="document.getElementById('dlgYouniumStatus').close();"
+          >Close</button>
+        </div>
+      </form>
     </dialog>
 
     <!-- CSV Importer -->
