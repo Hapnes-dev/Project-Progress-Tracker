@@ -27584,7 +27584,7 @@
             const all = verdict.relatedOrders || [];
             if (!all.length) return "";
             const primaryId = order?.id;
-            const subId = subscriptionOrder?.id;
+            const subId = verdict.subscriptionOrder?.id;
             const others = all.filter((o) => o.id !== primaryId && o.id !== subId);
             if (!others.length) return "";
             // Sort newest first by effectiveStartDate (fallback: created).
