@@ -3050,21 +3050,19 @@
       .tag.hold   { background: var(--surface-3); color: var(--muted); }
       .tag.assist { background: var(--warn-soft); color: var(--warn); font-weight: 600; }
 
-      /* ── Younium status chip (between Updated and RL sync) ──
-         Matches the .tag base — same padding, line-height, font-size.
-         Color variants tint background + text using the existing
-         good/warn/bad/muted tokens so they fit the rest of the chip
-         row visually. */
-      .youniumStatusTag {
-        cursor: pointer;
-        user-select: none;
+      /* ── Younium status button (lives in the top action bar, left of Import CSV) ──
+         Uses the .btn base for height / padding / radius / font-size,
+         then a color tint per verdict. Color tokens match the in-app
+         palette so the button blends with other .btn elements. */
+      .youniumStatusBtn {
         white-space: nowrap;
+        font-weight: 500;
       }
-      .youniumStatusTag:hover { filter: brightness(1.1); }
-      .youniumStatus-green  { background: var(--good-soft);   color: var(--good);   border-color: rgba(52,211,153,0.32); }
-      .youniumStatus-yellow { background: var(--warn-soft);   color: var(--warn);   border-color: rgba(251,191,36,0.32); }
-      .youniumStatus-red    { background: var(--bad-soft);    color: var(--bad);    border-color: rgba(251,113,133,0.32); }
-      .youniumStatus-gray   { background: var(--surface-3);   color: var(--muted);  border-color: rgba(148,163,184,0.24); }
+      .youniumStatusBtn:hover:not(:disabled) { filter: brightness(1.1); }
+      .youniumStatus-green  { background: var(--good-soft);   color: var(--good);   border-color: rgba(52,211,153,0.45); }
+      .youniumStatus-yellow { background: var(--warn-soft);   color: var(--warn);   border-color: rgba(251,191,36,0.45); }
+      .youniumStatus-red    { background: var(--bad-soft);    color: var(--bad);    border-color: rgba(251,113,133,0.45); }
+      .youniumStatus-gray   { /* leave default .btn surface for the neutral case */ }
 
       .youniumStatusPopover {
         position: fixed;
@@ -3094,7 +3092,17 @@
       .youniumStatusHd.youniumStatus-gray   { color: var(--muted); }
       .youniumStatusBody { display: grid; gap: 4px; }
       .youniumStatusLabel { color: var(--muted2); margin-right: 4px; }
-      .youniumStatusFoot { margin-top: 6px; color: var(--muted2); font-size: 11px; }
+      .youniumStatusFoot { margin-top: 8px; color: var(--muted2); font-size: 11px; padding-top: 6px; border-top: 1px solid var(--hairline); }
+      .youniumStatusFoot a { color: var(--accent); cursor: pointer; }
+      .youniumStatusFoot a:hover { text-decoration: underline; }
+      .youniumStatusSource { font-size: 10.5px; color: var(--muted2); font-style: italic; margin-top: -2px; }
+      .youniumStatusDivider { border-top: 1px solid var(--hairline); margin: 6px 0; }
+      .youniumStatusLinks { display: grid; gap: 3px; }
+      .youniumStatusLinks a { color: var(--accent); }
+      .youniumStatusLinks a:hover { text-decoration: underline; }
+      .youniumStatusMissing { color: var(--muted2); font-style: italic; font-size: 11px; }
+      .youniumStatusExpected { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 11px; }
+      .youniumStatusExpected strong { color: var(--text); }
       .youniumStatusProblems { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--hairline); }
       .youniumStatusProblems ul { margin: 4px 0 0; padding-left: 18px; }
       .youniumStatusProblems li { color: var(--bad); margin-bottom: 2px; }
@@ -6091,6 +6099,7 @@
           <span class="chip" id="saveState" title="Data is saved to SQL when you click Sync now.">Saved to SQL</span>
           <button class="btn" id="btnSaveAsDataFile" type="button" title="Force immediate sync to SQL backend.">Sync now</button>
           <span class="chip" id="dataFileStatus" style="display: none;"></span>
+          <button class="btn" id="btnYouniumStatus" type="button" title="Check Younium order + subscription status for the selected project">Younium: …</button>
           <button class="btn" id="btnImportCsv" type="button">Import CSV</button>
           <button class="btn primary" id="btnNew" type="button">+ New project</button>
         </div>
@@ -17247,6 +17256,7 @@
         btnExport: document.getElementById("btnExport"),
         btnImport: document.getElementById("btnImport"),
         btnImportCsv: document.getElementById("btnImportCsv"),
+        btnYouniumStatus: document.getElementById("btnYouniumStatus"),
         saveState: document.getElementById("saveState"),
         saveError: document.getElementById("saveError"),
         loadMessage: document.getElementById("loadMessage"),
@@ -18268,6 +18278,13 @@
         els.btnEdit.disabled = !p;
         if (els.btnImportYouniumData) els.btnImportYouniumData.disabled = !p;
         els.btnDelete.disabled = !p;
+        // Sync the Younium status button face with whichever project
+        // is currently selected. Runs on every renderDetail() — which
+        // fires on selection changes + save + cross-render refreshes —
+        // so the toolbar chip always reflects the right project.
+        if (typeof window.__refreshYouniumStatusBtn === "function") {
+          try { window.__refreshYouniumStatusBtn(); } catch (_) {}
+        }
 
         // Show "📁 Files" only when this project is linked to a Rocketlane project.
         if (els.btnOpenRocketlaneFiles) {
@@ -18450,115 +18467,9 @@
         upd.textContent = "Updated: " + new Date(p.updatedAt).toLocaleString(UI_LOCALE);
         meta.appendChild(upd);
 
-        // ── Younium status chip — between "Updated" and "RL sync" ──
-        // Read-only indicator that checks the saved Younium link's
-        // order/quote status and derived subscription state. Shows the
-        // last cached verdict immediately, then refreshes in background.
-        // Click → popover with details.
-        const youniumChip = document.createElement("span");
-        youniumChip.id = "youniumStatusTag";
-        youniumChip.className = "tag youniumStatusTag";
-        youniumChip.style.cursor = "pointer";
-        const cached = p.youniumStatus;
-        if (cached && cached.label) {
-          youniumChip.classList.add("youniumStatus-" + (cached.color || "gray"));
-          youniumChip.textContent = cached.label;
-          youniumChip.title = "Click for Younium status details (last checked " +
-            (cached.lastCheckedAt ? new Date(cached.lastCheckedAt).toLocaleString(UI_LOCALE) : "—") + ")";
-        } else {
-          youniumChip.classList.add("youniumStatus-gray");
-          youniumChip.textContent = "Younium: …";
-          youniumChip.title = "Click to check Younium order + subscription status";
-        }
-        // Local helper to update chip + persist verdict.
-        const applyYouniumVerdict = (verdict) => {
-          youniumChip.className = "tag youniumStatusTag youniumStatus-" + (verdict.color || "gray");
-          youniumChip.textContent = verdict.label || "Younium: Unknown";
-          p.youniumStatus = {
-            color: verdict.color, label: verdict.label,
-            orderStatus: verdict.orderStatus, subscriptionStatus: verdict.subscriptionStatus,
-            orderNumber: verdict.orderNumber, kind: verdict.kind,
-            problems: verdict.problems || [],
-            lastCheckedAt: verdict.lastCheckedAt,
-          };
-          save();
-        };
-        // Click → open small popover anchored under the chip.
-        youniumChip.addEventListener("click", async (ev) => {
-          ev.stopPropagation();
-          // Close any existing popover first.
-          document.querySelectorAll(".youniumStatusPopover").forEach((el) => el.remove());
-          const pop = document.createElement("div");
-          pop.className = "youniumStatusPopover";
-          pop.innerHTML = "<div class='youniumStatusLoading'>Checking Younium…</div>";
-          document.body.appendChild(pop);
-          // Position under the chip (fixed coords so it survives scroll).
-          const rect = youniumChip.getBoundingClientRect();
-          pop.style.left = Math.max(8, Math.min(window.innerWidth - 360, rect.left)) + "px";
-          pop.style.top = (rect.bottom + 6) + "px";
-          // Single-shot dismiss on outside click.
-          const onDocClick = (e) => {
-            if (!pop.contains(e.target) && e.target !== youniumChip) {
-              pop.remove();
-              document.removeEventListener("click", onDocClick, true);
-            }
-          };
-          setTimeout(() => document.addEventListener("click", onDocClick, true), 0);
-
-          let verdict;
-          try { verdict = await computeYouniumStatus(p); }
-          catch (e) {
-            pop.innerHTML = "<div class='youniumStatusError'>Error: " +
-              String(e?.message ?? e).replace(/[<&]/g, (c) => c === "<" ? "&lt;" : "&amp;") + "</div>";
-            return;
-          }
-          applyYouniumVerdict(verdict);
-
-          // Build popover body
-          const esc = (s) => String(s ?? "").replace(/[<&]/g, (c) => c === "<" ? "&lt;" : "&amp;");
-          const orderLink = p.youniumUrl || (verdict.links && verdict.links.saved) || "";
-          const lastCheckedStr = verdict.lastCheckedAt
-            ? new Date(verdict.lastCheckedAt).toLocaleString(UI_LOCALE)
-            : "—";
-          const problemsHtml = (verdict.problems && verdict.problems.length)
-            ? "<div class='youniumStatusProblems'><strong>Issues:</strong><ul>" +
-              verdict.problems.map((x) => "<li>" + esc(x) + "</li>").join("") + "</ul></div>"
-            : "";
-          pop.innerHTML =
-            "<div class='youniumStatusHd youniumStatus-" + verdict.color + "'><strong>Younium status</strong></div>" +
-            "<div class='youniumStatusBody'>" +
-              "<div><span class='youniumStatusLabel'>Order / offer:</span> " + esc(verdict.orderStatus) + "</div>" +
-              "<div><span class='youniumStatusLabel'>Subscription:</span> " + esc(verdict.subscriptionStatus) + "</div>" +
-              (verdict.orderNumber ? "<div><span class='youniumStatusLabel'>Order number:</span> " + esc(verdict.orderNumber) + "</div>" : "") +
-              (orderLink ? "<div><a href='" + esc(orderLink) + "' target='_blank' rel='noopener noreferrer'>Open in Younium ↗</a></div>" : "") +
-              "<div class='youniumStatusFoot'>Last checked: " + esc(lastCheckedStr) + "</div>" +
-              problemsHtml +
-            "</div>";
-        });
-        meta.appendChild(youniumChip);
-
-        // Background auto-refresh — runs once per project per session
-        // (mirrors the auto-link-fetch pattern from earlier). Reuses
-        // the project-id-keyed sets so we don't fire on every render.
-        const youniumLinkSaved = String(p.youniumUrl || "").trim();
-        if (
-          youniumLinkSaved &&
-          !youniumStatusFetchInFlight.has(p.id) &&
-          !youniumStatusFetchedThisSession.has(p.id)
-        ) {
-          youniumStatusFetchInFlight.add(p.id);
-          computeYouniumStatus(p)
-            .then((verdict) => {
-              applyYouniumVerdict(verdict);
-            })
-            .catch((err) => {
-              console.warn("[Younium status] background fetch failed:", err);
-            })
-            .finally(() => {
-              youniumStatusFetchInFlight.delete(p.id);
-              youniumStatusFetchedThisSession.add(p.id);
-            });
-        }
+        // (Younium status chip used to live here in the project meta
+        // row. It now lives in the top action bar — see els.btnYouniumStatus
+        // + setupYouniumStatusButton() near the bottom of the script.)
 
         const linkedRocketlaneProjectId = String(p.rocketlaneProjectId ?? "").trim();
         if (linkedRocketlaneProjectId) {
@@ -26264,6 +26175,213 @@
         els.dlgCsv.showModal();
         els.csvProjectName.focus();
       });
+
+      // ── Younium status — top toolbar button ──
+      // Sits left of "Import CSV". Acts on the currently-selected project.
+      // The button face reflects the cached verdict (project.youniumStatus);
+      // background-refresh runs once per session via the existing
+      // youniumStatusFetchInFlight / youniumStatusFetchedThisSession Sets.
+      // Click opens a popover with the verdict + "Refresh status" action.
+
+      /**
+       * Pick the most recent "last change" timestamp across Younium order,
+       * Rocketlane updatedAt, and local saved verdict.lastCheckedAt.
+       * Returns { iso, source } where source explains which timestamp won.
+       */
+      function pickYouniumLastChange(project, verdict) {
+        const candidates = [];
+        const orderModified = verdict?.raw?.order?.modified || verdict?.raw?.order?.modifiedWithDependencies;
+        const orderCreated  = verdict?.raw?.order?.created;
+        if (orderModified) candidates.push({ ts: Date.parse(orderModified), iso: orderModified, source: "Younium order updated" });
+        if (orderCreated)  candidates.push({ ts: Date.parse(orderCreated),  iso: orderCreated,  source: "Younium order created" });
+        // Subscription state in this tenant is derived from order lifecycle
+        // (bookings[] is empty), so we treat order updated as the
+        // subscription proxy too. Future enhancement: walk verdict.raw.order.bookings
+        // if non-empty and pick the latest booking.modified.
+        if (project?.updatedAt) candidates.push({ ts: Date.parse(project.updatedAt), iso: project.updatedAt, source: "Project updated locally" });
+        if (verdict?.lastCheckedAt) candidates.push({ ts: Date.parse(verdict.lastCheckedAt), iso: verdict.lastCheckedAt, source: "Younium status last checked" });
+        const valid = candidates.filter((c) => Number.isFinite(c.ts) && c.ts > 0);
+        if (!valid.length) return { iso: null, source: null };
+        valid.sort((a, b) => b.ts - a.ts);
+        return valid[0];
+      }
+
+      function applyYouniumVerdictToToolbar(project, verdict) {
+        const btn = els.btnYouniumStatus;
+        if (!btn) return;
+        const color = verdict?.color || "gray";
+        const label = verdict?.label || "Younium: …";
+        btn.className = "btn youniumStatusBtn youniumStatus-" + color;
+        btn.textContent = label;
+        btn.title = "Click for Younium status details";
+        if (project) {
+          project.youniumStatus = {
+            color, label,
+            orderStatus: verdict?.orderStatus,
+            subscriptionStatus: verdict?.subscriptionStatus,
+            orderNumber: verdict?.orderNumber,
+            kind: verdict?.kind,
+            problems: verdict?.problems || [],
+            lastCheckedAt: verdict?.lastCheckedAt,
+          };
+          save();
+        }
+      }
+
+      function refreshYouniumStatusButtonFaceForSelected() {
+        const btn = els.btnYouniumStatus;
+        if (!btn) return;
+        const p = state.projects.find((x) => x.id === state.selectedProjectId);
+        if (!p) {
+          btn.className = "btn youniumStatusBtn youniumStatus-gray";
+          btn.textContent = "Younium: …";
+          btn.title = "Select a project to check Younium status";
+          btn.disabled = true;
+          return;
+        }
+        btn.disabled = false;
+        const cached = p.youniumStatus;
+        if (cached && cached.label) {
+          btn.className = "btn youniumStatusBtn youniumStatus-" + (cached.color || "gray");
+          btn.textContent = cached.label;
+          btn.title = "Click for Younium status details" +
+            (cached.lastCheckedAt
+              ? " (last checked " + new Date(cached.lastCheckedAt).toLocaleString(UI_LOCALE) + ")"
+              : "");
+        } else {
+          btn.className = "btn youniumStatusBtn youniumStatus-gray";
+          btn.textContent = String(p.youniumUrl || "").trim() ? "Younium: …" : "Younium: Missing";
+          btn.title = "Click to check Younium order + subscription status";
+        }
+        // Background refresh: once per project per session.
+        const linkSaved = String(p.youniumUrl || "").trim();
+        if (
+          linkSaved &&
+          !youniumStatusFetchInFlight.has(p.id) &&
+          !youniumStatusFetchedThisSession.has(p.id)
+        ) {
+          youniumStatusFetchInFlight.add(p.id);
+          computeYouniumStatus(p)
+            .then((verdict) => {
+              applyYouniumVerdictToToolbar(p, verdict);
+            })
+            .catch((err) => { console.warn("[Younium status] background fetch failed:", err); })
+            .finally(() => {
+              youniumStatusFetchInFlight.delete(p.id);
+              youniumStatusFetchedThisSession.add(p.id);
+            });
+        }
+      }
+
+      function openYouniumStatusPopover() {
+        const btn = els.btnYouniumStatus;
+        if (!btn) return;
+        const p = state.projects.find((x) => x.id === state.selectedProjectId);
+        if (!p) return;
+        document.querySelectorAll(".youniumStatusPopover").forEach((el) => el.remove());
+        const pop = document.createElement("div");
+        pop.className = "youniumStatusPopover";
+        pop.innerHTML = "<div class='youniumStatusLoading'>Checking Younium…</div>";
+        document.body.appendChild(pop);
+        const rect = btn.getBoundingClientRect();
+        pop.style.left = Math.max(8, Math.min(window.innerWidth - 360, rect.right - 320)) + "px";
+        pop.style.top = (rect.bottom + 6) + "px";
+
+        const onDocClick = (e) => {
+          if (!pop.contains(e.target) && e.target !== btn) {
+            pop.remove();
+            document.removeEventListener("click", onDocClick, true);
+          }
+        };
+        setTimeout(() => document.addEventListener("click", onDocClick, true), 0);
+
+        const esc = (s) => String(s ?? "").replace(/[<&]/g, (c) => c === "<" ? "&lt;" : "&amp;");
+
+        const renderInto = (verdict) => {
+          applyYouniumVerdictToToolbar(p, verdict);
+          const lastChange = pickYouniumLastChange(p, verdict);
+          const lastChangeStr = lastChange.iso
+            ? new Date(lastChange.iso).toLocaleString(UI_LOCALE)
+            : "—";
+          const lastChangeSource = lastChange.source || "Unknown";
+          const orderLink = p.youniumUrl || (verdict.links && verdict.links.saved) || "";
+          const subLink = p.oneflowSubscriptionUrl || ""; // Younium has no separate sub URL — fall back to Oneflow subscription link if user saved one
+          const lastCheckedStr = verdict.lastCheckedAt
+            ? new Date(verdict.lastCheckedAt).toLocaleString(UI_LOCALE)
+            : "—";
+          const problemsHtml = (verdict.problems && verdict.problems.length)
+            ? "<div class='youniumStatusProblems'><strong>Issues:</strong><ul>" +
+              verdict.problems.map((x) => "<li>" + esc(x) + "</li>").join("") + "</ul></div>"
+            : "";
+          const expectedNotMet =
+            verdict.orderStatus !== "Invoiced" ||
+            verdict.subscriptionStatus !== "Active";
+          const expectedHtml = expectedNotMet
+            ? "<div class='youniumStatusExpected'><strong>Expected:</strong>" +
+              "<div>• Order / offer should be Invoiced</div>" +
+              "<div>• Subscription should be Active</div></div>"
+            : "";
+          pop.innerHTML =
+            "<div class='youniumStatusHd youniumStatus-" + verdict.color + "'><strong>Younium status</strong> · " + esc(p.name) + "</div>" +
+            "<div class='youniumStatusBody'>" +
+              "<div><span class='youniumStatusLabel'>Last plant change:</span> " + esc(lastChangeStr) + "</div>" +
+              "<div class='youniumStatusSource'>Source: " + esc(lastChangeSource) + "</div>" +
+              "<div class='youniumStatusDivider'></div>" +
+              "<div><span class='youniumStatusLabel'>Order / offer:</span> " + esc(verdict.orderStatus) + "</div>" +
+              "<div><span class='youniumStatusLabel'>Subscription:</span> " + esc(verdict.subscriptionStatus) + "</div>" +
+              (verdict.orderNumber ? "<div><span class='youniumStatusLabel'>Order number:</span> " + esc(verdict.orderNumber) + "</div>" : "") +
+              (verdict.kind ? "<div><span class='youniumStatusLabel'>Record kind:</span> " + esc(verdict.kind) + "</div>" : "") +
+              "<div class='youniumStatusDivider'></div>" +
+              "<div class='youniumStatusLinks'>" +
+                (orderLink
+                  ? "<a href='" + esc(orderLink) + "' target='_blank' rel='noopener noreferrer'>Open Younium order ↗</a>"
+                  : "<span class='youniumStatusMissing'>No Younium order link saved</span>") +
+                (subLink
+                  ? "<a href='" + esc(subLink) + "' target='_blank' rel='noopener noreferrer'>Open subscription ↗</a>"
+                  : "") +
+              "</div>" +
+              expectedHtml +
+              problemsHtml +
+              "<div class='youniumStatusFoot'>" +
+                "Last checked: " + esc(lastCheckedStr) +
+                " · <a href='#' class='youniumStatusRefresh'>Refresh status</a>" +
+              "</div>" +
+            "</div>";
+          // Wire refresh action
+          const refreshLink = pop.querySelector(".youniumStatusRefresh");
+          if (refreshLink) {
+            refreshLink.addEventListener("click", async (ev) => {
+              ev.preventDefault();
+              // Force re-fetch by removing the "tried this session" flag.
+              youniumStatusFetchedThisSession.delete(p.id);
+              pop.innerHTML = "<div class='youniumStatusLoading'>Refreshing…</div>";
+              try {
+                const fresh = await computeYouniumStatus(p);
+                renderInto(fresh);
+              } catch (e) {
+                pop.innerHTML = "<div class='youniumStatusError'>Refresh failed: " + esc(e?.message ?? e) + "</div>";
+              }
+            });
+          }
+        };
+
+        // Initial fetch on open (even when we have a cached verdict —
+        // user explicitly asked for fresh data when they click).
+        computeYouniumStatus(p).then(renderInto).catch((e) => {
+          pop.innerHTML = "<div class='youniumStatusError'>Error: " + esc(e?.message ?? e) + "</div>";
+        });
+      }
+
+      els.btnYouniumStatus.addEventListener("click", openYouniumStatusPopover);
+
+      // Expose globally so renderDetail() can call it on every project
+      // selection without us having to monkey-patch render() (which is
+      // a function declaration — wrapping wouldn't catch internal
+      // calls).
+      window.__refreshYouniumStatusBtn = refreshYouniumStatusButtonFaceForSelected;
+
+      // Initial paint on load.
+      refreshYouniumStatusButtonFaceForSelected();
 
       els.btnCloseCsv.addEventListener("click", () => els.dlgCsv.close());
       els.btnCancelCsv.addEventListener("click", () => els.dlgCsv.close());

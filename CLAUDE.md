@@ -276,9 +276,9 @@ Each platform has a `xToMatchCandidate(rawApiResult)` function returning the com
 
 The legacy `oneflowMatchScore` / `hubspotMatchScore` functions still exist as **thin shims** over the shared scorer so `window.__of.score` / `window.__hs.score` DevTools diagnostics keep working.
 
-#### Younium status chip (project header)
+#### Younium status button (top action bar)
 
-A read-only chip rendered between the "Updated" tag and the "RL sync" tag in the project detail header. Computes a Younium order + subscription verdict from the project's saved Younium link.
+A read-only `.btn` rendered in the top action bar, to the **left of "Import CSV"**. Computes a Younium order + subscription verdict for the **currently-selected project** from its saved Younium link. The button face updates on every `renderDetail()` so it always reflects the selected project.
 
 **Color rules:**
 
@@ -289,7 +289,18 @@ A read-only chip rendered between the "Updated" tag and the "RL sync" tag in the
 | 🔴 Red — "Younium: Quote" / "Draft" / "Cancelled" / "Expired" / "Bad link" / "Not found" | Saved URL is a Quote (not promoted), Order is draft, Order was cancelled, end date in past, or link can't be parsed. |
 | ⚪ Gray — "Younium: Missing" / "Younium: …" | No Younium link saved on the project. |
 
-**Click behavior:** opens a popover with the verdict breakdown — Order/offer status, Subscription status, Order number, "Open in Younium" link, last-checked timestamp, and an "Issues" bullet list when problems were detected. Outside-click dismisses.
+**Click behavior:** opens a popover anchored under the button with:
+
+- **Last plant change:** most-recent timestamp across (Younium order `modified` / `modifiedWithDependencies` → Younium order `created` → Rocketlane project `updatedAt` → local `lastCheckedAt`), labeled with its source.
+- **Order / offer:** Invoiced / Order / Draft / Quote / Cancelled / etc.
+- **Subscription:** Active / Order — not active yet / Inactive / Cancelled / Unknown.
+- **Order number** + **Record kind** (order vs quote).
+- **Open Younium order ↗** + **Open subscription ↗** links (the second falls back to the saved Oneflow subscription URL when populated).
+- **Expected:** block calling out that order should be Invoiced + subscription should be Active when the current state doesn't meet that.
+- **Issues:** bullet list of detected problems.
+- **Last checked** timestamp + a "Refresh status" link that re-runs `computeYouniumStatus()` against the live API.
+
+Outside-click dismisses.
 
 **Caching:** verdict is persisted on `project.youniumStatus = { color, label, orderStatus, subscriptionStatus, orderNumber, kind, problems, lastCheckedAt }` so the chip shows immediately on revisits. Background refresh runs once per project per session via the `youniumStatusFetchInFlight` / `youniumStatusFetchedThisSession` Sets (same pattern as the auto-link-fetch).
 
