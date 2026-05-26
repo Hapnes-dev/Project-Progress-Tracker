@@ -27217,7 +27217,6 @@
         const invoiceStatusColor = orderHasPostedInvoices
           ? "var(--good)"
           : (invoices.length === 0 ? "var(--bad)" : "var(--warn)");
-        const expectedMatchesActual = orderIsInvoiced;
         const orderBadgeClass = orderIsInvoiced ? "youniumSubBadge-green"
           : (orderIsBad ? "youniumSubBadge-red" : "youniumSubBadge-gray");
 
@@ -27237,10 +27236,6 @@
               (orderHasPostedInvoices ? "Posted/paid (" + invoices.length + ")" : "Drafted (" + invoices.length + ")") +
               '</strong>'
             : '<strong style="color: ' + invoiceStatusColor + ';">No invoices yet</strong>'],
-          ["Expected status",             expectedMatchesActual
-            ? '<span style="color: var(--good);">Invoiced</span>'
-            : '<span style="color: var(--muted);">Invoiced</span> <span style="color: var(--bad); font-size: 11px; font-style: italic;">(actual: ' + escHtml(verdict.orderStatus) + ')</span>'],
-          ["Customer / account",          order?.accountname || quote?.accountName || "—"],
           ["Total amount",                orderTotal !== "—" ? orderTotal + " " + orderCurrency : "—"],
           ["Currency",                    orderCurrency],
           ["Created date",                fmtDate(order?.created)],
