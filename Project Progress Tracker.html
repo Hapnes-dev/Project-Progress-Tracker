@@ -27262,6 +27262,7 @@
                 ? '<a href="' + escHtml(subOrderLink) + '" target="_blank" rel="noopener noreferrer">' + escHtml(subOrderLink) + '</a>'
                 : '<em style="color: var(--muted);">none</em>'],
               ["Has IWMAC subscription",   '<span style="color: var(--good);">Yes</span>'],
+              ["Order ID",                 subOrder?.id || "—"],
               ["Order number",             subOrder?.orderNumber
                 ? escHtml(String(subOrder.orderNumber))
                 : '<strong style="color: var(--bad);">— (no number assigned → Draft)</strong>'],
