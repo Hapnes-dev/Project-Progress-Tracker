@@ -10441,28 +10441,13 @@
           out.color = "red";
           if (out.subscriptionStatus.startsWith("Draft")) {
             out.label = "Younium: ✗ Sub Draft — not activated";
-            out.problems.push(
-              "Subscription order '" +
-              (out.subscriptionProduct?.productName || "IWMAC Abonnement") +
-              "' is saved as Draft in Younium — it has NOT been activated " +
-              "and won't be invoiced. Activate the subscription in Younium."
-            );
+            out.problems.push("Subscription is Draft — needs to be activated in Younium.");
           } else if (out.subscriptionStatus.startsWith("Created")) {
             out.label = "Younium: ✗ Sub not finalized";
-            out.problems.push(
-              "Subscription order '" +
-              (out.subscriptionProduct?.productName || "IWMAC Abonnement") +
-              "' is Created but not yet finalized — needs to be activated " +
-              "in Younium so it can be invoiced."
-            );
+            out.problems.push("Subscription is not finalized — needs to be activated in Younium.");
           } else {
             out.label = "Younium: ✗ Sub " + out.subscriptionStatus;
-            out.problems.push(
-              "Order contains IWMAC subscription product '" +
-              (out.subscriptionProduct?.productName || "Abonnement") +
-              "' but subscription state is '" + out.subscriptionStatus +
-              "' — should be Active"
-            );
+            out.problems.push("Subscription is " + out.subscriptionStatus + " — should be Active.");
           }
         } else if (out.subscriptionStatus === "Active") {
           out.color = "green";
