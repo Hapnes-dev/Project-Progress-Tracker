@@ -27585,7 +27585,19 @@
             if (!all.length) return "";
             const primaryId = order?.id;
             const subId = verdict.subscriptionOrder?.id;
-            const others = all.filter((o) => o.id !== primaryId && o.id !== subId);
+            // Also dedupe by orderNumber — Younium versions orders (the
+            // same O-NNNNNN can appear as multiple records when an
+            // order has been amended). The user sees those as
+            // 'duplicates' so we hide siblings with the same number
+            // as the primary or subscription order.
+            const primaryNum = String(order?.orderNumber || "").trim();
+            const subNum = String(verdict.subscriptionOrder?.orderNumber || "").trim();
+            const others = all.filter((o) => {
+              if (o.id === primaryId || o.id === subId) return false;
+              const num = String(o.orderNumber || "").trim();
+              if (num && (num === primaryNum || num === subNum)) return false;
+              return true;
+            });
             if (!others.length) return "";
             // Sort newest first by effectiveStartDate (fallback: created).
             others.sort((a, b) => {
