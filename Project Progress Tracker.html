@@ -6624,24 +6624,22 @@
     </dialog>
 
     <!-- Younium status details (fullscreen modal — opened by the top-bar Younium Status button)
-         The entire content is wrapped in <form method="dialog">. When a
-         button with type="submit" inside a form-method-dialog is clicked,
-         the browser AUTOMATICALLY closes the dialog. No JS required. This
-         is the W3C-native bulletproof close path — it works even if every
-         JS event listener on the page is broken. -->
+         Wrapped in <form method="dialog"> so the close buttons (type="submit")
+         close the dialog NATIVELY — the browser handles this in C++ before
+         any JS event listener fires. No onclick handlers, no addEventListener
+         close calls; competing close paths caused double-close races in
+         earlier revisions. -->
     <dialog id="dlgYouniumStatus" class="dlgYouniumStatus" aria-labelledby="dlgYouniumStatusTitle">
       <form method="dialog" id="formYouniumStatus">
         <div class="dlgHd dlgYouniumStatusHd">
           <strong id="dlgYouniumStatusTitle">Younium status details</strong>
-          <!-- type="submit" + parent <form method="dialog"> ⇒ native close on click.
-               Inline onclick is a redundant safety net. -->
+          <!-- type="submit" + parent <form method="dialog"> ⇒ native close on click. -->
           <button
             class="btn btnCloseIcon"
             id="btnCloseYouniumStatus"
             type="submit"
             aria-label="Close"
             title="Close (Esc)"
-            onclick="document.getElementById('dlgYouniumStatus').close();"
           >✕</button>
         </div>
         <div class="dlgYouniumStatusBody" id="dlgYouniumStatusBody">
@@ -6660,7 +6658,6 @@
             class="btn primary"
             id="btnCloseYouniumStatus2"
             type="submit"
-            onclick="document.getElementById('dlgYouniumStatus').close();"
           >Close</button>
         </div>
       </form>
@@ -27045,31 +27042,18 @@
 
       els.btnYouniumStatus.addEventListener("click", openYouniumStatusModal);
 
-      // Close handlers — defense in depth. Each layer is independent
-      // so any single failure can't lock the modal open.
+      // Close handlers — drastically simplified after diagnosing that
+      // overlapping close paths were producing weird intermediate states
+      // (multiple .close() + removeAttribute calls racing the form's
+      // native submit handler).
       //
-      //   Layer 1: inline onclick on the buttons (in HTML, line 6629/6645)
-      //   Layer 2: addEventListener handlers below (function-call binding)
-      //   Layer 3: backdrop-click on the dialog element
-      //   Layer 4: document-level capture-phase listener (NUCLEAR OPTION
-      //            below) — fires before ANY other handler in the DOM
-      //            tree, so even a broken inline onclick + broken
-      //            addEventListener + Tampermonkey interference can't
-      //            block it.
-      //   Layer 5: window.closeYouniumModal() — emergency console
-      //            command. Tell user "type closeYouniumModal() in the
-      //            DevTools console" if all else fails.
-      //   Native: Escape key (browser-native for <dialog>)
-      const closeYouniumStatusDialog = () => {
-        if (els.dlgYouniumStatus?.open) els.dlgYouniumStatus.close();
-      };
-      els.btnCloseYouniumStatus?.addEventListener("click", closeYouniumStatusDialog);
-      els.btnCloseYouniumStatus2?.addEventListener("click", closeYouniumStatusDialog);
-      // Backdrop-click — when the user clicks the <dialog> itself (the
-      // backdrop area outside the inner box), close.
-      els.dlgYouniumStatus?.addEventListener("click", (ev) => {
-        if (ev.target === els.dlgYouniumStatus) closeYouniumStatusDialog();
-      });
+      // PRIMARY close mechanism: <form method="dialog"> wrapper with
+      // type="submit" on the close buttons. The browser closes the
+      // dialog natively when these submit — no JS event listener
+      // involved. Defined in HTML around line 6614.
+      //
+      // The handlers below are just observers / safety nets that DO
+      // NOT call .close() again (to avoid double-close races).
       els.dlgYouniumStatus?.addEventListener("close", () => {
         try {
           if (typeof window !== "undefined" && window.__matchDebug !== false) {
@@ -27078,47 +27062,24 @@
           }
         } catch (_) {}
       });
+      // Backdrop-click: when the user clicks the <dialog> itself (the
+      // dim area outside the inner box), close it. Cheap convenience —
+      // doesn't conflict with the submit flow because the backdrop
+      // isn't a submit button.
+      els.dlgYouniumStatus?.addEventListener("click", (ev) => {
+        if (ev.target === els.dlgYouniumStatus && els.dlgYouniumStatus.open) {
+          els.dlgYouniumStatus.close();
+        }
+      });
 
-      // Layer 4: document-level capture-phase listener. Catches clicks
-      // that target either close button (by id or by ancestor chain),
-      // works before any other handler in the DOM tree gets a chance
-      // to swallow the event. Last-resort safety net.
-      document.addEventListener("click", function youniumModalForceClose(ev) {
-        try {
-          const t = ev.target;
-          if (!t || !(t instanceof Element)) return;
-          // closest() walks up the ancestor chain — catches both
-          // direct clicks on the button and clicks on inner elements
-          // (e.g., the ✕ glyph itself, if it ever gets wrapped).
-          const btn = t.closest("#btnCloseYouniumStatus, #btnCloseYouniumStatus2");
-          if (!btn) return;
-          const dlg = document.getElementById("dlgYouniumStatus");
-          if (dlg && dlg.open) {
-            // Direct call on the dialog element — bypasses any wrapper
-            // function that might have been replaced.
-            dlg.close();
-            // Also remove the open attribute defensively, in case .close()
-            // somehow fails silently (e.g., dialog polyfill quirks).
-            dlg.removeAttribute("open");
-            try {
-              if (typeof window !== "undefined" && window.__matchDebug !== false) {
-                console.log("[Younium status] modal closed (capture-phase fallback)");
-              }
-            } catch (_) {}
-          }
-        } catch (_) {}
-      }, true /* useCapture — runs BEFORE any bubble-phase listener */);
-
-      // Layer 5: emergency console command. If the user is on an old
-      // cached page or hits a truly weird browser bug, tell them to
-      // run this from DevTools to force the modal closed.
+      // Emergency console command — last resort if the modal ever gets
+      // stuck open. Tell user: type closeYouniumModal() in DevTools.
       try {
         window.closeYouniumModal = function closeYouniumModal() {
           const dlg = document.getElementById("dlgYouniumStatus");
           if (!dlg) return "Younium modal not found in DOM";
           if (!dlg.open) return "Already closed";
           dlg.close();
-          dlg.removeAttribute("open");
           return "Closed";
         };
       } catch (_) {}
