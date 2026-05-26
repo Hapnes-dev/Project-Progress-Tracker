@@ -10404,35 +10404,39 @@
         //   red    = action required (Draft, Cancelled, Expired, Created)
         //   yellow = waiting on something (pending start, not yet invoiced)
         //   green  = Invoiced + Active subscription
+        // ── Verdict color + label ──
+        // Label shape: "Younium: <icon> <short summary>"
+        //   ✓ = good (green)
+        //   ⚠ = warning / pending (yellow)
+        //   ✗ = error / blocking (red)
+        // The full per-problem detail is in `out.problems[]` and shown
+        // by the toolbar button's hover tooltip + the modal Warnings panel.
         if (isCancelled) {
           out.color = "red";
-          out.label = "Younium: Cancelled";
+          out.label = "Younium: ✗ Order cancelled";
           out.problems.push("Order was cancelled on " + (order.cancellationDate || "").slice(0, 10));
         } else if (isExpired) {
           out.color = "red";
-          out.label = "Younium: Expired";
+          out.label = "Younium: ✗ Order expired";
           out.problems.push("Order ended " + (order.effectiveEndDate || "").slice(0, 10) + " and is not auto-renewing");
         } else if (isRawDraft || out.orderStatus.startsWith("Draft")) {
           out.color = "red";
-          out.label = "Younium: Draft";
+          out.label = "Younium: ✗ Order Draft — not activated";
           out.problems.push("Order is in Draft state — needs to be activated and invoiced");
         } else if (isRawCreated) {
           out.color = "red";
-          out.label = "Younium: Not finalized";
+          out.label = "Younium: ✗ Order not finalized";
           out.problems.push("Order is Created but not yet finalized — should be activated and invoiced");
         } else if (postedInvoices.length === 0) {
           out.color = "yellow";
-          out.label = "Younium: Not invoiced";
+          out.label = "Younium: ⚠ Order not invoiced yet";
           out.problems.push("Order has no posted invoices yet — should be invoiced");
         } else if (out.hasSubscriptionProduct && out.subscriptionStatus !== "Active") {
           // Order is invoiced and has IWMAC subscription product BUT
-          // subscription isn't Active — that's bad per user spec
-          // (Active = good, everything else = bad). Specialise the
-          // wording for the Draft / Created (raw status) cases so
-          // it's actionable.
+          // subscription isn't Active.
           out.color = "red";
           if (out.subscriptionStatus.startsWith("Draft")) {
-            out.label = "Younium: Subscription Draft (not activated)";
+            out.label = "Younium: ✗ Sub Draft — not activated";
             out.problems.push(
               "Subscription order '" +
               (out.subscriptionProduct?.productName || "IWMAC Abonnement") +
@@ -10440,7 +10444,7 @@
               "and won't be invoiced. Activate the subscription in Younium."
             );
           } else if (out.subscriptionStatus.startsWith("Created")) {
-            out.label = "Younium: Subscription not finalized";
+            out.label = "Younium: ✗ Sub not finalized";
             out.problems.push(
               "Subscription order '" +
               (out.subscriptionProduct?.productName || "IWMAC Abonnement") +
@@ -10448,7 +10452,7 @@
               "in Younium so it can be invoiced."
             );
           } else {
-            out.label = "Younium: Subscription " + out.subscriptionStatus;
+            out.label = "Younium: ✗ Sub " + out.subscriptionStatus;
             out.problems.push(
               "Order contains IWMAC subscription product '" +
               (out.subscriptionProduct?.productName || "Abonnement") +
@@ -10458,19 +10462,18 @@
           }
         } else if (out.subscriptionStatus === "Active") {
           out.color = "green";
-          out.label = "Younium: OK";
+          out.label = "Younium: ✓ Invoiced + Sub Active";
         } else if (out.subscriptionStatus === "Order — not active yet") {
           out.color = "yellow";
-          out.label = "Younium: Pending";
+          out.label = "Younium: ⚠ Sub starts " + (order.effectiveStartDate || "").slice(0, 10);
           out.problems.push("Subscription starts " + (order.effectiveStartDate || "").slice(0, 10));
         } else if (!out.hasSubscriptionProduct && postedInvoices.length > 0) {
-          // Invoiced, but no IWMAC subscription product in the order
-          // — likely a one-time sale. Order side is fine.
+          // Invoiced, but no IWMAC subscription product — one-time sale.
           out.color = "green";
-          out.label = "Younium: Invoiced (one-time sale)";
+          out.label = "Younium: ✓ Invoiced (one-time sale)";
         } else {
           out.color = "yellow";
-          out.label = "Younium: Uncertain";
+          out.label = "Younium: ⚠ Status uncertain";
           out.problems.push("Could not determine subscription state confidently");
         }
 
@@ -27129,7 +27132,17 @@
         const label = verdict?.label || "Younium: …";
         btn.className = "btn youniumStatusBtn youniumStatus-" + color;
         btn.textContent = label;
-        btn.title = "Click for Younium status details";
+        // Tooltip: short summary on first line, then each problem on
+        // its own line so the user can hover the chip and see WHY it's
+        // yellow/red without opening the modal.
+        const tooltipLines = [label];
+        if (verdict?.problems && verdict.problems.length) {
+          tooltipLines.push(""); // blank line separator
+          for (const p of verdict.problems) tooltipLines.push("• " + p);
+        }
+        tooltipLines.push("");
+        tooltipLines.push("Click for details.");
+        btn.title = tooltipLines.join("\n");
         if (project) {
           project.youniumStatus = {
             color, label,
