@@ -3050,6 +3050,57 @@
       .tag.hold   { background: var(--surface-3); color: var(--muted); }
       .tag.assist { background: var(--warn-soft); color: var(--warn); font-weight: 600; }
 
+      /* ── Younium status chip (between Updated and RL sync) ──
+         Matches the .tag base — same padding, line-height, font-size.
+         Color variants tint background + text using the existing
+         good/warn/bad/muted tokens so they fit the rest of the chip
+         row visually. */
+      .youniumStatusTag {
+        cursor: pointer;
+        user-select: none;
+        white-space: nowrap;
+      }
+      .youniumStatusTag:hover { filter: brightness(1.1); }
+      .youniumStatus-green  { background: var(--good-soft);   color: var(--good);   border-color: rgba(52,211,153,0.32); }
+      .youniumStatus-yellow { background: var(--warn-soft);   color: var(--warn);   border-color: rgba(251,191,36,0.32); }
+      .youniumStatus-red    { background: var(--bad-soft);    color: var(--bad);    border-color: rgba(251,113,133,0.32); }
+      .youniumStatus-gray   { background: var(--surface-3);   color: var(--muted);  border-color: rgba(148,163,184,0.24); }
+
+      .youniumStatusPopover {
+        position: fixed;
+        z-index: 1600;
+        min-width: 280px;
+        max-width: 360px;
+        background: #0f1424;
+        border: 1px solid var(--hairline-strong);
+        border-radius: 12px;
+        box-shadow: var(--shadow-lg);
+        padding: 10px 12px 12px;
+        font-size: 12px;
+        color: var(--text);
+      }
+      @media (prefers-color-scheme: light) {
+        .youniumStatusPopover { background: #ffffff; }
+      }
+      .youniumStatusHd {
+        font-size: 13px;
+        padding-bottom: 6px;
+        margin-bottom: 6px;
+        border-bottom: 1px solid var(--hairline);
+      }
+      .youniumStatusHd.youniumStatus-green  { color: var(--good); }
+      .youniumStatusHd.youniumStatus-yellow { color: var(--warn); }
+      .youniumStatusHd.youniumStatus-red    { color: var(--bad);  }
+      .youniumStatusHd.youniumStatus-gray   { color: var(--muted); }
+      .youniumStatusBody { display: grid; gap: 4px; }
+      .youniumStatusLabel { color: var(--muted2); margin-right: 4px; }
+      .youniumStatusFoot { margin-top: 6px; color: var(--muted2); font-size: 11px; }
+      .youniumStatusProblems { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--hairline); }
+      .youniumStatusProblems ul { margin: 4px 0 0; padding-left: 18px; }
+      .youniumStatusProblems li { color: var(--bad); margin-bottom: 2px; }
+      .youniumStatusLoading,
+      .youniumStatusError { color: var(--muted); font-style: italic; padding: 6px 0; }
+
       /* Progress bar */
       .progress {
         height: 4px;
@@ -7037,6 +7088,11 @@
       // attempt, even across browser restarts.
       const autoLinkFetchInFlight = new Set();
       const autoLinkFetchTriedThisSession = new Set();
+      // Same session-only pattern for the Younium status chip — fetch
+      // once per project per page load. Cached verdict (`project.youniumStatus`)
+      // shows immediately; this runs in the background and updates.
+      const youniumStatusFetchInFlight = new Set();
+      const youniumStatusFetchedThisSession = new Set();
 
       // Collapse state — persisted in localStorage so the choice survives
       // reloads. Default: everything expanded.
@@ -9612,6 +9668,213 @@
         const tokenStatus = await window.YouniumBridge?.getTokenStatus?.();
         const region = tokenStatus?.region || "eu";
         return "https://" + region + ".younium.com/quotes/" + encodeURIComponent(quoteId);
+      }
+
+      // ── Younium status engine (Order/offer + Subscription) ──
+      // Computes a verdict from the currently-saved Younium link, then
+      // caches the result on the project for instant display next visit.
+      // Fetches happen via the v1.9.10 bridge methods getOrderById /
+      // getInvoicesForOrder / getQuoteById.
+
+      async function youniumFetchOrderDetails(id) {
+        const bridge = window.YouniumBridge;
+        if (!bridge?.getOrderById) {
+          throw new Error("YouniumBridge.getOrderById not available — update userscript to v1.9.10+.");
+        }
+        return await bridge.getOrderById(id);
+      }
+      async function youniumFetchInvoicesForOrder(orderNumber) {
+        const bridge = window.YouniumBridge;
+        if (!bridge?.getInvoicesForOrder) return [];
+        try { return await bridge.getInvoicesForOrder(orderNumber); }
+        catch (e) { console.warn("[Younium status] invoice history failed:", e); return []; }
+      }
+      async function youniumFetchQuoteDetails(id) {
+        const bridge = window.YouniumBridge;
+        if (!bridge?.getQuoteById) return null;
+        try { return await bridge.getQuoteById(id); }
+        catch (e) { console.warn("[Younium status] quote fetch failed:", e); return null; }
+      }
+
+      // Map invoice.status numeric → label. Status 3 was "posted/paid"
+      // in samples; 0/1/2 are typically draft/posted-but-unpaid stages.
+      const YOUNIUM_INVOICE_STATUS_LABEL = {
+        0: "Draft",
+        1: "Posted",
+        2: "Sent",
+        3: "Paid",
+      };
+
+      /**
+       * Compute Younium status for a project. Returns:
+       *   { color, label, kind, orderStatus, subscriptionStatus,
+       *     orderNumber, links, lastCheckedAt, problems[], raw }
+       *
+       * color values: "green" | "yellow" | "red" | "gray"
+       * Rules (per user spec):
+       *   - green:  order Invoiced AND subscription Active
+       *   - yellow: order Invoiced but subscription pending/unknown
+       *             OR data missing/uncertain
+       *   - red:    order Draft/Quote/not-invoiced OR subscription
+       *             cancelled/inactive
+       *   - gray:   no Younium link saved on the project
+       */
+      async function computeYouniumStatus(project) {
+        const dbg = (...args) => {
+          try {
+            if (typeof window !== "undefined" && window.__matchDebug !== false) {
+              // eslint-disable-next-line no-console
+              console.log("[Younium status]", ...args);
+            }
+          } catch (_) {}
+        };
+        const out = {
+          color: "gray",
+          label: "Younium: Missing",
+          kind: null,
+          orderStatus: "Unknown",
+          subscriptionStatus: "Unknown",
+          orderNumber: null,
+          links: {},
+          lastCheckedAt: new Date().toISOString(),
+          problems: [],
+          raw: null,
+        };
+        dbg("project:", { id: project?.id, name: project?.name, youniumUrl: project?.youniumUrl });
+
+        const savedUrl = String(project?.youniumUrl || "").trim();
+        if (!savedUrl) {
+          out.problems.push("No Younium link saved on this project");
+          dbg("no link, returning gray");
+          return out;
+        }
+        const classified = classifyLinkUrl(savedUrl);
+        if (!classified || classified.platform !== "younium" || !classified.recordId) {
+          out.color = "red";
+          out.label = "Younium: Bad link";
+          out.problems.push("Saved Younium link couldn't be parsed");
+          dbg("unparseable link", { savedUrl, classified });
+          return out;
+        }
+        out.kind = classified.recordType;
+        out.links.saved = savedUrl;
+        dbg("classified:", classified);
+
+        // ── Quote → "Draft/Quote" verdict ──
+        if (classified.recordType === "quote") {
+          const q = await youniumFetchQuoteDetails(classified.recordId);
+          out.raw = { quote: q };
+          out.orderStatus = "Quote";
+          out.subscriptionStatus = "Not created";
+          out.color = "red";
+          out.label = "Younium: Quote";
+          out.orderNumber = q?.number || "Draft";
+          out.problems.push("Saved link is a Quote — not yet converted to an Order");
+          dbg("quote verdict", { number: out.orderNumber });
+          return out;
+        }
+
+        // ── Order ──
+        let order;
+        try { order = await youniumFetchOrderDetails(classified.recordId); }
+        catch (e) {
+          out.color = "yellow";
+          out.label = "Younium: Error";
+          out.problems.push("Couldn't fetch order: " + (e?.message ?? e));
+          dbg("order fetch failed:", e);
+          return out;
+        }
+        if (!order) {
+          out.color = "red";
+          out.label = "Younium: Not found";
+          out.problems.push("Order not found via /api/order/<id>");
+          return out;
+        }
+        out.orderNumber = order.orderNumber || classified.recordId;
+        out.raw = { order };
+        dbg("order:", {
+          orderNumber: order.orderNumber, status: order.status,
+          effectiveStartDate: order.effectiveStartDate,
+          effectiveEndDate: order.effectiveEndDate,
+          cancellationDate: order.cancellationDate,
+          isLastVersion: order.isLastVersion,
+        });
+
+        const now = Date.now();
+        const tsStart = order.effectiveStartDate ? Date.parse(order.effectiveStartDate) : NaN;
+        const tsEnd   = order.effectiveEndDate   ? Date.parse(order.effectiveEndDate)   : NaN;
+        const tsCancelled = order.cancellationDate ? Date.parse(order.cancellationDate) : NaN;
+        const isCancelled = Number.isFinite(tsCancelled) && tsCancelled <= now;
+        const isExpired = Number.isFinite(tsEnd) && tsEnd <= now && !order.isAutoRenewed && !order.isRenewed;
+        const startsInFuture = Number.isFinite(tsStart) && tsStart > now;
+
+        // Subscription verdict (derived from order lifecycle)
+        if (isCancelled) {
+          out.subscriptionStatus = "Cancelled";
+        } else if (isExpired) {
+          out.subscriptionStatus = "Inactive";
+        } else if (startsInFuture) {
+          out.subscriptionStatus = "Order — not active yet";
+        } else if (order.isLastVersion && Number.isFinite(tsStart)) {
+          out.subscriptionStatus = "Active";
+        } else if (order.isLastVersion) {
+          out.subscriptionStatus = "Order";
+        } else {
+          out.subscriptionStatus = "Unknown";
+        }
+
+        // Invoice check (controls "Invoiced" vs "Order" classification)
+        const invoices = await youniumFetchInvoicesForOrder(out.orderNumber);
+        const postedInvoices = (invoices || []).filter((inv) =>
+          inv && (inv.status === 3 || inv.status === 2 || inv.posted)
+        );
+        out.raw.invoices = invoices;
+        dbg("invoices:", { total: invoices.length, posted: postedInvoices.length });
+
+        if (isCancelled) {
+          out.orderStatus = "Cancelled";
+        } else if (postedInvoices.length > 0) {
+          out.orderStatus = "Invoiced";
+        } else if (startsInFuture) {
+          out.orderStatus = "Order (pending start)";
+        } else if (order.isLastVersion) {
+          out.orderStatus = "Order";
+        } else {
+          out.orderStatus = "Draft";
+        }
+
+        // ── Color verdict ──
+        if (isCancelled) {
+          out.color = "red";
+          out.label = "Younium: Cancelled";
+          out.problems.push("Order was cancelled on " + (order.cancellationDate || "").slice(0, 10));
+        } else if (isExpired) {
+          out.color = "red";
+          out.label = "Younium: Expired";
+          out.problems.push("Order ended " + (order.effectiveEndDate || "").slice(0, 10) + " and is not auto-renewing");
+        } else if (out.orderStatus === "Draft") {
+          out.color = "red";
+          out.label = "Younium: Draft";
+          out.problems.push("Order is in Draft state — not invoiced and not the latest version");
+        } else if (postedInvoices.length === 0) {
+          out.color = "yellow";
+          out.label = "Younium: Not invoiced";
+          out.problems.push("Order has no posted invoices yet");
+        } else if (out.subscriptionStatus === "Active") {
+          out.color = "green";
+          out.label = "Younium: OK";
+        } else if (out.subscriptionStatus === "Order — not active yet") {
+          out.color = "yellow";
+          out.label = "Younium: Pending";
+          out.problems.push("Subscription starts " + (order.effectiveStartDate || "").slice(0, 10));
+        } else {
+          out.color = "yellow";
+          out.label = "Younium: Uncertain";
+          out.problems.push("Could not determine subscription state confidently");
+        }
+
+        dbg("verdict:", { color: out.color, label: out.label, orderStatus: out.orderStatus, subscriptionStatus: out.subscriptionStatus });
+        return out;
       }
 
       // Younium status numbers (verified from the orders list — 5 = Draft,
@@ -18186,6 +18449,116 @@
         upd.id = "projectUpdatedTag";
         upd.textContent = "Updated: " + new Date(p.updatedAt).toLocaleString(UI_LOCALE);
         meta.appendChild(upd);
+
+        // ── Younium status chip — between "Updated" and "RL sync" ──
+        // Read-only indicator that checks the saved Younium link's
+        // order/quote status and derived subscription state. Shows the
+        // last cached verdict immediately, then refreshes in background.
+        // Click → popover with details.
+        const youniumChip = document.createElement("span");
+        youniumChip.id = "youniumStatusTag";
+        youniumChip.className = "tag youniumStatusTag";
+        youniumChip.style.cursor = "pointer";
+        const cached = p.youniumStatus;
+        if (cached && cached.label) {
+          youniumChip.classList.add("youniumStatus-" + (cached.color || "gray"));
+          youniumChip.textContent = cached.label;
+          youniumChip.title = "Click for Younium status details (last checked " +
+            (cached.lastCheckedAt ? new Date(cached.lastCheckedAt).toLocaleString(UI_LOCALE) : "—") + ")";
+        } else {
+          youniumChip.classList.add("youniumStatus-gray");
+          youniumChip.textContent = "Younium: …";
+          youniumChip.title = "Click to check Younium order + subscription status";
+        }
+        // Local helper to update chip + persist verdict.
+        const applyYouniumVerdict = (verdict) => {
+          youniumChip.className = "tag youniumStatusTag youniumStatus-" + (verdict.color || "gray");
+          youniumChip.textContent = verdict.label || "Younium: Unknown";
+          p.youniumStatus = {
+            color: verdict.color, label: verdict.label,
+            orderStatus: verdict.orderStatus, subscriptionStatus: verdict.subscriptionStatus,
+            orderNumber: verdict.orderNumber, kind: verdict.kind,
+            problems: verdict.problems || [],
+            lastCheckedAt: verdict.lastCheckedAt,
+          };
+          save();
+        };
+        // Click → open small popover anchored under the chip.
+        youniumChip.addEventListener("click", async (ev) => {
+          ev.stopPropagation();
+          // Close any existing popover first.
+          document.querySelectorAll(".youniumStatusPopover").forEach((el) => el.remove());
+          const pop = document.createElement("div");
+          pop.className = "youniumStatusPopover";
+          pop.innerHTML = "<div class='youniumStatusLoading'>Checking Younium…</div>";
+          document.body.appendChild(pop);
+          // Position under the chip (fixed coords so it survives scroll).
+          const rect = youniumChip.getBoundingClientRect();
+          pop.style.left = Math.max(8, Math.min(window.innerWidth - 360, rect.left)) + "px";
+          pop.style.top = (rect.bottom + 6) + "px";
+          // Single-shot dismiss on outside click.
+          const onDocClick = (e) => {
+            if (!pop.contains(e.target) && e.target !== youniumChip) {
+              pop.remove();
+              document.removeEventListener("click", onDocClick, true);
+            }
+          };
+          setTimeout(() => document.addEventListener("click", onDocClick, true), 0);
+
+          let verdict;
+          try { verdict = await computeYouniumStatus(p); }
+          catch (e) {
+            pop.innerHTML = "<div class='youniumStatusError'>Error: " +
+              String(e?.message ?? e).replace(/[<&]/g, (c) => c === "<" ? "&lt;" : "&amp;") + "</div>";
+            return;
+          }
+          applyYouniumVerdict(verdict);
+
+          // Build popover body
+          const esc = (s) => String(s ?? "").replace(/[<&]/g, (c) => c === "<" ? "&lt;" : "&amp;");
+          const orderLink = p.youniumUrl || (verdict.links && verdict.links.saved) || "";
+          const lastCheckedStr = verdict.lastCheckedAt
+            ? new Date(verdict.lastCheckedAt).toLocaleString(UI_LOCALE)
+            : "—";
+          const problemsHtml = (verdict.problems && verdict.problems.length)
+            ? "<div class='youniumStatusProblems'><strong>Issues:</strong><ul>" +
+              verdict.problems.map((x) => "<li>" + esc(x) + "</li>").join("") + "</ul></div>"
+            : "";
+          pop.innerHTML =
+            "<div class='youniumStatusHd youniumStatus-" + verdict.color + "'><strong>Younium status</strong></div>" +
+            "<div class='youniumStatusBody'>" +
+              "<div><span class='youniumStatusLabel'>Order / offer:</span> " + esc(verdict.orderStatus) + "</div>" +
+              "<div><span class='youniumStatusLabel'>Subscription:</span> " + esc(verdict.subscriptionStatus) + "</div>" +
+              (verdict.orderNumber ? "<div><span class='youniumStatusLabel'>Order number:</span> " + esc(verdict.orderNumber) + "</div>" : "") +
+              (orderLink ? "<div><a href='" + esc(orderLink) + "' target='_blank' rel='noopener noreferrer'>Open in Younium ↗</a></div>" : "") +
+              "<div class='youniumStatusFoot'>Last checked: " + esc(lastCheckedStr) + "</div>" +
+              problemsHtml +
+            "</div>";
+        });
+        meta.appendChild(youniumChip);
+
+        // Background auto-refresh — runs once per project per session
+        // (mirrors the auto-link-fetch pattern from earlier). Reuses
+        // the project-id-keyed sets so we don't fire on every render.
+        const youniumLinkSaved = String(p.youniumUrl || "").trim();
+        if (
+          youniumLinkSaved &&
+          !youniumStatusFetchInFlight.has(p.id) &&
+          !youniumStatusFetchedThisSession.has(p.id)
+        ) {
+          youniumStatusFetchInFlight.add(p.id);
+          computeYouniumStatus(p)
+            .then((verdict) => {
+              applyYouniumVerdict(verdict);
+            })
+            .catch((err) => {
+              console.warn("[Younium status] background fetch failed:", err);
+            })
+            .finally(() => {
+              youniumStatusFetchInFlight.delete(p.id);
+              youniumStatusFetchedThisSession.add(p.id);
+            });
+        }
 
         const linkedRocketlaneProjectId = String(p.rocketlaneProjectId ?? "").trim();
         if (linkedRocketlaneProjectId) {

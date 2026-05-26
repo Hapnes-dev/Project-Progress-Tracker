@@ -6,7 +6,7 @@ This file is read by Claude Code on every session start. It documents the archit
 
 - **Vanilla HTML + CSS + JS** in a single file: `Project Progress Tracker.html` (~25k lines).
 - No build step, no framework, no bundler. All state in `localStorage`.
-- **Tampermonkey userscript** bridge (`rocketlane-chat-bridge/`) handles cross-origin API calls to FIVE platforms: Rocketlane, Zendesk, Oneflow, HubSpot, Younium. Bridge version is v1.9.9+ as of this writing (v1.9.9 added `YouniumBridge.searchQuotes`).
+- **Tampermonkey userscript** bridge (`rocketlane-chat-bridge/`) handles cross-origin API calls to FIVE platforms: Rocketlane, Zendesk, Oneflow, HubSpot, Younium. Bridge version is v1.9.10+ as of this writing (v1.9.10 added `YouniumBridge.getOrderById` / `getInvoicesForOrder` / `getQuoteById` for the Younium status chip).
 - Designed to run from either `file://` on the user's desktop or `https://hapnes-dev.github.io/Project-Progress-Tracker/`.
 
 ## File layout inside `Project Progress Tracker.html`
@@ -275,6 +275,40 @@ Each platform has a `xToMatchCandidate(rawApiResult)` function returning the com
 | Younium (quotes) | `youniumToQuoteMatchCandidate` | `youniumQuoteUrl(id)` (async) | Quotes use `/api/data/query/quote` (entity `"quote"`). Many quotes have **empty `plant_id`** even when matching — promoting a quote to an order is what fills it. Loose filter: accept on plant_id exact OR plant_name/accountName token overlap with project name OR plant ID literal in description/remarks. `recordType: "quote"`. Picker label prefixed with 📄 to distinguish from orders. |
 
 The legacy `oneflowMatchScore` / `hubspotMatchScore` functions still exist as **thin shims** over the shared scorer so `window.__of.score` / `window.__hs.score` DevTools diagnostics keep working.
+
+#### Younium status chip (project header)
+
+A read-only chip rendered between the "Updated" tag and the "RL sync" tag in the project detail header. Computes a Younium order + subscription verdict from the project's saved Younium link.
+
+**Color rules:**
+
+| Color | When |
+|---|---|
+| 🟢 Green — "Younium: OK" | Order has posted invoices AND subscription is Active (within term, not cancelled). |
+| 🟡 Yellow — "Younium: Pending" / "Not invoiced" / "Uncertain" | Order is in good shape but invoices haven't been posted yet OR subscription start date is in the future OR data is incomplete. |
+| 🔴 Red — "Younium: Quote" / "Draft" / "Cancelled" / "Expired" / "Bad link" / "Not found" | Saved URL is a Quote (not promoted), Order is draft, Order was cancelled, end date in past, or link can't be parsed. |
+| ⚪ Gray — "Younium: Missing" / "Younium: …" | No Younium link saved on the project. |
+
+**Click behavior:** opens a popover with the verdict breakdown — Order/offer status, Subscription status, Order number, "Open in Younium" link, last-checked timestamp, and an "Issues" bullet list when problems were detected. Outside-click dismisses.
+
+**Caching:** verdict is persisted on `project.youniumStatus = { color, label, orderStatus, subscriptionStatus, orderNumber, kind, problems, lastCheckedAt }` so the chip shows immediately on revisits. Background refresh runs once per project per session via the `youniumStatusFetchInFlight` / `youniumStatusFetchedThisSession` Sets (same pattern as the auto-link-fetch).
+
+**API fields used:**
+
+| Source | Field(s) |
+|---|---|
+| `GET /api/order/{id}` | `orderNumber`, `status`, `effectiveStartDate`, `effectiveEndDate`, `cancellationDate`, `isLastVersion`, `isAutoRenewed`, `isRenewed`, `term`, `bookings[]` |
+| `POST /api/order/invoicesForHistory` `{ orderNumber }` | Array of `{ invoiceNumber, status, posted, paymentDate, dueDate, totalAmount }` — order is "Invoiced" when at least one entry has `status >= 2` OR a non-null `posted` timestamp |
+| `POST /api/data/query/quote` filtered by `id` | When the saved link is a `/quotes/<uuid>` (immediate "Quote" verdict — never Active) |
+
+**Subscription derivation:** Younium's order `bookings[]` array is empty on most orders we've sampled, so subscription state is derived from the order's lifecycle dates:
+
+- `cancellationDate <= now` → Cancelled
+- `effectiveEndDate <= now && !isAutoRenewed && !isRenewed` → Inactive
+- `effectiveStartDate > now` → "Order — not active yet"
+- `isLastVersion && effectiveStartDate <= now` → Active
+
+**Debug logging:** every check emits `[Younium status] …` lines to console — project context, parsed URL, fetched order, fetched invoices, verdict, and color decision. Disable via `window.__matchDebug = false`.
 
 #### Two-slot Oneflow (Order/offer vs Subscription agreement)
 
