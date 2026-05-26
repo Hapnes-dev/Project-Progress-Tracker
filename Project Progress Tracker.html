@@ -6624,20 +6624,21 @@
     </dialog>
 
     <!-- Younium status details (fullscreen modal — opened by the top-bar Younium Status button)
-         Wrapped in <form method="dialog"> so the close buttons (type="submit")
-         close the dialog NATIVELY — the browser handles this in C++ before
-         any JS event listener fires. No onclick handlers, no addEventListener
-         close calls; competing close paths caused double-close races in
-         earlier revisions. -->
+         User diagnostic: backdrop-click closes the modal; button clicks
+         do not (even with form-method-dialog). Some environment-specific
+         issue prevents form submission default action from firing.
+         Fix: piggyback close-button clicks onto the SAME dialog-level
+         click listener that handles backdrop clicks (see line ~27050).
+         Buttons are plain type="button" — no form submission needed. -->
     <dialog id="dlgYouniumStatus" class="dlgYouniumStatus" aria-labelledby="dlgYouniumStatusTitle">
       <form method="dialog" id="formYouniumStatus">
         <div class="dlgHd dlgYouniumStatusHd">
           <strong id="dlgYouniumStatusTitle">Younium status details</strong>
-          <!-- type="submit" + parent <form method="dialog"> ⇒ native close on click. -->
+          <!-- Plain button; close path is the dialog click listener below. -->
           <button
             class="btn btnCloseIcon"
             id="btnCloseYouniumStatus"
-            type="submit"
+            type="button"
             aria-label="Close"
             title="Close (Esc)"
           >✕</button>
@@ -6646,18 +6647,16 @@
           <!-- Populated by openYouniumStatusModal() -->
         </div>
         <div class="dlgYouniumStatusFooter" id="dlgYouniumStatusFooter">
-          <!-- These three are type="button" so they DON'T submit the form
-               (otherwise clicking Refresh would close the dialog). -->
           <button class="btn" type="button" id="btnYouniumStatusRefresh">Refresh status</button>
           <button class="btn" type="button" id="btnYouniumStatusCopy">Copy summary</button>
           <a class="btn" id="btnYouniumStatusOpenOrder" target="_blank" rel="noopener noreferrer" style="display: none;">Open Younium order</a>
           <a class="btn" id="btnYouniumStatusOpenSub" target="_blank" rel="noopener noreferrer" style="display: none;">Open subscription</a>
           <span style="flex: 1;"></span>
-          <!-- type="submit" + parent <form method="dialog"> ⇒ native close on click. -->
+          <!-- Plain button; close path is the dialog click listener below. -->
           <button
             class="btn primary"
             id="btnCloseYouniumStatus2"
-            type="submit"
+            type="button"
           >Close</button>
         </div>
       </form>
@@ -27042,18 +27041,34 @@
 
       els.btnYouniumStatus.addEventListener("click", openYouniumStatusModal);
 
-      // Close handlers — drastically simplified after diagnosing that
-      // overlapping close paths were producing weird intermediate states
-      // (multiple .close() + removeAttribute calls racing the form's
-      // native submit handler).
+      // ── Close handlers ──
+      // User diagnostic: clicking outside the modal (backdrop) closes
+      // it cleanly, but clicks on the X / Close buttons do not. Some
+      // environment-specific quirk (extension, polyfill, or browser
+      // bug) blocks the button-level handlers and the form-method-
+      // dialog submission. The dialog-level click listener IS firing
+      // though (the backdrop case proves it).
       //
-      // PRIMARY close mechanism: <form method="dialog"> wrapper with
-      // type="submit" on the close buttons. The browser closes the
-      // dialog natively when these submit — no JS event listener
-      // involved. Defined in HTML around line 6614.
-      //
-      // The handlers below are just observers / safety nets that DO
-      // NOT call .close() again (to avoid double-close races).
+      // Fix: handle both backdrop AND button clicks in ONE listener
+      // attached to the dialog. Whatever blocks button-level events
+      // doesn't block clicks bubbling up to the dialog.
+      els.dlgYouniumStatus?.addEventListener("click", (ev) => {
+        if (!els.dlgYouniumStatus.open) return;
+        const target = ev.target;
+        // Case 1: backdrop click — target is the dialog itself.
+        if (target === els.dlgYouniumStatus) {
+          els.dlgYouniumStatus.close();
+          return;
+        }
+        // Case 2: close-button click — target is one of the close
+        // buttons OR a descendant of one (e.g., the ✕ glyph).
+        // closest() walks up the ancestor chain to find a match.
+        if (target.closest && target.closest("#btnCloseYouniumStatus, #btnCloseYouniumStatus2")) {
+          els.dlgYouniumStatus.close();
+          return;
+        }
+      });
+
       els.dlgYouniumStatus?.addEventListener("close", () => {
         try {
           if (typeof window !== "undefined" && window.__matchDebug !== false) {
@@ -27061,15 +27076,6 @@
             console.log("[Younium status] modal closed");
           }
         } catch (_) {}
-      });
-      // Backdrop-click: when the user clicks the <dialog> itself (the
-      // dim area outside the inner box), close it. Cheap convenience —
-      // doesn't conflict with the submit flow because the backdrop
-      // isn't a submit button.
-      els.dlgYouniumStatus?.addEventListener("click", (ev) => {
-        if (ev.target === els.dlgYouniumStatus && els.dlgYouniumStatus.open) {
-          els.dlgYouniumStatus.close();
-        }
       });
 
       // Emergency console command — last resort if the modal ever gets
