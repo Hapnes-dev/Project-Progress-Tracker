@@ -7935,10 +7935,12 @@
           if (m2) return { platform: "hubspot", recordId: m2[1], recordType: "deal", url: s };
           return { platform: "hubspot", recordId: "", recordType: "unknown", url: s };
         }
-        // Younium: <region>.younium.com/orders/<uuid>
+        // Younium: <region>.younium.com/orders/<uuid> OR /quotes/<uuid>
         if (/(?:^|\.)younium\.com$/i.test(host)) {
-          const m = path.match(/\/orders\/([\w-]+)/i);
+          let m = path.match(/\/orders\/([\w-]+)/i);
           if (m) return { platform: "younium", recordId: m[1], recordType: "order", url: s };
+          m = path.match(/\/quotes\/([\w-]+)/i);
+          if (m) return { platform: "younium", recordId: m[1], recordType: "quote", url: s };
           return { platform: "younium", recordId: "", recordType: "unknown", url: s };
         }
         // Zendesk: <subdomain>.zendesk.com/agent/tickets/<id>
@@ -9461,6 +9463,25 @@
       }
 
       /**
+       * Search Younium QUOTES. Verified shape: response.result[] with
+       * fields { id, number ("Draft" or "Q-NNNNNN"), accountName,
+       * description, status, currencyCode, ownerUserDisplayName,
+       * plant_name, plant_id (often empty), remarks }.
+       *
+       * Many tenant quotes have an EMPTY plant_id — promoting a quote
+       * to an order is what fills it. So scoring quotes by exact
+       * plant_id alone misses real matches; we also score plant_name
+       * and accountName token overlap.
+       */
+      async function youniumSearchQuotes(query, limit) {
+        const bridge = window.YouniumBridge;
+        if (!bridge?.searchQuotes) {
+          throw new Error("YouniumBridge.searchQuotes not available — update userscript to v1.9.9+.");
+        }
+        return await bridge.searchQuotes(query, { pageSize: limit || 20 });
+      }
+
+      /**
        * Build the order detail URL.
        *   https://<region>.younium.com/orders/<orderId>
        * Region is captured by the bridge from the user's logged-in
@@ -9472,12 +9493,29 @@
         return "https://" + region + ".younium.com/orders/" + encodeURIComponent(orderId);
       }
 
+      /** Build the quote detail URL: https://<region>.younium.com/quotes/<quoteId> */
+      async function youniumQuoteUrl(quoteId) {
+        const tokenStatus = await window.YouniumBridge?.getTokenStatus?.();
+        const region = tokenStatus?.region || "eu";
+        return "https://" + region + ".younium.com/quotes/" + encodeURIComponent(quoteId);
+      }
+
       // Younium status numbers (verified from the orders list — 5 = Draft,
       // 9 = Active. Others appear in deal lifecycle: 1 = Created, etc.)
       const YOUNIUM_STATUS_LABEL = {
         1: "Created",
         5: "Draft",
         9: "Active",
+      };
+
+      // Quote-specific status enum — verified via Playwright:
+      // 0 = Open (Draft / unpublished). Published quotes flip to a
+      // higher number plus get a real "number" (e.g. Q-010563).
+      const YOUNIUM_QUOTE_STATUS_LABEL = {
+        0: "Open",
+        1: "Published",
+        2: "Accepted",
+        3: "Rejected",
       };
 
       /**
@@ -9536,7 +9574,72 @@
           amount: bestAmount,
           currency,
           orderNumber: String(o?.orderNumber || "").trim(),
+          recordType: "order",
           raw: o,
+        };
+      }
+
+      /**
+       * Map a Younium quote to the shared Candidate shape. Differs
+       * from `youniumToMatchCandidate` in three ways:
+       *   1. `recordType: "quote"` so the URL builder picks /quotes/<id>
+       *      and the picker can display "Quote" vs "Order" badge.
+       *   2. `number` (not `orderNumber`) — quotes show "Draft" until
+       *      published, then "Q-NNNNNN".
+       *   3. plant_id is frequently EMPTY on unpromoted quotes — so we
+       *      score plant_name + accountName + description heavily here
+       *      (the user spec's Kesko SM Mylly Harjavalta example had a
+       *      quote where the only "11102" reference was in the
+       *      generated PDF, not the JSON).
+       */
+      function youniumToQuoteMatchCandidate(q) {
+        const statusLabel =
+          YOUNIUM_QUOTE_STATUS_LABEL[q?.status] ?? ("status " + q?.status);
+        const accountName = String(q?.accountName ?? q?.accountname ?? "").trim();
+        const partyNames = accountName ? [accountName] : [];
+        const numberRaw = String(q?.number ?? "").trim();
+        const numberShown = numberRaw || "(no number)";
+        const plantName = String(q?.plant_name ?? "").trim();
+        const description = String(q?.description ?? "").trim();
+        const remarks = String(q?.remarks ?? "").trim();
+        const ownerEmail = String(q?.ownerUserDisplayName ?? "").trim();
+        const currency = String(q?.currencyCode ?? q?.currency ?? "").trim();
+        return {
+          id: q?.id,
+          platform: "younium",
+          // The "Quote" tag in primaryText lets the user instantly
+          // tell quotes apart from orders in the merged picker.
+          primaryText:
+            "📄 Quote " + numberShown +
+            (plantName ? " — " + plantName : ""),
+          secondaryText:
+            statusLabel +
+            (accountName ? " · " + accountName : "") +
+            (description ? " · " + description : "") +
+            (currency ? " · " + currency : ""),
+          matchableTexts: [
+            numberRaw,
+            plantName,
+            accountName,
+            description,
+            remarks,
+          ].filter(Boolean).map(String),
+          partyNames,
+          contactNames: ownerEmail ? [ownerEmail] : [],
+          contactEmails: ownerEmail && /@/.test(ownerEmail) ? [ownerEmail.toLowerCase()] : [],
+          contactPhones: [],
+          orgNumbers: [],
+          plantId: String(q?.plant_id ?? "").trim(), // often empty for quotes
+          status: statusLabel,
+          // Quotes don't have effectiveStartDate; the API doesn't
+          // return create/update times in the default field list.
+          // Leave null so date-proximity scoring sits out gracefully.
+          date: null,
+          amount: null,
+          currency,
+          orderNumber: numberRaw, // for Younium order-number matching against RL
+          recordType: "quote",
+          raw: q,
         };
       }
 
@@ -9558,7 +9661,7 @@
         const inputEl = els?.fYouniumUrl;
         if (!statusEl || !inputEl) return;
         statusEl.className = "oneflowFindStatus";
-        statusEl.textContent = "Searching Younium…";
+        statusEl.textContent = "Searching Younium orders + quotes…";
         const oldPicker = statusEl.parentElement?.querySelector(".oneflowFindPicker");
         if (oldPicker) oldPicker.remove();
 
@@ -9569,50 +9672,111 @@
           return;
         }
 
-        let json;
-        try {
-          json = await youniumSearchOrders(ctx.plantId, 20);
-        } catch (e) {
-          statusEl.className = "oneflowFindStatus error";
-          statusEl.textContent = String(e?.message ?? e ?? "Younium search failed.");
-          return;
-        }
-        const allResults = Array.isArray(json?.result) ? json.result : [];
-        // Filter by EXACT plant_id — see comment above. The text search
-        // is intentionally permissive on Younium's side, so we tighten
-        // it here before scoring.
-        const matches = allResults.filter(
-          (o) => String(o?.plant_id ?? "").trim() === ctx.plantId
-        );
-        if (matches.length === 0) {
-          statusEl.className = "oneflowFindStatus error";
-          statusEl.textContent = "No matching Younium orders found for plant " + ctx.plantId + ".";
-          return;
+        // Build a small list of search terms — plant ID is primary,
+        // but the user's Kesko SM Mylly Harjavalta example showed that
+        // quotes often DON'T have plant_id populated, so a name-based
+        // fallback term is needed. We use the stripped project name as
+        // a secondary term for quotes specifically.
+        const projectStripped = (ctx.name || "")
+          .replace(/^\s*\d+\s*[-–:]?\s*/, "")
+          .replace(/:.*$/, "")        // drop ": New Store" etc.
+          .trim();
+
+        // Run order + quote searches in PARALLEL. If either fails,
+        // fall through with the other's results — partial data beats
+        // none.
+        const [orderJson, quoteJsonPlant, quoteJsonName] = await Promise.allSettled([
+          youniumSearchOrders(ctx.plantId, 20),
+          youniumSearchQuotes(ctx.plantId, 20),
+          // Only fire the secondary quote-by-name query when there's
+          // something useful to search for (≥3 chars).
+          projectStripped && projectStripped.length >= 3
+            ? youniumSearchQuotes(projectStripped, 20)
+            : Promise.resolve({ result: [] }),
+        ]);
+        const orderResults = orderJson.status === "fulfilled" && Array.isArray(orderJson.value?.result)
+          ? orderJson.value.result
+          : [];
+        const quoteResultsRaw = [
+          ...(quoteJsonPlant.status === "fulfilled" && Array.isArray(quoteJsonPlant.value?.result) ? quoteJsonPlant.value.result : []),
+          ...(quoteJsonName.status  === "fulfilled" && Array.isArray(quoteJsonName.value?.result)  ? quoteJsonName.value.result  : []),
+        ];
+        // Dedupe quotes by id (the two search runs can overlap).
+        const seenQuoteIds = new Set();
+        const quoteResults = [];
+        for (const q of quoteResultsRaw) {
+          const id = String(q?.id || "");
+          if (id && !seenQuoteIds.has(id)) { seenQuoteIds.add(id); quoteResults.push(q); }
         }
 
-        // Stable secondary sort by effectiveStartDate desc so when the
-        // scorer ties (multiple orders, same plant_id, equal name/party
-        // signals), the newest wins.
-        matches.sort((a, b) => {
+        // ── Filter orders strictly by plant_id — the Younium text
+        //    search returns "O-0xxxxx" false-positives.
+        const orderMatches = orderResults.filter(
+          (o) => String(o?.plant_id ?? "").trim() === ctx.plantId
+        );
+        orderMatches.sort((a, b) => {
           const at = Date.parse(String(a?.effectiveStartDate ?? "")) || 0;
           const bt = Date.parse(String(b?.effectiveStartDate ?? "")) || 0;
           return bt - at;
         });
 
-        const scored = matches
-          .map((o) => {
+        // ── Filter quotes LOOSELY — plant_id is often empty for
+        //    unpromoted quotes. Accept any of:
+        //      (a) plant_id exact == ctx.plantId
+        //      (b) plant_name token overlap with stripped project name
+        //      (c) accountName token overlap with stripped project name
+        //          OR with project partner
+        //      (d) description / remarks mention the plant ID literal
+        const plantRe = new RegExp("\\b" + ctx.plantId + "\\b");
+        const stripTokens = matchTokenize(projectStripped);
+        const partnerTokens = ctx.partnerTokens;
+        const quoteMatches = quoteResults.filter((q) => {
+          if (String(q?.plant_id ?? "").trim() === ctx.plantId) return true;
+          const pn = q?.plant_name || "";
+          if (pn && stripTokens.size && matchTokenOverlap(matchTokenize(pn), stripTokens) > 0) return true;
+          const an = q?.accountName || q?.accountname || "";
+          if (an && partnerTokens && partnerTokens.size && matchTokenOverlap(matchTokenize(an), partnerTokens) >= 0.5) return true;
+          if (an && stripTokens.size && matchTokenOverlap(matchTokenize(an), stripTokens) >= 0.5) return true;
+          const desc = String(q?.description || "") + " " + String(q?.remarks || "");
+          if (plantRe.test(desc)) return true;
+          return false;
+        });
+
+        if (orderMatches.length === 0 && quoteMatches.length === 0) {
+          statusEl.className = "oneflowFindStatus error";
+          statusEl.textContent =
+            "No matching Younium orders or quotes for plant " + ctx.plantId + ".";
+          return;
+        }
+
+        // Score both populations through the SAME shared scorer.
+        const scored = [
+          ...orderMatches.map((o) => {
             const candidate = youniumToMatchCandidate(o);
             const { score, percent, signals } = scoreMatchCandidate(candidate, ctx);
             return { candidate, score, percent, signals };
-          })
-          .sort((x, y) => y.percent - x.percent || y.score - x.score);
+          }),
+          ...quoteMatches.map((q) => {
+            const candidate = youniumToQuoteMatchCandidate(q);
+            const { score, percent, signals } = scoreMatchCandidate(candidate, ctx);
+            return { candidate, score, percent, signals };
+          }),
+        ].sort((x, y) => y.percent - x.percent || y.score - x.score);
 
         const decision = decideMatchOutcome(scored);
         const warning = detectExistingLinkMismatch("younium", ctx);
         debugLogMatch("Younium", ctx, scored, decision, warning);
 
+        const buildUrlForCandidate = (entry) => {
+          const rt = entry.candidate.recordType;
+          const id = entry.candidate.raw?.id;
+          return rt === "quote"
+            ? youniumQuoteUrl(id)
+            : youniumOrderUrl(id);
+        };
+
         if (decision.kind === "auto" && !warning) {
-          inputEl.value = await youniumOrderUrl(decision.entry.candidate.raw?.id);
+          inputEl.value = await buildUrlForCandidate(decision.entry);
           statusEl.className = "oneflowFindStatus success";
           statusEl.textContent =
             "Matched (" + decision.entry.percent + "%): " + decision.entry.candidate.primaryText;
@@ -9624,9 +9788,10 @@
           ? "Existing Younium link may be wrong — review:"
           : (scored.length === 1
               ? "Low-confidence match — confirm:"
-              : "Multiple orders for plant " + ctx.plantId + " — pick one (newest first):");
+              : "Found " + orderMatches.length + " order(s) and " +
+                quoteMatches.length + " quote(s) — pick one:");
         renderMatchPicker(statusEl, scored, async (entry, picker) => {
-          inputEl.value = await youniumOrderUrl(entry.candidate.raw?.id);
+          inputEl.value = await buildUrlForCandidate(entry);
           statusEl.className = "oneflowFindStatus success";
           statusEl.textContent =
             "Selected (" + entry.percent + "%): " + entry.candidate.primaryText;
@@ -9655,7 +9820,9 @@
           api: youniumApiRequest,
           me: youniumFetchCurrentUser,
           search: youniumSearchOrders,
+          searchQuotes: youniumSearchQuotes,
           orderUrl: youniumOrderUrl,
+          quoteUrl: youniumQuoteUrl,
           async token() { return await window.YouniumBridge?.getTokenStatus?.(); },
           async refresh() { return await window.YouniumBridge?.refreshToken?.(); },
         };
