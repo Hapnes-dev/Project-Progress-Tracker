@@ -3158,34 +3158,46 @@
           background: rgba(15, 23, 42, 0.035);
         }
       }
-      /* Close hint — replaces the X / Close buttons that were
-         removed because their click handlers were being intercepted
-         in the user's environment. These are <span>s styled as
-         buttons (NOT <button> elements) so the same interception
-         doesn't apply to them. */
-      .dlgYouniumStatusCloseHint {
-        font-size: 13px;
-        color: var(--muted);
+      /* Close X in the title bar — a <span> styled as an icon button
+         (NOT a <button> element, since those get their clicks blocked
+         in the user's environment). Sits flush-right in the header. */
+      .dlgYouniumStatusXBtn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
         margin-left: 12px;
-        padding: 4px 10px;
-        border: 1px solid var(--hairline);
         border-radius: 8px;
         cursor: pointer;
-        white-space: nowrap;
         user-select: none;
-        transition: background 0.15s, color 0.15s;
+        font-size: 18px;
+        line-height: 1;
+        color: var(--muted);
+        background: transparent;
+        border: 1px solid transparent;
+        transition: background 0.15s, color 0.15s, border-color 0.15s;
+        flex-shrink: 0;
       }
-      .dlgYouniumStatusCloseHint:hover {
-        background: rgba(255, 255, 255, 0.06);
+      .dlgYouniumStatusXBtn:hover {
+        background: rgba(255, 255, 255, 0.08);
         color: var(--text);
+        border-color: var(--hairline);
+      }
+      .dlgYouniumStatusXBtn:active {
+        background: rgba(255, 255, 255, 0.14);
+      }
+      .dlgYouniumStatusXBtn:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
       }
       @media (prefers-color-scheme: light) {
-        .dlgYouniumStatusCloseHint:hover {
-          background: rgba(15, 23, 42, 0.05);
+        .dlgYouniumStatusXBtn:hover {
+          background: rgba(15, 23, 42, 0.06);
         }
-      }
-      .dlgYouniumStatusCloseHintFooter {
-        margin-left: 0;
+        .dlgYouniumStatusXBtn:active {
+          background: rgba(15, 23, 42, 0.12);
+        }
       }
       .dlgYouniumStatusHd {
         display: flex;
@@ -6625,15 +6637,15 @@
     </dialog>
 
     <!-- Younium status details (fullscreen modal — opened by the top-bar Younium Status button)
-         In the user's environment something blocks BOTH button clicks AND
-         the native Escape-to-close dialog behavior. Backdrop clicks work
-         (click target = dialog element). So we use <span> elements styled
-         as clickable links for the close gestures — spans aren't <button>s
-         and aren't intercepted. -->
+         The close X is a <span> styled as a button, NOT an actual <button>
+         element. Buttons inside the dialog get their click events blocked
+         in the user's environment, but spans aren't intercepted. The
+         close logic is in the window-level capture-phase listeners
+         (see openYouniumStatusModal section). -->
     <dialog id="dlgYouniumStatus" class="dlgYouniumStatus" aria-labelledby="dlgYouniumStatusTitle">
       <div class="dlgHd dlgYouniumStatusHd">
         <strong id="dlgYouniumStatusTitle">Younium status details</strong>
-        <span class="dlgYouniumStatusCloseHint" id="closeYouniumHintTop" role="button" tabindex="0">Click outside to close</span>
+        <span class="dlgYouniumStatusXBtn" id="closeYouniumHintTop" role="button" tabindex="0" aria-label="Close" title="Close">✕</span>
       </div>
       <div class="dlgYouniumStatusBody" id="dlgYouniumStatusBody">
         <!-- Populated by openYouniumStatusModal() -->
@@ -6643,8 +6655,6 @@
         <button class="btn" type="button" id="btnYouniumStatusCopy">Copy summary</button>
         <a class="btn" id="btnYouniumStatusOpenOrder" target="_blank" rel="noopener noreferrer" style="display: none;">Open Younium order</a>
         <a class="btn" id="btnYouniumStatusOpenSub" target="_blank" rel="noopener noreferrer" style="display: none;">Open subscription</a>
-        <span style="flex: 1;"></span>
-        <span class="dlgYouniumStatusCloseHint dlgYouniumStatusCloseHintFooter" id="closeYouniumHintBottom" role="button" tabindex="0">Click outside to close</span>
       </div>
     </dialog>
 
