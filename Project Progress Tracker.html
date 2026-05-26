@@ -26900,11 +26900,11 @@
           ["Owner",                       p.owner],
           ["Rocketlane status",           p.status],
           ["Last RL update (local)",      fmtDate(p.updatedAt)],
-          ["Younium link",                p.youniumUrl
-            ? '<a href="' + escHtml(p.youniumUrl) + '" target="_blank" rel="noopener noreferrer">' + escHtml(p.youniumUrl) + "</a>"
-            : '<em style="color: var(--muted);">none</em>'],
           ["Rocketlane project ID",       p.rocketlaneProjectId],
         ];
+        // NB: Younium link is no longer shown in the Project section
+        // because it now lives in the Order / offer section below
+        // (per user feedback). Keeping it in both would be a duplicate.
 
         const orderTotal = order
           ? (order.tcv?.amount || order.acv?.amount || order.fmrr?.amount || "—")
