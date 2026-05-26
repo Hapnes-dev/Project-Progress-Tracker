@@ -1820,6 +1820,34 @@
         color: var(--muted2);
         border-color: rgba(148, 163, 184, 0.24);
       }
+      /* Warning row at the top of the picker — shows when the existing
+         saved link may not actually belong to this Rocketlane project
+         (FK mismatch, wrong platform, unparseable URL). User must
+         actively pick a replacement; we don't silently overwrite. */
+      .oneflowFindPickerWarning {
+        margin-bottom: 4px;
+        padding: 8px 10px;
+        font-size: 11.5px;
+        font-weight: 600;
+        border-radius: 6px;
+        background: rgba(251, 113, 133, 0.12);
+        border: 1px solid rgba(251, 113, 133, 0.42);
+        color: rgba(251, 113, 133, 0.95);
+        white-space: pre-wrap;
+        cursor: help;
+      }
+      /* Inline signal breakdown beneath each candidate row. The user
+         spec explicitly asked for matching details to be VISIBLE, not
+         hidden in DevTools — so we show them in the picker too (the
+         title tooltip still echoes the same content for hover users). */
+      .oneflowFindPickerSignals {
+        margin-top: 3px;
+        font-size: 10.5px;
+        color: var(--muted2);
+        font-style: italic;
+        line-height: 1.4;
+        white-space: normal;
+      }
 
       /* Compact toolbar row of project link buttons (Zendesk / Oneflow /
          Younium / HubSpot / Rocketlane). Mirrors the .btn style used by
@@ -7781,34 +7809,237 @@
       }
 
       /**
-       * Heuristics to harvest "platform foreign keys" stored on a
-       * Rocketlane project's custom `fields[]`. The tenant has fields
-       * like `HubspotDealID_357728` whose value (when populated) is the
-       * literal HubSpot dealId. If we have that, we should *prefer* it
-       * over any fuzzy matching — it's a direct foreign key.
+       * Read a single value out of a Rocketlane custom-field array.
+       * Custom field names follow the pattern `<Label><id>` (e.g.
+       * `HubspotDealID_357728`) — we match by the lowercased prefix
+       * (stripped of whitespace) so a stable display label doesn't
+       * break when Rocketlane changes the trailing digits.
        *
-       * Returns `{ hubspotDealId, oneflowAgreementId, youniumOrderId }`
-       * — any of which may be "" if the project hasn't been linked yet.
+       * Values can be primitives, MULTI_SELECT arrays-of-strings, or
+       * objects with .value / .label. This helper returns a single
+       * string for primitive types and an array for MULTI_SELECT.
        */
-      function extractRocketlaneForeignKeys(projectObject) {
+      function readRocketlaneCustomField(fields, namePrefix) {
+        const want = String(namePrefix).toLowerCase().replace(/\s+/g, "");
+        const f = (fields || []).find((x) =>
+          String(x?.fieldName ?? "").toLowerCase().replace(/\s+/g, "").startsWith(want)
+        );
+        if (!f) return "";
+        const v = f.value;
+        if (v == null) return "";
+        if (Array.isArray(v)) {
+          return v
+            .map((x) => (typeof x === "object" ? x?.label || x?.value : x))
+            .filter((x) => x != null && x !== "")
+            .map(String);
+        }
+        if (typeof v === "string") return v.trim();
+        if (typeof v === "number" || typeof v === "boolean") return String(v);
+        if (typeof v === "object" && v.value != null) return String(v.value).trim();
+        return "";
+      }
+
+      /**
+       * Pull EVERY useful Rocketlane custom field for cross-platform
+       * matching. Discovered via Playwright against the live tenant
+       * (`/api/v1/fields`) — confirmed field-name prefixes for all the
+       * HubSpot-mirror fields the user listed in the matching spec.
+       *
+       * Each value is a normalized string (or string[] for MULTI_SELECT
+       * fields like Product types). Missing fields return "" or [].
+       */
+      function extractRocketlaneCustomFields(projectObject) {
         const fields = Array.isArray(projectObject?.fields) ? projectObject.fields : [];
-        const get = (namePrefix) => {
-          const f = fields.find(
-            (x) => String(x?.fieldName ?? "").toLowerCase().replace(/\s+/g, "")
-              .startsWith(String(namePrefix).toLowerCase())
-          );
-          const v = f?.value;
-          if (v == null) return "";
-          if (typeof v === "string") return v.trim();
-          if (typeof v === "number") return String(v);
-          if (typeof v === "object" && v.value != null) return String(v.value).trim();
-          return "";
-        };
+        const read = (prefix) => readRocketlaneCustomField(fields, prefix);
         return {
-          hubspotDealId:      get("hubspotdealid"),
-          oneflowAgreementId: get("oneflowagreementid") || get("oneflowid"),
-          youniumOrderId:     get("youniumorderid")     || get("youniumid"),
+          // Foreign-key IDs (direct platform record references)
+          hubspotDealId:           String(read("hubspotdealid")              || ""),
+          youniumOrderNumber:      String(read("youniumordernumber")         || ""),
+          oneflowAgreementId:      String(read("oneflowagreementid")         || read("oneflowid") || ""),
+          newExistingPlantId:      String(read("newexistingplantid")         || ""),
+          // HubSpot-mirror identity / contact fields
+          hubspotPlantId:          String(read("hubspotplantid")             || ""),
+          hubspotPlantName:        String(read("hubspotplantname")           || ""),
+          hubspotDealName:         String(read("hubspotdealname")            || ""),
+          hubspotDealOwner:        String(read("hubspotdealowner")           || ""),
+          hubspotDealContact:      String(read("hubspotdealcontact_357719")  || read("hubspotdealcontact")  || ""),
+          hubspotDealContactEmail: String(read("hubspotdealcontactemail")    || ""),
+          hubspotDealContactPhone: String(read("hubspotdealcontactphone")    || ""),
+          hubspotDealPartner:      String(read("hubspotdealpartner")         || ""),
+          hubspotCertifiedPartner: String(read("hubspotcertifiedpartner")    || ""),
+          // HubSpot stage + categorisation tags
+          hubspotDealStage:        String(read("hubspotdealstage")           || ""),
+          hubspotDepartment:       String(read("hubspotdepartment")          || ""),
+          hubspotDealType:         String(read("hubspotdealtype")            || read("hubspotdealtypechoice") || ""),
+          hubspotOrderType:        String(read("hubspotordertype")           || ""),
+          hubspotProductTypes:     Array.isArray(read("hubspotproducttypes"))
+                                   ? read("hubspotproducttypes")
+                                   : (read("hubspotproducttypes") ? [String(read("hubspotproducttypes"))] : []),
+          hubspotBuildingType:     String(read("hubspotbuildingtype")        || ""),
+          hubspotPlantStreetAddr:  String(read("hubspotplantstreetaddress")  || ""),
+          hubspotFrameAgreementCo: String(read("hubspotframeagreementcompanyname") || ""),
+          // HubSpot dates
+          hubspotCreateDate:       String(read("hubspotcreatedate")          || ""),
+          hubspotDateSigned:       String(read("hubspotdatesigned")          || ""),
+          hubspotEstHWDelivery:    String(read("hubspotestimatedhwdelivery") || ""),
+          // HubSpot money
+          hubspotMonthlyRevenue:   String(read("hubspotmonthlyreccuringrevenue") || ""),
+          // HubSpot status & embedded-link sources
+          hubspotDealDescription:  String(read("hubspotdealdescription")     || ""),
+          hubspotDeliveryStatus:   String(read("hubspotdeliverystatusupdatemessage") || ""),
+          hubspotLegalEntity:      String(read("hubspotlegalentity")         || ""),
         };
+      }
+
+      /** Back-compat shim — old name still used in scoreMatchCandidate. */
+      function extractRocketlaneForeignKeys(projectObject) {
+        const all = extractRocketlaneCustomFields(projectObject);
+        return {
+          hubspotDealId:      all.hubspotDealId,
+          oneflowAgreementId: all.oneflowAgreementId,
+          youniumOrderId:     all.youniumOrderNumber,
+        };
+      }
+
+      /**
+       * Classify ANY URL by structure (not label!) into {platform,
+       * recordId, recordType}. The Rocketlane HubSpot Deal Description
+       * sometimes contains URLs labeled "Oneflow:" that actually point
+       * to Zendesk tickets — so we trust the URL shape, never the
+       * surrounding text.
+       *
+       * Returns { platform, recordId, recordType, url } or null if the
+       * URL doesn't look like any platform we recognize.
+       */
+      function classifyLinkUrl(raw) {
+        const s = String(raw || "").trim();
+        if (!s || !/^https?:\/\//i.test(s)) return null;
+        let u;
+        try { u = new URL(s); } catch { return null; }
+        const host = u.hostname.toLowerCase();
+        const path = u.pathname || "";
+        // Oneflow: app.oneflow.com/documents/<id> OR /agreements/<id>
+        if (/(?:^|\.)oneflow\.com$/i.test(host)) {
+          let m = path.match(/\/(?:documents|agreements)\/(\d+)/i);
+          if (m) return { platform: "oneflow", recordId: m[1], recordType: "agreement", url: s };
+          m = path.match(/\/(?:c\/\d+\/)?documents?\/(\d+)/i);
+          if (m) return { platform: "oneflow", recordId: m[1], recordType: "agreement", url: s };
+          return { platform: "oneflow", recordId: "", recordType: "unknown", url: s };
+        }
+        // HubSpot deals: app[-eu1].hubspot.com/contacts/<portal>/record/0-3/<dealId>
+        if (/(?:^|\.)hubspot\.com$/i.test(host)) {
+          const m = path.match(/\/record\/0-3\/(\d+)/i);
+          if (m) return { platform: "hubspot", recordId: m[1], recordType: "deal", url: s };
+          // also /contacts/<portal>/deal/<dealId>
+          const m2 = path.match(/\/deal\/(\d+)/i);
+          if (m2) return { platform: "hubspot", recordId: m2[1], recordType: "deal", url: s };
+          return { platform: "hubspot", recordId: "", recordType: "unknown", url: s };
+        }
+        // Younium: <region>.younium.com/orders/<uuid>
+        if (/(?:^|\.)younium\.com$/i.test(host)) {
+          const m = path.match(/\/orders\/([\w-]+)/i);
+          if (m) return { platform: "younium", recordId: m[1], recordType: "order", url: s };
+          return { platform: "younium", recordId: "", recordType: "unknown", url: s };
+        }
+        // Zendesk: <subdomain>.zendesk.com/agent/tickets/<id>
+        if (/(?:^|\.)zendesk\.com$/i.test(host)) {
+          const m = path.match(/\/(?:agent\/)?tickets\/(\d+)/i);
+          if (m) return { platform: "zendesk", recordId: m[1], recordType: "ticket", url: s };
+          return { platform: "zendesk", recordId: "", recordType: "unknown", url: s };
+        }
+        // Rocketlane: kiona.rocketlane.com/projects/<id>
+        if (/(?:^|\.)rocketlane\.com$/i.test(host)) {
+          const m = path.match(/\/projects\/(\d+)/i);
+          if (m) return { platform: "rocketlane", recordId: m[1], recordType: "project", url: s };
+          return { platform: "rocketlane", recordId: "", recordType: "unknown", url: s };
+        }
+        return { platform: "unknown", recordId: "", recordType: "unknown", url: s };
+      }
+
+      /**
+       * Extract & classify every URL embedded in an HTML/plain-text
+       * blob (e.g. HubspotDealDescription, HubspotDeliveryStatusMessage).
+       * Returns a deduped array of `{ platform, recordId, recordType,
+       * url, label? }` — `label` is the surrounding text on the same
+       * line (e.g. "Oneflow:") for *display only*, never trusted.
+       */
+      function extractLinksFromHtml(html) {
+        const text = String(html || "");
+        if (!text) return [];
+        const out = [];
+        const seen = new Set();
+        // Two patterns: bare URLs and href="..." in anchors.
+        const patterns = [
+          /href\s*=\s*["']([^"']+)["']/gi,
+          /https?:\/\/[^\s<>"']+/gi,
+        ];
+        for (const re of patterns) {
+          let m;
+          while ((m = re.exec(text)) !== null) {
+            const url = (m[1] || m[0]).replace(/[).,;]+$/, ""); // trim trailing punctuation
+            if (seen.has(url)) continue;
+            seen.add(url);
+            const classified = classifyLinkUrl(url);
+            if (!classified) continue;
+            // Find a label hint by looking ~30 chars before the match
+            const ctxStart = Math.max(0, m.index - 30);
+            const ctx = text.slice(ctxStart, m.index);
+            const labelMatch = ctx.match(/\b(Oneflow|Younium|HubSpot|Zendesk)\s*:?\s*$/i);
+            if (labelMatch) classified.label = labelMatch[1];
+            out.push(classified);
+          }
+        }
+        return out;
+      }
+
+      /**
+       * Generate a prioritized list of search terms for a given platform.
+       * Returns an array of `{ term, source, priority }` ordered most-
+       * specific → most-general. The find orchestrator runs them in
+       * order, merging+deduping results until it has enough candidates.
+       *
+       *   priority: 100 = direct ID lookup, 50 = plant ID, 30 = name,
+       *             20 = customer, 10 = email/phone, 0 = fallback.
+       */
+      function buildSearchTerms(platform, ctx) {
+        const terms = [];
+        const seen = new Set();
+        const add = (raw, source, priority) => {
+          const t = String(raw || "").trim();
+          if (!t || t.length < 2) return;
+          const key = priority + ":" + t.toLowerCase();
+          if (seen.has(key)) return;
+          seen.add(key);
+          terms.push({ term: t, source, priority });
+        };
+        // Foreign-key direct lookups (highest priority — exact match guaranteed).
+        const fk =
+          platform === "hubspot"  ? ctx.foreignKeys?.hubspotDealId :
+          platform === "oneflow"  ? ctx.foreignKeys?.oneflowAgreementId :
+          platform === "younium"  ? ctx.foreignKeys?.youniumOrderId : "";
+        if (fk) add(fk, "foreign-key", 100);
+        // Younium quote number (relevant for Younium queries — and for
+        // HubSpot too since deal_younium_quote_number is searchable).
+        if (ctx.youniumOrderNumber) add(ctx.youniumOrderNumber, "younium-order-number", 90);
+        // Plant ID (the most reliable cross-platform signal).
+        if (ctx.plantId) add(ctx.plantId, "plant-id", 50);
+        // Project name (stripped of plant ID prefix).
+        if (ctx.name) {
+          const stripped = ctx.name.replace(/^\s*\d+\s*[-–:]?\s*/, "").trim();
+          if (stripped && stripped.length > 2) add(stripped, "stripped-name", 40);
+          add(ctx.name, "full-name", 30);
+        }
+        // Customer + plant combo (Kelvion AS Spar Dampsaga).
+        if (ctx.partner && ctx.name) {
+          const stripped = ctx.name.replace(/^\s*\d+\s*[-–:]?\s*/, "").trim();
+          if (stripped) add(ctx.partner + " " + stripped, "customer+name", 25);
+        }
+        // Customer alone.
+        if (ctx.partner) add(ctx.partner, "customer", 20);
+        // Contact email / domain.
+        if (ctx.contactEmail) add(ctx.contactEmail, "contact-email", 15);
+        else if (ctx.contactEmailDomain) add(ctx.contactEmailDomain, "contact-domain", 10);
+        return terms.sort((a, b) => b.priority - a.priority);
       }
 
       /**
@@ -7843,15 +8074,68 @@
         const ownerEmail = String(sourceObject?.projectOwner?.emailId ?? "").toLowerCase().trim();
         const customerOrg = matchExtractOrgNumber(sourceObject?.customer?.organisationNumber || "");
         const partnerOrg  = matchExtractOrgNumber(sourceObject?.partner?.organisationNumber  || "");
-        // Foreign keys from custom fields — only present if the project
-        // has been linked previously and the user filled in the IDs.
-        const fks = sourceObject?.fields ? extractRocketlaneForeignKeys(sourceObject) : { hubspotDealId: "", oneflowAgreementId: "", youniumOrderId: "" };
+
+        // Pull ALL HubSpot-mirror custom fields — see
+        // extractRocketlaneCustomFields. When populated, these are the
+        // single strongest matching signal we have because they're
+        // direct copies of the corresponding HubSpot deal property.
+        const cf = sourceObject?.fields
+          ? extractRocketlaneCustomFields(sourceObject)
+          : {};
+
+        // Foreign-key shorthand (back-compat for scoreMatchCandidate).
+        const fks = {
+          hubspotDealId:      cf.hubspotDealId      || "",
+          oneflowAgreementId: cf.oneflowAgreementId || "",
+          youniumOrderId:     cf.youniumOrderNumber || "",
+        };
+
+        // The user may have a plant ID stored EITHER in the project
+        // name OR in the New/Existing plant ID custom field OR in the
+        // HubspotPlantID custom field. Pick the first non-empty.
+        const finalPlantId =
+          plantId ||
+          matchExtractPlantId(cf.newExistingPlantId || "") ||
+          matchExtractPlantId(cf.hubspotPlantId || "") ||
+          (cf.newExistingPlantId || cf.hubspotPlantId || "").replace(/\D+/g, "");
+
+        // Contact email/phone can also come from HubSpot custom fields.
+        const contactEmail = String(cf.hubspotDealContactEmail || "").toLowerCase().trim();
+        const contactPhone = String(cf.hubspotDealContactPhone || "")
+          .replace(/[^\d+]/g, "");
+
+        // Parse every embedded link out of the rich HubSpot Deal
+        // Description and Delivery status message. We use these BOTH
+        // for matching (e.g. an Oneflow URL embedded in the description
+        // is a confirmed-correct Oneflow link) AND for warning rows in
+        // the picker if existing saved links contradict them.
+        const embeddedLinks = [
+          ...extractLinksFromHtml(cf.hubspotDealDescription || ""),
+          ...extractLinksFromHtml(cf.hubspotDeliveryStatus  || ""),
+        ];
+        const dedupeByUrl = (arr) => {
+          const seen = new Set(); const out = [];
+          for (const x of arr) {
+            const k = x?.url || "";
+            if (k && !seen.has(k)) { seen.add(k); out.push(x); }
+          }
+          return out;
+        };
+        const allEmbedded = dedupeByUrl(embeddedLinks);
+
+        // Product types (multi-select from HubSpot) — both as a set
+        // for fast lookup and as a list for display.
+        const productTypes = Array.isArray(cf.hubspotProductTypes) ? cf.hubspotProductTypes : [];
+        const productTypeSet = new Set(productTypes.map(matchNormalize));
 
         return Object.freeze({
+          // ── Core identity ──
           name,
           nameNormalized: matchNormalize(name),
           nameTokens: matchTokenize(name),
-          plantId,
+          plantId: finalPlantId,
+
+          // ── Customer / partner / owner ──
           partner,
           partnerNormalized: matchNormalize(partner),
           partnerTokens: matchTokenize(partner),
@@ -7860,15 +8144,67 @@
           ownerTokens: matchTokenize(owner),
           ownerEmail,
           ownerEmailDomain: matchExtractEmailDomain(ownerEmail),
+
+          // ── Dates ──
           due,
           dueTimestamp: due ? Date.parse(due) : NaN,
           startDate: start,
           startTimestamp: start ? Date.parse(start) : NaN,
+
+          // ── Money / orgnr ──
           projectFee: Number.isFinite(fee) && fee > 0 ? fee : NaN,
           customerOrgNumber: customerOrg,
           partnerOrgNumber:  partnerOrg,
+
+          // ── Foreign keys (back-compat shorthand) ──
           foreignKeys: fks,
+
+          // ── HubSpot-mirror custom-field bundle (the user's wish list) ──
+          //
+          // Each of these can power a matching signal when populated.
+          // When empty they simply contribute 0 to the score (per spec).
+          hubspotMirror: {
+            dealId:            cf.hubspotDealId       || "",
+            dealName:          cf.hubspotDealName     || "",
+            plantName:         cf.hubspotPlantName    || "",
+            dealOwner:         cf.hubspotDealOwner    || "",
+            dealContact:       cf.hubspotDealContact  || "",
+            dealPartner:       cf.hubspotDealPartner  || "",
+            certifiedPartner:  cf.hubspotCertifiedPartner || "",
+            dealStage:         cf.hubspotDealStage    || "",
+            department:        cf.hubspotDepartment   || "",
+            dealType:          cf.hubspotDealType     || "",
+            orderType:         cf.hubspotOrderType    || "",
+            productTypes:      productTypes,
+            productTypeSet:    productTypeSet,
+            buildingType:      cf.hubspotBuildingType || "",
+            plantStreetAddr:   cf.hubspotPlantStreetAddr || "",
+            frameAgreementCo:  cf.hubspotFrameAgreementCo || "",
+            createDate:        cf.hubspotCreateDate   || "",
+            dateSigned:        cf.hubspotDateSigned   || "",
+            estHWDelivery:     cf.hubspotEstHWDelivery || "",
+            monthlyRevenue:    cf.hubspotMonthlyRevenue || "",
+            dealDescription:   cf.hubspotDealDescription || "",
+            deliveryStatus:    cf.hubspotDeliveryStatus  || "",
+            legalEntity:       cf.hubspotLegalEntity     || "",
+          },
+
+          // ── Convenience extras (used in scoring) ──
+          contactEmail,
+          contactEmailDomain: matchExtractEmailDomain(contactEmail),
+          contactPhone,
+          youniumOrderNumber: cf.youniumOrderNumber || "",
+
+          // ── Embedded links (parsed from description / delivery status) ──
+          embeddedLinks: allEmbedded,
+
+          // ── Currently-saved link state (used for validation) ──
           existingLinks: { oneflow: ofUrl, hubspot: hsUrl, younium: ynUrl },
+          existingLinksClassified: {
+            oneflow:  ofUrl ? classifyLinkUrl(ofUrl) : null,
+            hubspot:  hsUrl ? classifyLinkUrl(hsUrl) : null,
+            younium:  ynUrl ? classifyLinkUrl(ynUrl) : null,
+          },
         });
       }
 
@@ -8060,6 +8396,117 @@
           }
         }
 
+        // ── HubSpot mirror — direct field equality ──
+        // For HubSpot candidates only: when Rocketlane carries an
+        // explicit HubSpot field value (deal contact email/phone, deal
+        // partner, deal contact name, product type, department, order
+        // type, deal stage), check the actual deal property and award
+        // points per match. These are exact-equality checks because
+        // Rocketlane's value is literally a sync copy of HubSpot's.
+        if (platform === "hubspot" && ctx.hubspotMirror && candidate.hsFields) {
+          const m = ctx.hubspotMirror;
+          const h = candidate.hsFields;
+          const same = (a, b) => {
+            const an = matchNormalize(a);
+            const bn = matchNormalize(b);
+            return an && bn && an === bn;
+          };
+          if (m.dealName && same(m.dealName, h.dealName)) {
+            signals.push({ label: "Deal name matches RL mirror", points: 8 });
+            raw += 8;
+          }
+          if (m.plantName && same(m.plantName, h.plantName)) {
+            signals.push({ label: "Plant name matches", points: 5 });
+            raw += 5;
+          }
+          if (m.department && same(m.department, h.department)) {
+            signals.push({ label: "Department: " + h.department, points: 3 });
+            raw += 3;
+          }
+          if (m.dealType && same(m.dealType, h.dealType)) {
+            signals.push({ label: "Deal type: " + h.dealType, points: 3 });
+            raw += 3;
+          }
+          if (m.orderType && same(m.orderType, h.orderType)) {
+            signals.push({ label: "Order type: " + h.orderType, points: 3 });
+            raw += 3;
+          }
+          if (m.dealStage && same(m.dealStage, h.dealStage)) {
+            signals.push({ label: "Deal stage: " + h.dealStage, points: 2 });
+            raw += 2;
+          }
+          // Product type overlap (multi-select on RL, single value or
+          // comma-joined string on HubSpot)
+          if (m.productTypeSet && m.productTypeSet.size && h.productTypes) {
+            const candTypes = String(h.productTypes).split(/[,;|]/).map(matchNormalize).filter(Boolean);
+            const overlap = candTypes.filter((t) => m.productTypeSet.has(t));
+            if (overlap.length) {
+              signals.push({ label: "Product type: " + overlap.join(", "), points: 4 });
+              raw += 4;
+            }
+          }
+        }
+
+        // ── Contact-side signals (work for ALL platforms) ──
+        // Project contact email exact match — strong because contacts
+        // rarely overlap across deals.
+        if (ctx.contactEmail && Array.isArray(candidate.contactEmails)) {
+          const lc = ctx.contactEmail;
+          const hit = candidate.contactEmails.find((e) => String(e).toLowerCase() === lc);
+          if (hit) {
+            signals.push({ label: "Contact email exact (" + hit + ")", points: 8 });
+            raw += 8;
+          } else if (ctx.contactEmailDomain) {
+            const dom = ctx.contactEmailDomain;
+            const dh = candidate.contactEmails.find((e) => matchExtractEmailDomain(e) === dom);
+            if (dh) {
+              signals.push({ label: "Contact domain (" + dom + ")", points: 2 });
+              raw += 2;
+            }
+          }
+        }
+        // Contact phone — surprisingly stable customer-side signal.
+        if (ctx.contactPhone && Array.isArray(candidate.contactPhones)) {
+          const wantDigits = ctx.contactPhone.replace(/\D+/g, "");
+          // Allow 8-digit suffix match (handles country code variations).
+          const suffix = wantDigits.slice(-8);
+          const hit = candidate.contactPhones.find((p) => {
+            const d = String(p).replace(/\D+/g, "");
+            return d === wantDigits || (suffix && d.endsWith(suffix));
+          });
+          if (hit) {
+            signals.push({ label: "Contact phone match (" + hit + ")", points: 6 });
+            raw += 6;
+          }
+        }
+
+        // ── Embedded-link evidence ──
+        // If the Rocketlane HubSpot Deal Description (or delivery
+        // status message) contains a URL that points to this exact
+        // candidate, that's a documented project↔record link — even
+        // stronger than a partner-name match.
+        if (Array.isArray(ctx.embeddedLinks) && ctx.embeddedLinks.length) {
+          const matchingLink = ctx.embeddedLinks.find((l) =>
+            l && l.platform === platform &&
+            l.recordId && String(l.recordId) === String(candidate.id)
+          );
+          if (matchingLink) {
+            signals.push({
+              label: "Linked from RL description (" + matchingLink.url.slice(0, 40) + "…)",
+              points: 25,
+            });
+            raw += 25;
+          }
+        }
+
+        // ── Younium order number (HubSpot deals carry a Younium quote ref) ──
+        if (platform === "younium" && ctx.youniumOrderNumber && candidate.orderNumber) {
+          if (String(candidate.orderNumber).trim() === String(ctx.youniumOrderNumber).trim()) {
+            signals.push({ label: "Younium order # matches RL (" + ctx.youniumOrderNumber + ")", points: 30 });
+            raw += 30;
+          }
+        }
+
         // ── Money proximity ──
         // Plant 3299 in practice: RL fee 31238, Oneflow 16377, HubSpot
         // 27902 — they're related but not identical. So we score 0..8
@@ -8205,9 +8652,74 @@
        * @param {Array<{candidate, percent, signals}>} scored
        * @param {(entry) => void|Promise<void>} onSelect
        */
-      function renderMatchPicker(statusEl, scored, onSelect) {
+      /**
+       * Validate an existing saved link against the project context.
+       * Returns null when the link looks fine (or no link is saved),
+       * OR a warning object describing the discrepancy.
+       *
+       * @param {"oneflow"|"hubspot"|"younium"} platform
+       * @param {object} ctx     buildProjectMatchContext output
+       * @returns {{kind:"orphan"|"wrongPlatform"|"fkMismatch", message:string, savedUrl?:string} | null}
+       */
+      function detectExistingLinkMismatch(platform, ctx) {
+        const saved = ctx.existingLinks?.[platform];
+        if (!saved) return null;
+        const classified = ctx.existingLinksClassified?.[platform];
+        if (!classified) return { kind: "orphan", message: "Saved link couldn't be parsed.", savedUrl: saved };
+        if (classified.platform !== platform) {
+          return {
+            kind: "wrongPlatform",
+            message: "Saved " + platform + " link actually points to " + classified.platform + ".",
+            savedUrl: saved,
+          };
+        }
+        // Foreign-key mismatch — Rocketlane custom field expects ID X
+        // but the saved link points at ID Y.
+        const fkExpected =
+          platform === "hubspot"  ? String(ctx.foreignKeys?.hubspotDealId      || "").trim() :
+          platform === "oneflow"  ? String(ctx.foreignKeys?.oneflowAgreementId || "").trim() :
+          platform === "younium"  ? String(ctx.foreignKeys?.youniumOrderId     || "").trim() : "";
+        if (fkExpected && classified.recordId && String(classified.recordId) !== fkExpected) {
+          return {
+            kind: "fkMismatch",
+            message: "Saved link record ID " + classified.recordId +
+              " ≠ Rocketlane field " + fkExpected + ".",
+            savedUrl: saved,
+            expectedId: fkExpected,
+            actualId: classified.recordId,
+          };
+        }
+        return null;
+      }
+
+      /**
+       * Render the picker. Optional `warning` (returned by
+       * detectExistingLinkMismatch) is shown as a non-interactive
+       * highlight strip at the top, so the user understands the saved
+       * link may be wrong before picking a replacement.
+       *
+       * @param {HTMLElement} statusEl
+       * @param {Array} scored
+       * @param {Function} onSelect
+       * @param {{message:string} | null} [warning]
+       */
+      function renderMatchPicker(statusEl, scored, onSelect, warning) {
         const picker = document.createElement("div");
         picker.className = "oneflowFindPicker";
+
+        // Optional warning strip — replaces silent overwrite of saved
+        // links with a clear "Heads up: existing link may be wrong"
+        // row at the top of the picker.
+        if (warning && warning.message) {
+          const warn = document.createElement("div");
+          warn.className = "oneflowFindPickerWarning";
+          warn.textContent = "⚠ " + warning.message;
+          warn.title = warning.savedUrl
+            ? "Currently saved: " + warning.savedUrl
+            : warning.message;
+          picker.appendChild(warn);
+        }
+
         for (const entry of scored.slice(0, 8)) {
           const item = document.createElement("button");
           item.type = "button";
@@ -8223,6 +8735,18 @@
           left.appendChild(name);
           left.appendChild(meta);
 
+          // Visible signal breakdown (not just tooltip) — user spec
+          // explicitly asked for important matching details to be
+          // visible, not hidden in DevTools.
+          if (entry.signals && entry.signals.length) {
+            const breakdown = document.createElement("div");
+            breakdown.className = "oneflowFindPickerSignals";
+            breakdown.textContent = entry.signals
+              .map((s) => "+" + s.points + " " + s.label)
+              .join("  ·  ");
+            left.appendChild(breakdown);
+          }
+
           const right = document.createElement("div");
           right.className = "oneflowFindPickerScore";
           if (entry.percent >= 80) right.classList.add("highConfidence");
@@ -8230,9 +8754,8 @@
           else right.classList.add("lowConfidence");
           right.textContent = entry.percent + "% match";
 
-          // Native tooltip — no JS popover plumbing, works on every browser,
-          // accessible to screen readers via the title attribute.
-          const tooltipLines = entry.signals.length
+          // Tooltip duplicates the breakdown for hover convenience.
+          const tooltipLines = entry.signals && entry.signals.length
             ? entry.signals.map((s) => "+" + s.points + "  " + s.label)
             : ["(no matching signals)"];
           item.title = tooltipLines.join("\n");
@@ -8254,7 +8777,7 @@
        * Toggle off globally:   window.__matchDebug = false
        * (Defaults to true so users get visibility for free.)
        */
-      function debugLogMatch(label, ctx, scored, decision) {
+      function debugLogMatch(label, ctx, scored, decision, warning) {
         try {
           if (typeof window !== "undefined" && window.__matchDebug === false) return;
           const tag = "[" + label + " Find]";
@@ -8284,6 +8807,10 @@
           })));
           // eslint-disable-next-line no-console
           console.log("Decision:", decision);
+          if (warning) console.warn("Existing link mismatch:", warning);
+          if (Array.isArray(ctx.embeddedLinks) && ctx.embeddedLinks.length) {
+            console.log("Embedded links in HubSpot description / status:", ctx.embeddedLinks);
+          }
           // eslint-disable-next-line no-console
           console.groupEnd();
         } catch (_) {
@@ -8380,8 +8907,10 @@
         const contactEmails = [];
         const contactNames = [];
         const orgNumbers = [];
+        const contactPhones = [];
         for (const p of parties) {
           if (p?.email) contactEmails.push(String(p.email).toLowerCase());
+          if (p?.phone_number) contactPhones.push(String(p.phone_number));
           // Oneflow exposes orgnr as a top-level party field. Older
           // installations may use party.identification_number.value.
           const onr = p?.orgnr ?? p?.identification_number?.value ?? "";
@@ -8390,6 +8919,7 @@
             for (const part of p.participants) {
               if (part?.email) contactEmails.push(String(part.email).toLowerCase());
               if (part?.fullname) contactNames.push(String(part.fullname));
+              if (part?.phone_number) contactPhones.push(String(part.phone_number));
             }
           }
         }
@@ -8409,6 +8939,7 @@
           partyNames,
           contactNames,
           contactEmails,
+          contactPhones,
           orgNumbers,
           plantId: matchExtractPlantId(a?.name ?? ""),
           status: stateLabel,
@@ -8454,11 +8985,42 @@
           return;
         }
 
-        // Search by plant ID first (most precise); fall back to the
-        // stripped project name if plant ID returns nothing.
-        let results = [];
+        // Multi-term search: plant ID, stripped name, customer name, etc.
+        // Merge results by agreement.id. The shared buildSearchTerms
+        // helper prioritizes the most specific first.
+        const terms = buildSearchTerms("oneflow", ctx);
+        const merged = new Map(); // id → agreement
+        const termsRun = [];
         try {
-          if (ctx.plantId) {
+          for (const t of terms) {
+            if (merged.size >= 25 && termsRun.filter((x) => !x.error).length >= 2) break;
+            try {
+              const arr = await oneflowSearchAgreements(t.term, 30);
+              for (const a of arr) {
+                const id = String(a?.id || "");
+                if (id && !merged.has(id)) merged.set(id, a);
+              }
+              termsRun.push({ ...t, hits: arr.length });
+            } catch (e) {
+              termsRun.push({ ...t, error: String(e?.message ?? e) });
+            }
+          }
+        } catch (e) {
+          statusEl.className = "oneflowFindStatus error";
+          statusEl.textContent = String(e?.message ?? e ?? "Oneflow search failed.");
+          return;
+        }
+        try {
+          if (typeof window !== "undefined" && window.__matchDebug !== false) {
+            // eslint-disable-next-line no-console
+            console.log("[Oneflow Find] search terms tried:", termsRun);
+          }
+        } catch (_) {}
+        let results = Array.from(merged.values());
+        // LEGACY fallback (kept for completeness — should never fire
+        // now that buildSearchTerms covers these cases).
+        try {
+          if (results.length === 0 && ctx.plantId) {
             results = await oneflowSearchAgreements(ctx.plantId, 30);
           }
           if (results.length === 0 && ctx.name) {
@@ -8488,9 +9050,12 @@
           .sort((x, y) => y.percent - x.percent || y.score - x.score);
 
         const decision = decideMatchOutcome(scored);
-        debugLogMatch("Oneflow", ctx, scored, decision);
+        const warning = detectExistingLinkMismatch("oneflow", ctx);
+        debugLogMatch("Oneflow", ctx, scored, decision, warning);
 
-        if (decision.kind === "auto") {
+        // Never auto-overwrite a saved link when we detected a
+        // mismatch — show the picker so the user makes the call.
+        if (decision.kind === "auto" && !warning) {
           inputEl.value = oneflowDocumentUrl(decision.entry.candidate.raw?.id);
           statusEl.className = "oneflowFindStatus success";
           statusEl.textContent =
@@ -8499,17 +9064,18 @@
         }
 
         statusEl.className = "oneflowFindStatus";
-        statusEl.textContent =
-          scored.length === 1
-            ? "Low-confidence match — confirm:"
-            : "Multiple candidates — pick one:";
+        statusEl.textContent = warning
+          ? "Existing link may be wrong — review:"
+          : (scored.length === 1
+              ? "Low-confidence match — confirm:"
+              : "Multiple candidates — pick one:");
         renderMatchPicker(statusEl, scored, (entry, picker) => {
           inputEl.value = oneflowDocumentUrl(entry.candidate.raw?.id);
           statusEl.className = "oneflowFindStatus success";
           statusEl.textContent =
             "Selected (" + entry.percent + "%): " + entry.candidate.primaryText;
           picker.remove();
-        });
+        }, warning);
       }
 
       // Wire the 🔎 Find button click via event delegation on document.
@@ -8620,33 +9186,48 @@
         const amountRaw = get("amount");
         const amountNum = matchExtractMoneyAmount(amountRaw);
         // HubSpot stores currency on the property's `unit` metadata field
-        // — confirmed via Playwright: properties.amount.unit = "NOK".
-        const currency = String(props?.amount?.unit ?? "").trim();
+        // OR in a separate deal_currency_code property.
+        const currency = String(props?.amount?.unit ?? "").trim() || get("deal_currency_code");
         const amountText = Number.isFinite(amountNum) && amountNum > 0
           ? Math.round(amountNum).toLocaleString() + (currency ? " " + currency : "")
           : "";
-        // Company associations vary by portal config — try several common keys.
+
+        // ── Per-tenant custom properties found via Playwright ──
+        // Confirmed via the live Spar Dampsaga deal: HubSpot exposes
+        // delivery_company / deal_partner / contact_email / deal_contact
+        // / deal_contact_tlf_nr / deal_organization_nr_younium /
+        // deal_younium_quote_number / plant_id / plant_name / product_types
+        // etc. Names are tenant-specific but stable.
         const partyNames = [
+          get("delivery_company"),
+          get("deal_partner"),
           get("hs_associated_company"),
           get("companyname"),
           get("associated_company"),
           get("partner"),
-          get("dealname_partner"),
         ].filter(Boolean);
         const contactNames = [
+          get("deal_contact"),
           get("hubspot_owner_name"),
-          get("hs_deal_owner_email"),
         ].filter(Boolean);
-        // Owner / deal-contact emails — HubSpot may expose any of these.
         const contactEmails = [
+          get("contact_email"),
+          get("delivery_status_project_owner"),
           get("hs_deal_owner_email"),
           get("hubspot_owner_email"),
           get("email"),
         ].filter(Boolean).map((s) => s.toLowerCase());
-        // Org number isn't on the deal itself — would need a company
-        // association round-trip. Leave empty for now; the framework
-        // handles it gracefully.
-        const orgNumbers = [];
+        const contactPhones = [
+          get("deal_contact_tlf_nr"),
+          get("phone"),
+          get("phone_number"),
+        ].filter(Boolean);
+        const orgNumbers = [
+          get("deal_organization_nr_younium"),
+          get("organization_number"),
+          get("orgnr"),
+        ].filter(Boolean);
+
         // closedate / createdate are returned as epoch-ms strings.
         const rawDate = get("closedate") || get("createdate") || "";
         const dateMs = rawDate ? Number(rawDate) : NaN;
@@ -8654,6 +9235,13 @@
           ? new Date(dateMs).toISOString()
           : (rawDate || null);
         const status = get("dealstage_label") || get("dealstage") || "";
+
+        // Pull native plant_id from HubSpot — earlier we only inferred
+        // it from the deal name, but the kiona tenant has an explicit
+        // plant_id property too.
+        const plantIdProp = get("plant_id");
+        const plantId = plantIdProp || matchExtractPlantId(dealname);
+
         return {
           id: d?.objectId,
           platform: "hubspot",
@@ -8661,19 +9249,35 @@
           secondaryText: HUBSPOT_DEAL_TAG + (amountText ? " · " + amountText : ""),
           matchableTexts: [
             dealname,
+            get("plant_name"),
             get("description"),
             get("dealtype"),
+            get("deal_younium_quote_number"),
             ...partyNames,
           ].filter(Boolean),
           partyNames,
           contactNames,
           contactEmails,
+          contactPhones,
           orgNumbers,
-          plantId: matchExtractPlantId(dealname),
+          plantId,
           status,
           date,
           amount: Number.isFinite(amountNum) && amountNum > 0 ? amountNum : null,
           currency,
+          orderNumber: get("deal_younium_quote_number"),
+          // ── hsFields: rich struct used by the HubSpot-mirror scoring
+          // signals in scoreMatchCandidate. Each value mirrors a HubSpot
+          // deal property that Rocketlane custom-fields sync against.
+          hsFields: {
+            dealName:     dealname,
+            plantName:    get("plant_name"),
+            department:   get("deal_department"),
+            dealType:     get("dealtype"),
+            orderType:    get("deal_order_type"),
+            dealStage:    status,
+            productTypes: get("product_types"),
+          },
           raw: d,
         };
       }
@@ -8709,15 +9313,26 @@
           return;
         }
 
-        let json;
+        // Multi-term search: run a prioritized list of queries
+        // (foreign-key ID → plant ID → name → customer → email/phone)
+        // and merge results by objectId. Stops early once we have
+        // ≥ 12 candidates from at least 2 different sources.
+        const terms = buildSearchTerms("hubspot", ctx);
+        const merged = new Map(); // objectId → result
+        const termsRun = [];
         try {
-          if (ctx.plantId) {
-            json = await hubspotSearchDeals(ctx.plantId, 20);
-          }
-          if (!json?.results?.length && ctx.name) {
-            const stripped = ctx.name.replace(/^\s*\d+\s*[-–:]?\s*/, "").trim();
-            if (stripped && stripped.length > 2) {
-              json = await hubspotSearchDeals(stripped, 20);
+          for (const t of terms) {
+            if (merged.size >= 12 && termsRun.length >= 2) break;
+            try {
+              const j = await hubspotSearchDeals(t.term, 20);
+              const arr = Array.isArray(j?.results) ? j.results : [];
+              for (const r of arr) {
+                const id = String(r?.objectId || "");
+                if (id && !merged.has(id)) merged.set(id, r);
+              }
+              termsRun.push({ ...t, hits: arr.length });
+            } catch (e) {
+              termsRun.push({ ...t, error: String(e?.message ?? e) });
             }
           }
         } catch (e) {
@@ -8725,7 +9340,13 @@
           statusEl.textContent = String(e?.message ?? e ?? "HubSpot search failed.");
           return;
         }
-        const results = Array.isArray(json?.results) ? json.results : [];
+        try {
+          if (typeof window !== "undefined" && window.__matchDebug !== false) {
+            // eslint-disable-next-line no-console
+            console.log("[HubSpot Find] search terms tried:", termsRun);
+          }
+        } catch (_) {}
+        const results = Array.from(merged.values());
         if (results.length === 0) {
           statusEl.className = "oneflowFindStatus error";
           statusEl.textContent = "No matching HubSpot deals found.";
@@ -8741,9 +9362,10 @@
           .sort((x, y) => y.percent - x.percent || y.score - x.score);
 
         const decision = decideMatchOutcome(scored);
-        debugLogMatch("HubSpot", ctx, scored, decision);
+        const warning = detectExistingLinkMismatch("hubspot", ctx);
+        debugLogMatch("HubSpot", ctx, scored, decision, warning);
 
-        if (decision.kind === "auto") {
+        if (decision.kind === "auto" && !warning) {
           inputEl.value = await hubspotDealUrl(decision.entry.candidate.raw?.objectId);
           statusEl.className = "oneflowFindStatus success";
           statusEl.textContent =
@@ -8752,17 +9374,18 @@
         }
 
         statusEl.className = "oneflowFindStatus";
-        statusEl.textContent =
-          scored.length === 1
-            ? "Low-confidence match — confirm:"
-            : "Multiple candidates — pick one:";
+        statusEl.textContent = warning
+          ? "Existing HubSpot link may be wrong — review:"
+          : (scored.length === 1
+              ? "Low-confidence match — confirm:"
+              : "Multiple candidates — pick one:");
         renderMatchPicker(statusEl, scored, async (entry, picker) => {
           inputEl.value = await hubspotDealUrl(entry.candidate.raw?.objectId);
           statusEl.className = "oneflowFindStatus success";
           statusEl.textContent =
             "Selected (" + entry.percent + "%): " + entry.candidate.primaryText;
           picker.remove();
-        });
+        }, warning);
       }
 
       // Wire 🔎 Find for HubSpot via document delegation (same reason as
@@ -8905,12 +9528,14 @@
           partyNames,
           contactNames: [],
           contactEmails: [],
+          contactPhones: [],
           orgNumbers: [],
           plantId: String(o?.plant_id ?? "").trim(),
           status: statusLabel,
           date: dateRaw,
           amount: bestAmount,
           currency,
+          orderNumber: String(o?.orderNumber || "").trim(),
           raw: o,
         };
       }
@@ -8983,9 +9608,10 @@
           .sort((x, y) => y.percent - x.percent || y.score - x.score);
 
         const decision = decideMatchOutcome(scored);
-        debugLogMatch("Younium", ctx, scored, decision);
+        const warning = detectExistingLinkMismatch("younium", ctx);
+        debugLogMatch("Younium", ctx, scored, decision, warning);
 
-        if (decision.kind === "auto") {
+        if (decision.kind === "auto" && !warning) {
           inputEl.value = await youniumOrderUrl(decision.entry.candidate.raw?.id);
           statusEl.className = "oneflowFindStatus success";
           statusEl.textContent =
@@ -8994,17 +9620,18 @@
         }
 
         statusEl.className = "oneflowFindStatus";
-        statusEl.textContent =
-          scored.length === 1
-            ? "Low-confidence match — confirm:"
-            : "Multiple orders for plant " + ctx.plantId + " — pick one (newest first):";
+        statusEl.textContent = warning
+          ? "Existing Younium link may be wrong — review:"
+          : (scored.length === 1
+              ? "Low-confidence match — confirm:"
+              : "Multiple orders for plant " + ctx.plantId + " — pick one (newest first):");
         renderMatchPicker(statusEl, scored, async (entry, picker) => {
           inputEl.value = await youniumOrderUrl(entry.candidate.raw?.id);
           statusEl.className = "oneflowFindStatus success";
           statusEl.textContent =
             "Selected (" + entry.percent + "%): " + entry.candidate.primaryText;
           picker.remove();
-        });
+        }, warning);
       }
 
       // Wire the Younium 🔎 Find button via document delegation.

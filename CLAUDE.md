@@ -166,32 +166,73 @@ Lives just above the Oneflow API helpers in the tracker. Key exports:
 | `matchExtractEmailDomain(s)` | Pull `bar.com` from "Name <foo@bar.com>" / `foo@bar.com`. |
 | `matchTokenize(s)` | Strip plant ID + punctuation, drop tokens ≤1 char, return a `Set`. |
 | `matchTokenOverlap(a, b)` | `|A ∩ B| / max(|A|, |B|)`, 0..1. |
-| `extractRocketlaneForeignKeys(project)` | Scan custom fields for `HubspotDealID`, `OneflowAgreementID`, `YouniumOrderID`. |
-| `buildProjectMatchContext(src)` | Form-fields OR live Rocketlane project → frozen ctx with name / plantId / partner / owner / ownerEmail / due / startDate / projectFee / customerOrgNumber / foreignKeys / pre-tokenized variants. |
+| `readRocketlaneCustomField(fields, prefix)` | Look up a custom-field value by name prefix (case-insensitive, whitespace-stripped). Returns string or array for MULTI_SELECT. |
+| `extractRocketlaneCustomFields(project)` | Harvest EVERY HubSpot-mirror custom field (dealId, plantName, dealOwner, dealContact, dealContactEmail, dealContactPhone, dealStage, department, dealType, orderType, productTypes, certifiedPartner, plantStreetAddress, dealDescription, deliveryStatus, etc.) plus Younium order number + plant ID. |
+| `extractRocketlaneForeignKeys(project)` | Shim returning `{ hubspotDealId, oneflowAgreementId, youniumOrderId }` — built from `extractRocketlaneCustomFields`. |
+| `classifyLinkUrl(url)` | URL-structure classifier: returns `{ platform, recordId, recordType, url }`. Trusts URL shape, **never** trusts label text in the surrounding HTML. |
+| `extractLinksFromHtml(html)` | Parse hrefs + bare URLs from HubSpot Deal Description / Delivery status message, return deduped `[{ platform, recordId, ... }]`. |
+| `buildSearchTerms(platform, ctx)` | Prioritized list of `{ term, source, priority }` (foreign-key ID → plant ID → name → customer → email/phone). |
+| `detectExistingLinkMismatch(platform, ctx)` | Return `{ kind: "orphan"|"wrongPlatform"|"fkMismatch", message, savedUrl }` if the currently-saved link doesn't match the project; null otherwise. |
+| `buildProjectMatchContext(src)` | Form-fields OR live Rocketlane project → frozen ctx with name / plantId / partner / owner / ownerEmail / due / startDate / projectFee / customerOrgNumber / foreignKeys / **hubspotMirror** (full HubSpot-custom-field bundle) / **embeddedLinks** (parsed from HS description) / contactEmail / contactPhone / existingLinks + their classification / pre-tokenized variants. |
 | `buildEnrichedProjectMatchContext()` | Async: fetches the project via `/projects/<id>` and feeds the rich payload into `buildProjectMatchContext`. Falls back to form-only on missing ID / fetch failure. |
 | `scoreMatchCandidate(candidate, ctx)` | Returns `{ score, percent, signals }`. |
 | `decideMatchOutcome(scored, opts)` | Returns `{ kind: "auto" \| "picker" \| "none", entry?, entries?, reason }`. |
-| `renderMatchPicker(statusEl, scored, onSelect)` | Renders the picker; each row's `% match` badge is color-tinted and its `title` attribute holds the signal breakdown. |
-| `debugLogMatch(label, ctx, scored, decision)` | Collapsed `console.group` with the ctx, a `console.table` of candidates, and the decision rationale. Disable via `window.__matchDebug = false`. |
+| `renderMatchPicker(statusEl, scored, onSelect, warning?)` | Renders the picker; each row's `% match` badge is color-tinted, per-signal breakdown is shown inline (not just tooltip), and an optional `warning` row at the top surfaces existing-link mismatches. |
+| `debugLogMatch(label, ctx, scored, decision, warning?)` | Collapsed `console.group` with the ctx, a `console.table` of candidates, the decision rationale, the mismatch warning if any, and the parsed embedded-links list. Disable via `window.__matchDebug = false`. |
 
 #### Point budget (caps at 100)
 
-Calibrated from live data (plant 3299 across Rocketlane / Oneflow / HubSpot / Younium captured via Playwright). The strong "is this the right record?" signals (FK + plant ID + org number) max at 90, leaving the corroborating signals (name overlap / money / partner / dates) to push a real match to 100.
+Calibrated from live data captured via Playwright across two real projects (plant 3299 Coop Marked, plant 4732 Spar Dampsaga). The strongest "is this the right record?" signals (FK + plant ID + org number + embedded-link evidence) can stack to 100, while the corroborating signals (name overlap / money / partner / dates / category tags) push uncertain matches into picker territory.
 
 | Signal | Weight |
 |---|---|
 | Foreign-key ID match (project custom field carries the platform ID) | 35 |
 | Plant ID exact (native field or leading digits) | 35 |
 | Plant ID elsewhere in text (mutually exclusive with the above) | 18 |
+| **Younium order # matches RL `Youniumordernumber` field** (Younium only) | 30 |
+| **Linked from RL HubspotDealDescription / DeliveryStatusMessage** | 25 |
 | Org number exact match (9-digit Norwegian orgnr) | 20 |
 | Name token Jaccard | 0..15 |
 | Partner / company match (exact > substring > token overlap) | 0..10 |
+| **Contact email exact match** (RL contact email ↔ candidate's contact emails) | 8 |
+| **HubSpot deal name matches RL mirror field** (HubSpot only) | 8 |
 | Money proximity (project fee vs candidate value, linear 0..50% diff) | 0..8 |
+| **Contact phone match** (8-digit suffix overlap, handles country codes) | 6 |
+| **HubSpot plant name matches RL mirror field** (HubSpot only) | 5 |
 | Owner-email exact (project owner appears as participant/contact) | 5 |
-| Same email domain (e.g. both `kiona.com`) | 3 |
+| **Product type overlap** (RL `HubspotProducttypes` ↔ deal `product_types`) | 4 |
 | Owner / contact NAME match | 0..4 |
 | Date proximity vs project due OR start (≤7d → 4, ≤14d → 3, ≤30d → 2) | 0..4 |
+| **HubSpot department / dealType / orderType tag match** | 3 each |
+| Same email domain (e.g. both `kiona.com`) | 3 |
 | "Live" status (not closed/cancelled/declined/lost/expired/etc.) | 0..3 |
+| **HubSpot deal stage tag match** | 2 |
+| **Contact domain match** (RL contact email domain ↔ candidate) | 2 |
+
+#### Multi-term search
+
+Instead of a single query, the find orchestrator now runs a **prioritized list of search terms** through `buildSearchTerms(platform, ctx)`:
+
+1. Foreign-key ID (direct platform-record lookup, priority 100)
+2. Younium order number (priority 90 — relevant for Younium directly, and for HubSpot since deals carry `deal_younium_quote_number`)
+3. Plant ID (priority 50)
+4. Stripped project name (priority 40)
+5. Full project name (priority 30)
+6. Customer + plant name combo (priority 25)
+7. Customer alone (priority 20)
+8. Contact email (priority 15) or contact email domain (priority 10)
+
+Results are merged by record ID (deduplicated), with early stop once we have ≥ 12 candidates from at least 2 different sources. Each term tried gets logged via `console.log("[Platform Find] search terms tried:", ...)`.
+
+#### Existing-link validation
+
+Before deciding auto-fill vs picker, every find function calls `detectExistingLinkMismatch(platform, ctx)`:
+
+- **`orphan`** — saved link couldn't be URL-parsed.
+- **`wrongPlatform`** — saved URL points to a different platform than its slot (e.g. a Zendesk ticket saved in the Oneflow slot).
+- **`fkMismatch`** — Rocketlane has a foreign-key custom field (e.g. `HubspotDealID_357728 = 494492985563`) but the saved URL points to a different record ID.
+
+If a mismatch is detected, **auto-fill is suppressed** regardless of score. The picker opens with a red warning row at the top quoting the discrepancy ("Saved link record ID X ≠ Rocketlane field Y"), and the user picks a replacement manually. We never silently overwrite a saved link.
 
 `scoreMatchCandidate` returns the raw sum AND the percentage (clamped 0–100). A perfect plant-3299 match in our test ran to ~88% (Plant ID 35 + Partner 10 + Name 9 + Money 7 + Live 3 + Date 4 + Owner-domain 3 + Plant ID exact = high), which would auto-fill. A weak match with just "name overlap + active status" lands at ~12–18% and surfaces in the picker for manual review.
 
