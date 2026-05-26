@@ -27286,29 +27286,43 @@
         const extraWarnings = buildYouniumExtraWarnings(p, verdict);
         const allWarnings = [...(verdict.problems || []), ...extraWarnings];
 
-        // Subscription expected to be Active ONLY when the order has
-        // an IWMAC subscription product. One-time sales don't have
-        // a subscription to check.
-        const expectedNotMet = verdict.orderStatus !== "Invoiced" ||
-          (verdict.hasSubscriptionProduct && verdict.subscriptionStatus !== "Active");
-
         // ── Summary header text ──
-        // Tailored to whether the order has an IWMAC subscription
-        // product on it. Orders without IWMAC are one-time sales —
-        // no subscription state to report.
+        // Specific, action-oriented one-liner per verdict state.
+        // The text below the colored chip should answer two questions
+        // for the user immediately: (1) what's the problem? (2) what
+        // do I do about it?
         let summaryText;
+        const subStatus = verdict.subscriptionStatus || "";
         if (verdict.color === "green" && verdict.hasSubscriptionProduct) {
-          summaryText = "OK: Order is Invoiced and Subscription is Active.";
+          summaryText = "All good — Order is Invoiced and Subscription is Active.";
         } else if (verdict.color === "green") {
-          summaryText = "OK: Order is Invoiced (one-time sale — no IWMAC subscription product).";
-        } else if (verdict.color === "yellow" && verdict.orderStatus === "Invoiced") {
-          summaryText = "Pending: Order is Invoiced, but Subscription is not Active yet.";
-        } else if (verdict.color === "yellow") {
-          summaryText = "Warning: " + (verdict.label || "Status uncertain — see details below.");
+          summaryText = "All good — Order is Invoiced (one-time sale, no subscription).";
+        } else if (verdict.color === "red" && subStatus.startsWith("Draft")) {
+          summaryText = "Action needed: Subscription is in Draft state. Activate it in Younium to start invoicing.";
+        } else if (verdict.color === "red" && subStatus.startsWith("Created")) {
+          summaryText = "Action needed: Subscription is not finalized. Finalize and activate it in Younium.";
+        } else if (verdict.color === "red" && verdict.orderStatus.startsWith("Draft")) {
+          summaryText = "Action needed: Order is in Draft state. Activate it in Younium.";
+        } else if (verdict.color === "red" && verdict.orderStatus === "Created (not finalized)") {
+          summaryText = "Action needed: Order is not finalized in Younium.";
+        } else if (verdict.color === "red" && verdict.orderStatus === "Cancelled") {
+          summaryText = "Cancelled — Order was cancelled on " + (order?.cancellationDate || "").slice(0, 10) + ".";
+        } else if (verdict.color === "red" && verdict.orderStatus === "Expired") {
+          summaryText = "Expired — Order ended " + (order?.effectiveEndDate || "").slice(0, 10) + " and is not auto-renewing.";
+        } else if (verdict.color === "red" && verdict.hasSubscriptionProduct) {
+          summaryText = "Action needed: Subscription is " + subStatus + " — should be Active.";
         } else if (verdict.color === "red") {
-          summaryText = "Error: " + (verdict.label || "Younium state needs attention.");
+          summaryText = "Action needed: " + (verdict.label?.replace(/^Younium:\s*[✗⚠✓]?\s*/, "") || "Younium needs attention.");
+        } else if (verdict.color === "yellow" && verdict.orderStatus === "Invoiced") {
+          summaryText = "Pending — Order is Invoiced, waiting for Subscription to become Active.";
+        } else if (verdict.color === "yellow" && verdict.orderStatus === "Order (not invoiced)") {
+          summaryText = "Pending — Order hasn't been invoiced yet.";
+        } else if (verdict.color === "yellow" && verdict.orderStatus === "Order (pending start)") {
+          summaryText = "Pending — Subscription starts " + (order?.effectiveStartDate || "").slice(0, 10) + ".";
+        } else if (verdict.color === "yellow") {
+          summaryText = "Pending — " + (verdict.label?.replace(/^Younium:\s*[✗⚠✓]?\s*/, "") || "status uncertain.");
         } else {
-          summaryText = "Missing: No Younium link saved on this project, or no reliable record was found.";
+          summaryText = "No Younium link saved on this project, or no reliable record was found.";
         }
         // Project section removed from modal — title bar already shows
         // the project name, and partner/owner/RL status / project ID
@@ -27431,9 +27445,6 @@
         els.dlgYouniumStatusBody.innerHTML =
           '<div class="youniumSummary youniumStatus-' + verdict.color + '">' +
             escHtml(summaryText) +
-            (expectedNotMet
-              ? '<small>Expected: Order = <strong>Invoiced</strong>, Subscription = <strong>Active</strong>.</small>'
-              : "") +
           '</div>' +
           (allWarnings.length
             ? '<div class="youniumWarnings"><strong>Warnings</strong><ul>' +
