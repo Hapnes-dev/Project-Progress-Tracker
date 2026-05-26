@@ -10195,7 +10195,12 @@
         // Subscription verdict — derived from the SUBSCRIPTION order's
         // lifecycle (which may be a different order than the saved
         // primary one, if we found it via plant_id lookup).
+        // Younium order.status enum (verified): 1=Created, 5=Draft, 9=Active.
+        // A subscription order saved as Draft will *not* be invoiced —
+        // even if the dates look fine. Check raw status FIRST.
         const subOrder = subscriptionOrder || order;
+        const subIsRawDraft   = subOrder.status === 5;
+        const subIsRawCreated = subOrder.status === 1;
         const subTsStart = subOrder.effectiveStartDate ? Date.parse(subOrder.effectiveStartDate) : NaN;
         const subTsEnd   = subOrder.effectiveEndDate   ? Date.parse(subOrder.effectiveEndDate)   : NaN;
         const subTsCancelled = subOrder.cancellationDate ? Date.parse(subOrder.cancellationDate) : NaN;
@@ -10205,6 +10210,10 @@
 
         if (subIsCancelled) {
           out.subscriptionStatus = "Cancelled";
+        } else if (subIsRawDraft) {
+          out.subscriptionStatus = "Draft (not activated)";
+        } else if (subIsRawCreated) {
+          out.subscriptionStatus = "Created (not finalized)";
         } else if (subIsExpired) {
           out.subscriptionStatus = "Inactive";
         } else if (subStartsInFuture) {
@@ -10277,15 +10286,35 @@
         } else if (out.hasSubscriptionProduct && out.subscriptionStatus !== "Active") {
           // Order is invoiced and has IWMAC subscription product BUT
           // subscription isn't Active — that's bad per user spec
-          // (Active = good, everything else = bad).
+          // (Active = good, everything else = bad). Specialise the
+          // wording for the Draft / Created (raw status) cases so
+          // it's actionable.
           out.color = "red";
-          out.label = "Younium: Subscription " + out.subscriptionStatus;
-          out.problems.push(
-            "Order contains IWMAC subscription product '" +
-            (out.subscriptionProduct?.productName || "Abonnement") +
-            "' but subscription state is '" + out.subscriptionStatus +
-            "' — should be Active"
-          );
+          if (out.subscriptionStatus.startsWith("Draft")) {
+            out.label = "Younium: Subscription Draft (not activated)";
+            out.problems.push(
+              "Subscription order '" +
+              (out.subscriptionProduct?.productName || "IWMAC Abonnement") +
+              "' is saved as Draft in Younium — it has NOT been activated " +
+              "and won't be invoiced. Activate the subscription in Younium."
+            );
+          } else if (out.subscriptionStatus.startsWith("Created")) {
+            out.label = "Younium: Subscription not finalized";
+            out.problems.push(
+              "Subscription order '" +
+              (out.subscriptionProduct?.productName || "IWMAC Abonnement") +
+              "' is Created but not yet finalized — needs to be activated " +
+              "in Younium so it can be invoiced."
+            );
+          } else {
+            out.label = "Younium: Subscription " + out.subscriptionStatus;
+            out.problems.push(
+              "Order contains IWMAC subscription product '" +
+              (out.subscriptionProduct?.productName || "Abonnement") +
+              "' but subscription state is '" + out.subscriptionStatus +
+              "' — should be Active"
+            );
+          }
         } else if (out.subscriptionStatus === "Active") {
           out.color = "green";
           out.label = "Younium: OK";
