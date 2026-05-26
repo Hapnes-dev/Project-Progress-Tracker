@@ -27295,20 +27295,22 @@
               ["Term (months)",            subOrder?.term ?? "—"],
               ["Created date",             fmtDate(subOrder?.created)],
               ["Updated date",             fmtDate(subOrder?.modified || subOrder?.modifiedWithDependencies)],
-              // Younium's actual field name for "last modified by"
-              // varies by tenant / payload shape. Try the most common
-              // ones in priority order — first non-empty wins.
-              ["Last updated by",          escHtml(String(
-                subOrder?.modifiedByUserDisplayName ||
-                subOrder?.modifiedByDisplayName ||
-                subOrder?.modifiedByUser ||
-                subOrder?.modifiedBy ||
-                subOrder?.lastModifiedByUserDisplayName ||
-                subOrder?.lastModifiedBy ||
-                subOrder?.updatedByUserDisplayName ||
-                subOrder?.updatedBy ||
-                "—"
-              ))],
+              // 'Last updated by' isn't on /api/order/{id}. Younium's
+              // timeline panel pulls it from a separate (still-undiscovered)
+              // endpoint. Keep a placeholder row IF any candidate field
+              // is populated, but hide entirely when all are empty so
+              // we don't render a useless '—'.
+              ...(function () {
+                const v = subOrder?.modifiedByUserDisplayName ||
+                  subOrder?.modifiedByDisplayName ||
+                  subOrder?.modifiedByUser ||
+                  subOrder?.modifiedBy ||
+                  subOrder?.lastModifiedByUserDisplayName ||
+                  subOrder?.lastModifiedBy ||
+                  subOrder?.updatedByUserDisplayName ||
+                  subOrder?.updatedBy;
+                return v ? [["Last updated by", escHtml(String(v))]] : [];
+              })(),
             ]
           : [
               ["Has IWMAC subscription",   '<span style="color: var(--muted);">No (searched by plant_id — no order with IWMAC Abonnement / Subscription product found)</span>'],
