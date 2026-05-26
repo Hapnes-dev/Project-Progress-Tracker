@@ -10228,6 +10228,22 @@
           status: subOrder.status, isLastVersion: subOrder.isLastVersion,
           effectiveStartDate: subOrder.effectiveStartDate,
           subOrderNumberLooksDraft, subIsRawDraft, subIsRawCreated,
+          // User attribution — log every candidate field so we can
+          // identify which one Younium actually populates on this
+          // tenant. Helps debug 'Last updated by' showing "—".
+          userFields: {
+            modifiedByUserDisplayName: subOrder.modifiedByUserDisplayName,
+            modifiedByDisplayName: subOrder.modifiedByDisplayName,
+            modifiedByUser: subOrder.modifiedByUser,
+            modifiedBy: subOrder.modifiedBy,
+            lastModifiedByUserDisplayName: subOrder.lastModifiedByUserDisplayName,
+            lastModifiedBy: subOrder.lastModifiedBy,
+            updatedByUserDisplayName: subOrder.updatedByUserDisplayName,
+            updatedBy: subOrder.updatedBy,
+            ownerUserDisplayName: subOrder.ownerUserDisplayName,
+            createdByUserDisplayName: subOrder.createdByUserDisplayName,
+            createdBy: subOrder.createdBy,
+          },
         });
         const subTsStart = subOrder.effectiveStartDate ? Date.parse(subOrder.effectiveStartDate) : NaN;
         const subTsEnd   = subOrder.effectiveEndDate   ? Date.parse(subOrder.effectiveEndDate)   : NaN;
@@ -27276,6 +27292,22 @@
               ["Renewed",                  subOrder?.isRenewed ? "Yes" : "No"],
               ["Latest version",           subOrder?.isLastVersion ? "Yes" : "No"],
               ["Term (months)",            subOrder?.term ?? "—"],
+              ["Created date",             fmtDate(subOrder?.created)],
+              ["Updated date",             fmtDate(subOrder?.modified || subOrder?.modifiedWithDependencies)],
+              // Younium's actual field name for "last modified by"
+              // varies by tenant / payload shape. Try the most common
+              // ones in priority order — first non-empty wins.
+              ["Last updated by",          escHtml(String(
+                subOrder?.modifiedByUserDisplayName ||
+                subOrder?.modifiedByDisplayName ||
+                subOrder?.modifiedByUser ||
+                subOrder?.modifiedBy ||
+                subOrder?.lastModifiedByUserDisplayName ||
+                subOrder?.lastModifiedBy ||
+                subOrder?.updatedByUserDisplayName ||
+                subOrder?.updatedBy ||
+                "—"
+              ))],
             ]
           : [
               ["Has IWMAC subscription",   '<span style="color: var(--muted);">No (searched by plant_id — no order with IWMAC Abonnement / Subscription product found)</span>'],
