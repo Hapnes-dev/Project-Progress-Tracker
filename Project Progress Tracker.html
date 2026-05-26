@@ -1367,52 +1367,29 @@
 
       /* RL sync chip — interactive clickable chip for triggering a
          single-project Rocketlane sync. Matches the .tag sizing of
-         its meta-row neighbours (Partner / Owner / Updated / Younium)
-         and uses the uiverse 'light-rat-32' spinner as the leading
-         icon (https://uiverse.io/barisdogansutcu/light-rat-32). */
+         its meta-row neighbours and adds a ↻ glyph + clear hover
+         state. The glyph spins while a sync is in flight (the
+         .warn modifier is applied during sync). */
       .tag.rlSyncQuiet {
         cursor: pointer;
         transition: background 0.15s, border-color 0.15s, transform 0.05s;
-        gap: 6px;
       }
-      .tag.rlSyncQuiet:hover {
-        filter: brightness(1.18);
-      }
-      .tag.rlSyncQuiet:active {
-        transform: scale(0.97);
-      }
-      .tag.rlSyncQuiet .rlSyncText {
+      .tag.rlSyncQuiet:hover { filter: brightness(1.18); }
+      .tag.rlSyncQuiet:active { transform: scale(0.97); }
+      .tag.rlSyncQuiet::before {
+        content: "↻";
         display: inline-block;
+        margin-right: 4px;
+        font-weight: 600;
+        font-size: 12px;
+        line-height: 1;
       }
-      /* Uiverse 'light-rat-32' loader, scoped to the RL sync chip so
-         it doesn't leak into other SVGs / circles in the document.
-         Uses currentColor on the stroke so the spinner inherits the
-         chip's good/warn/bad text color. Keyframes are renamed
-         (rlSyncRotate4 / rlSyncDash4) to avoid clashing with any
-         other rotate4 / dash4 keyframes elsewhere. */
-      .tag.rlSyncQuiet svg {
-        width: 1.15em;
-        height: 1.15em;
-        transform-origin: center;
-        animation: rlSyncRotate4 2s linear infinite;
-        flex-shrink: 0;
+      .tag.rlSyncQuiet.warn::before {
+        animation: rlSyncSpin 1s linear infinite;
       }
-      .tag.rlSyncQuiet svg circle {
-        fill: none;
-        stroke: currentColor;
-        stroke-width: 4;
-        stroke-dasharray: 1, 200;
-        stroke-dashoffset: 0;
-        stroke-linecap: round;
-        animation: rlSyncDash4 1.5s ease-in-out infinite;
-      }
-      @keyframes rlSyncRotate4 {
-        100% { transform: rotate(360deg); }
-      }
-      @keyframes rlSyncDash4 {
-        0%   { stroke-dasharray: 1, 200;  stroke-dashoffset: 0; }
-        50%  { stroke-dasharray: 90, 200; stroke-dashoffset: -35px; }
-        100% { stroke-dashoffset: -125px; }
+      @keyframes rlSyncSpin {
+        from { transform: rotate(0deg); }
+        to   { transform: rotate(360deg); }
       }
 
       .progress {
@@ -13342,60 +13319,16 @@
         };
       }
 
-      /**
-       * Build the RL sync chip's inner structure so it contains both
-       * the uiverse spinner SVG and a text span. We can't put the SVG
-       * in a ::before pseudo-element because the uiverse CSS animates
-       * the inner <circle> element by selector — that requires real
-       * DOM, not generated content.
-       */
-      function ensureRlSyncChipStructure(tag) {
-        if (!tag) return;
-        if (tag.querySelector(".rlSyncText")) return; // already structured
-        const initialText = tag.textContent;
-        tag.textContent = "";
-        // Inline SVG built via DOM so it survives htmlescaping. viewBox
-        // 25 25 50 50 + circle r=20 at center 50,50 = standard Material
-        // spinner geometry the uiverse 'light-rat-32' loader expects.
-        const SVG_NS = "http://www.w3.org/2000/svg";
-        const svg = document.createElementNS(SVG_NS, "svg");
-        svg.setAttribute("viewBox", "25 25 50 50");
-        const c = document.createElementNS(SVG_NS, "circle");
-        c.setAttribute("r", "20");
-        c.setAttribute("cy", "50");
-        c.setAttribute("cx", "50");
-        svg.appendChild(c);
-        tag.appendChild(svg);
-        const txt = document.createElement("span");
-        txt.className = "rlSyncText";
-        txt.textContent = initialText;
-        tag.appendChild(txt);
-      }
-      /** Updates only the text portion of the RL sync chip, leaving
-       *  the spinner SVG untouched. Falls back to a plain textContent
-       *  assignment if the chip somehow lost its structure. */
-      function setRlSyncChipText(tag, text) {
-        if (!tag) return;
-        const txt = tag.querySelector(".rlSyncText");
-        if (txt) {
-          txt.textContent = text;
-        } else {
-          tag.textContent = text;
-          ensureRlSyncChipStructure(tag);
-        }
-      }
-
       function refreshRocketlaneSyncTagInPlace() {
         const tag = document.getElementById("rocketlaneSyncTag");
         if (!tag) return;
-        ensureRlSyncChipStructure(tag);
         const p = getSelectedProject();
         const rlPid = String(p?.rocketlaneProjectId ?? "").trim();
         if (!p || !rlPid) return;
         const info = rocketlaneSyncTagInfoForProject(p);
         const quietCls = ROCKETLANE_QUIET_UI ? " rlSyncQuiet" : "";
         tag.className = "tag" + (info.cls ? " " + info.cls : "") + quietCls;
-        setRlSyncChipText(tag, info.text);
+        tag.textContent = info.text;
         tag.title = String(info.title ?? "");
       }
 
@@ -19475,10 +19408,6 @@
           const quietCls = ROCKETLANE_QUIET_UI ? " rlSyncQuiet" : "";
           rlSyncTag.className = "tag" + (syncInfo.cls ? " " + syncInfo.cls : "") + quietCls;
           rlSyncTag.textContent = syncInfo.text;
-          // Replace the bare text with the SVG-spinner + text-span
-          // structure so the uiverse loader animation has a circle to
-          // animate.
-          ensureRlSyncChipStructure(rlSyncTag);
           rlSyncTag.title = (syncInfo.title ? String(syncInfo.title) + " — " : "") + "Click to sync this project from Rocketlane now";
           // Click → manual single-project sync. Bypasses the cooldown
           // (force: true), only syncs THIS project's rlPid, and shows
@@ -19488,7 +19417,8 @@
           rlSyncTag.addEventListener("click", async (ev) => {
             ev.stopPropagation();
             if (rocketlaneLiveSyncInFlight) return; // double-click safety
-            setRlSyncChipText(rlSyncTag, "RL syncing…");
+            const orig = rlSyncTag.textContent;
+            rlSyncTag.textContent = "RL syncing…";
             try {
               const res = await rocketlaneSyncLinkedProjectsNow({
                 silent: false,
@@ -19496,14 +19426,14 @@
                 onlyProjectId: p.id,
               });
               if (res && res.skipped) {
-                setRlSyncChipText(rlSyncTag, "RL sync skipped: " + String(res.reason || "unknown"));
+                rlSyncTag.textContent = "RL sync skipped: " + String(res.reason || "unknown");
                 window.setTimeout(() => refreshRocketlaneSyncTagInPlace(), 1500);
               }
               // Otherwise the sync's own success path updates the
               // chip via refreshRocketlaneSyncTagInPlace() called
               // from rocketlaneUpdateSyncButtonState().
             } catch (err) {
-              setRlSyncChipText(rlSyncTag, "RL sync: failed");
+              rlSyncTag.textContent = "RL sync: failed";
               console.warn("[RL manual sync] failed:", err);
               window.setTimeout(() => refreshRocketlaneSyncTagInPlace(), 2500);
             }
