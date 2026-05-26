@@ -289,18 +289,34 @@ A read-only `.btn` rendered in the top action bar, to the **left of "Import CSV"
 | 🔴 Red — "Younium: Quote" / "Draft" / "Cancelled" / "Expired" / "Bad link" / "Not found" | Saved URL is a Quote (not promoted), Order is draft, Order was cancelled, end date in past, or link can't be parsed. |
 | ⚪ Gray — "Younium: Missing" / "Younium: …" | No Younium link saved on the project. |
 
-**Click behavior:** opens a popover anchored under the button with:
+**Click behavior:** opens `<dialog id="dlgYouniumStatus">` — a fullscreen-centered native modal (max-width 900px, max-height 88vh, responsive). The native `<dialog>` element handles **Escape-to-close**, **backdrop scroll-lock**, and **Top Layer rendering** automatically — we just style the backdrop and add an explicit backdrop-click handler.
 
-- **Last plant change:** most-recent timestamp across (Younium order `modified` / `modifiedWithDependencies` → Younium order `created` → Rocketlane project `updatedAt` → local `lastCheckedAt`), labeled with its source.
-- **Order / offer:** Invoiced / Order / Draft / Quote / Cancelled / etc.
-- **Subscription:** Active / Order — not active yet / Inactive / Cancelled / Unknown.
-- **Order number** + **Record kind** (order vs quote).
-- **Open Younium order ↗** + **Open subscription ↗** links (the second falls back to the saved Oneflow subscription URL when populated).
-- **Expected:** block calling out that order should be Invoiced + subscription should be Active when the current state doesn't meet that.
-- **Issues:** bullet list of detected problems.
-- **Last checked** timestamp + a "Refresh status" link that re-runs `computeYouniumStatus()` against the live API.
+**Close paths** (all wired + Playwright-verified):
+1. **X button** in the title bar (`#btnCloseYouniumStatus`)
+2. **Footer Close button** (`#btnCloseYouniumStatus2`)
+3. **Escape key** — native to `<dialog>`
+4. **Backdrop click** — explicit handler on the `<dialog>` element when `ev.target === dialog`
 
-Outside-click dismisses.
+**Sections rendered in the modal body** (in this order):
+
+| Section | Content |
+|---|---|
+| **Status summary** | Big colored chip at the top: "OK: Order is Invoiced and Subscription is Active." / "Pending: …" / "Warning: …" / "Error: …" / "Missing: …" |
+| **Warnings** (only when problems exist) | Red panel with bullet list — includes computeYouniumStatus problems PLUS `buildYouniumExtraWarnings` (customer-name mismatch between project partner and Younium accountname, existing-link platform mismatch). |
+| **Project** | Name, Partner, Owner, Rocketlane status, last RL update, Younium link (with click-through), Rocketlane project ID. |
+| **Order / offer** | Order ID, Order number, Order name, Order status, Invoice status (posted vs drafted vs none), expected status "Invoiced", customer/account, total amount + currency, created, updated, **Last changed** (with source attribution). |
+| **Subscription** | Subscription ID (currently `order.id` + "derived from order"), name, status, expected status "Active", customer, linked order, start/end dates, created/updated, last changed. |
+| **Raw Younium data** | `<table>` dump of every field we pulled from `/api/order/{id}` (or the quote, when the saved link is a `/quotes/<uuid>`) — for transparency and debugging. |
+
+**Footer actions:**
+
+- **Refresh status** — clears `youniumStatusFetchedThisSession` for the project and re-runs `computeYouniumStatus()`, updating modal body + toolbar button face.
+- **Copy summary** — writes a plain-text summary (project name, verdict, order/subscription status, last change, URL, issues) to the clipboard via `navigator.clipboard.writeText()`. Falls back to `alert(text)` on permission denial.
+- **Open Younium order ↗** — direct link, only shown when a Younium URL is saved.
+- **Open subscription ↗** — direct link, only shown when an Oneflow subscription URL is saved (Younium itself doesn't have a distinct subscription URL).
+- **Close** — closes the dialog.
+
+**Read-only safety:** no API writes, no project-field mutations (except cached verdict storage), no link overwrites, no subscription activation. The modal observes; it never modifies.
 
 **Caching:** verdict is persisted on `project.youniumStatus = { color, label, orderStatus, subscriptionStatus, orderNumber, kind, problems, lastCheckedAt }` so the chip shows immediately on revisits. Background refresh runs once per project per session via the `youniumStatusFetchInFlight` / `youniumStatusFetchedThisSession` Sets (same pattern as the auto-link-fetch).
 
