@@ -3103,6 +3103,124 @@
       .youniumStatusMissing { color: var(--muted2); font-style: italic; font-size: 11px; }
       .youniumStatusExpected { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 11px; }
       .youniumStatusExpected strong { color: var(--text); }
+
+      /* ── Younium status: fullscreen-centered modal ──
+         Replaces the small popover. Uses the native <dialog> element
+         so we get Escape-close + backdrop scroll-lock for free, then
+         the rest is styling. */
+      dialog.dlgYouniumStatus {
+        margin: auto;
+        width: min(900px, 92vw);
+        max-height: 88vh;
+        padding: 0;
+        border: 1px solid var(--hairline-strong);
+        border-radius: 14px;
+        background: var(--panel);
+        color: var(--text);
+        box-shadow: var(--shadow-lg);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      dialog.dlgYouniumStatus::backdrop {
+        background: rgba(0, 0, 0, 0.55);
+      }
+      @media (prefers-color-scheme: light) {
+        dialog.dlgYouniumStatus { background: #ffffff; }
+      }
+      .dlgYouniumStatusHd {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 18px;
+        border-bottom: 1px solid var(--hairline);
+      }
+      .dlgYouniumStatusBody {
+        padding: 16px 18px;
+        overflow-y: auto;
+        flex: 1 1 auto;
+        min-height: 0;
+        display: grid;
+        gap: 14px;
+      }
+      .dlgYouniumStatusFooter {
+        padding: 12px 18px;
+        border-top: 1px solid var(--hairline);
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .youniumSummary {
+        padding: 12px 14px;
+        border-radius: 10px;
+        font-size: 14px;
+        font-weight: 600;
+        border: 1px solid transparent;
+      }
+      .youniumSummary.youniumStatus-green  { background: var(--good-soft); color: var(--good); border-color: rgba(52,211,153,0.45); }
+      .youniumSummary.youniumStatus-yellow { background: var(--warn-soft); color: var(--warn); border-color: rgba(251,191,36,0.45); }
+      .youniumSummary.youniumStatus-red    { background: var(--bad-soft);  color: var(--bad);  border-color: rgba(251,113,133,0.45); }
+      .youniumSummary.youniumStatus-gray   { background: var(--surface-3); color: var(--muted); border-color: rgba(148,163,184,0.32); }
+      .youniumSummary small { display: block; font-weight: 400; font-size: 11.5px; margin-top: 4px; color: var(--muted); }
+      .youniumSection {
+        border: 1px solid var(--hairline);
+        border-radius: 10px;
+        padding: 12px 14px;
+        background: var(--surface-1);
+      }
+      .youniumSectionTitle {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 8px;
+      }
+      .youniumKV {
+        display: grid;
+        grid-template-columns: 180px 1fr;
+        gap: 4px 14px;
+        font-size: 12.5px;
+        line-height: 1.5;
+      }
+      @media (max-width: 600px) {
+        .youniumKV { grid-template-columns: 1fr; }
+        .youniumKV dt { color: var(--muted); margin-top: 6px; }
+      }
+      .youniumKV dt { color: var(--muted); }
+      .youniumKV dd { margin: 0; color: var(--text); word-break: break-word; }
+      .youniumKV dd a { color: var(--accent); }
+      .youniumKV dd a:hover { text-decoration: underline; }
+      .youniumWarnings {
+        padding: 10px 14px;
+        border-radius: 10px;
+        background: var(--bad-soft);
+        border: 1px solid rgba(251,113,133,0.45);
+        color: var(--bad);
+        font-size: 12.5px;
+      }
+      .youniumWarnings ul { margin: 6px 0 0; padding-left: 22px; }
+      .youniumWarnings li { margin-bottom: 3px; }
+      .youniumExpectedRow {
+        font-size: 11.5px;
+        color: var(--muted);
+        margin-top: 6px;
+      }
+      .youniumRawTable {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 11.5px;
+        font-family: var(--mono, ui-monospace, monospace);
+      }
+      .youniumRawTable th, .youniumRawTable td {
+        text-align: left;
+        padding: 4px 8px;
+        border-bottom: 1px solid var(--hairline);
+        vertical-align: top;
+      }
+      .youniumRawTable th { color: var(--muted); font-weight: 500; width: 200px; white-space: nowrap; }
+      .youniumRawTable td { color: var(--text); word-break: break-all; }
       .youniumStatusProblems { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--hairline); }
       .youniumStatusProblems ul { margin: 4px 0 0; padding-left: 18px; }
       .youniumStatusProblems li { color: var(--bad); margin-bottom: 2px; }
@@ -6455,6 +6573,25 @@
           <button class="btn primary" type="submit" id="btnApplyYouniumImport" disabled>Import</button>
         </div>
       </form>
+    </dialog>
+
+    <!-- Younium status details (fullscreen modal — opened by the top-bar Younium Status button) -->
+    <dialog id="dlgYouniumStatus" class="dlgYouniumStatus" aria-labelledby="dlgYouniumStatusTitle">
+      <div class="dlgHd dlgYouniumStatusHd">
+        <strong id="dlgYouniumStatusTitle">Younium status details</strong>
+        <button class="btn" id="btnCloseYouniumStatus" type="button" aria-label="Close">Close</button>
+      </div>
+      <div class="dlgYouniumStatusBody" id="dlgYouniumStatusBody">
+        <!-- Populated by openYouniumStatusModal() -->
+      </div>
+      <div class="dlgYouniumStatusFooter" id="dlgYouniumStatusFooter">
+        <button class="btn" type="button" id="btnYouniumStatusRefresh">Refresh status</button>
+        <button class="btn" type="button" id="btnYouniumStatusCopy">Copy summary</button>
+        <a class="btn" id="btnYouniumStatusOpenOrder" target="_blank" rel="noopener noreferrer" style="display: none;">Open Younium order</a>
+        <a class="btn" id="btnYouniumStatusOpenSub" target="_blank" rel="noopener noreferrer" style="display: none;">Open subscription</a>
+        <span style="flex: 1;"></span>
+        <button class="btn primary" type="button" id="btnCloseYouniumStatus2">Close</button>
+      </div>
     </dialog>
 
     <!-- CSV Importer -->
@@ -17257,6 +17394,15 @@
         btnImport: document.getElementById("btnImport"),
         btnImportCsv: document.getElementById("btnImportCsv"),
         btnYouniumStatus: document.getElementById("btnYouniumStatus"),
+        dlgYouniumStatus: document.getElementById("dlgYouniumStatus"),
+        dlgYouniumStatusTitle: document.getElementById("dlgYouniumStatusTitle"),
+        dlgYouniumStatusBody: document.getElementById("dlgYouniumStatusBody"),
+        btnCloseYouniumStatus: document.getElementById("btnCloseYouniumStatus"),
+        btnCloseYouniumStatus2: document.getElementById("btnCloseYouniumStatus2"),
+        btnYouniumStatusRefresh: document.getElementById("btnYouniumStatusRefresh"),
+        btnYouniumStatusCopy: document.getElementById("btnYouniumStatusCopy"),
+        btnYouniumStatusOpenOrder: document.getElementById("btnYouniumStatusOpenOrder"),
+        btnYouniumStatusOpenSub: document.getElementById("btnYouniumStatusOpenSub"),
         saveState: document.getElementById("saveState"),
         saveError: document.getElementById("saveError"),
         loadMessage: document.getElementById("loadMessage"),
@@ -26273,106 +26419,351 @@
         }
       }
 
-      function openYouniumStatusPopover() {
-        const btn = els.btnYouniumStatus;
-        if (!btn) return;
-        const p = state.projects.find((x) => x.id === state.selectedProjectId);
-        if (!p) return;
-        document.querySelectorAll(".youniumStatusPopover").forEach((el) => el.remove());
-        const pop = document.createElement("div");
-        pop.className = "youniumStatusPopover";
-        pop.innerHTML = "<div class='youniumStatusLoading'>Checking Younium…</div>";
-        document.body.appendChild(pop);
-        const rect = btn.getBoundingClientRect();
-        pop.style.left = Math.max(8, Math.min(window.innerWidth - 360, rect.right - 320)) + "px";
-        pop.style.top = (rect.bottom + 6) + "px";
+      // ── Fullscreen modal renderer ──
+      // Replaces the earlier popover. Native <dialog> handles
+      // Escape-close, scroll-lock on the page behind, and backdrop
+      // styling. Backdrop-click is wired explicitly because <dialog>
+      // by default closes on backdrop click only if you use form
+      // method="dialog" — we want any click outside the actual content
+      // area to dismiss.
 
-        const onDocClick = (e) => {
-          if (!pop.contains(e.target) && e.target !== btn) {
-            pop.remove();
-            document.removeEventListener("click", onDocClick, true);
-          }
-        };
-        setTimeout(() => document.addEventListener("click", onDocClick, true), 0);
+      // Track the project currently shown in the modal so Refresh/Copy
+      // use the right one even if selectedProjectId changes meanwhile.
+      let currentYouniumStatusProject = null;
+      let currentYouniumStatusVerdict = null;
 
-        const esc = (s) => String(s ?? "").replace(/[<&]/g, (c) => c === "<" ? "&lt;" : "&amp;");
-
-        const renderInto = (verdict) => {
-          applyYouniumVerdictToToolbar(p, verdict);
-          const lastChange = pickYouniumLastChange(p, verdict);
-          const lastChangeStr = lastChange.iso
-            ? new Date(lastChange.iso).toLocaleString(UI_LOCALE)
-            : "—";
-          const lastChangeSource = lastChange.source || "Unknown";
-          const orderLink = p.youniumUrl || (verdict.links && verdict.links.saved) || "";
-          const subLink = p.oneflowSubscriptionUrl || ""; // Younium has no separate sub URL — fall back to Oneflow subscription link if user saved one
-          const lastCheckedStr = verdict.lastCheckedAt
-            ? new Date(verdict.lastCheckedAt).toLocaleString(UI_LOCALE)
-            : "—";
-          const problemsHtml = (verdict.problems && verdict.problems.length)
-            ? "<div class='youniumStatusProblems'><strong>Issues:</strong><ul>" +
-              verdict.problems.map((x) => "<li>" + esc(x) + "</li>").join("") + "</ul></div>"
-            : "";
-          const expectedNotMet =
-            verdict.orderStatus !== "Invoiced" ||
-            verdict.subscriptionStatus !== "Active";
-          const expectedHtml = expectedNotMet
-            ? "<div class='youniumStatusExpected'><strong>Expected:</strong>" +
-              "<div>• Order / offer should be Invoiced</div>" +
-              "<div>• Subscription should be Active</div></div>"
-            : "";
-          pop.innerHTML =
-            "<div class='youniumStatusHd youniumStatus-" + verdict.color + "'><strong>Younium status</strong> · " + esc(p.name) + "</div>" +
-            "<div class='youniumStatusBody'>" +
-              "<div><span class='youniumStatusLabel'>Last plant change:</span> " + esc(lastChangeStr) + "</div>" +
-              "<div class='youniumStatusSource'>Source: " + esc(lastChangeSource) + "</div>" +
-              "<div class='youniumStatusDivider'></div>" +
-              "<div><span class='youniumStatusLabel'>Order / offer:</span> " + esc(verdict.orderStatus) + "</div>" +
-              "<div><span class='youniumStatusLabel'>Subscription:</span> " + esc(verdict.subscriptionStatus) + "</div>" +
-              (verdict.orderNumber ? "<div><span class='youniumStatusLabel'>Order number:</span> " + esc(verdict.orderNumber) + "</div>" : "") +
-              (verdict.kind ? "<div><span class='youniumStatusLabel'>Record kind:</span> " + esc(verdict.kind) + "</div>" : "") +
-              "<div class='youniumStatusDivider'></div>" +
-              "<div class='youniumStatusLinks'>" +
-                (orderLink
-                  ? "<a href='" + esc(orderLink) + "' target='_blank' rel='noopener noreferrer'>Open Younium order ↗</a>"
-                  : "<span class='youniumStatusMissing'>No Younium order link saved</span>") +
-                (subLink
-                  ? "<a href='" + esc(subLink) + "' target='_blank' rel='noopener noreferrer'>Open subscription ↗</a>"
-                  : "") +
-              "</div>" +
-              expectedHtml +
-              problemsHtml +
-              "<div class='youniumStatusFoot'>" +
-                "Last checked: " + esc(lastCheckedStr) +
-                " · <a href='#' class='youniumStatusRefresh'>Refresh status</a>" +
-              "</div>" +
-            "</div>";
-          // Wire refresh action
-          const refreshLink = pop.querySelector(".youniumStatusRefresh");
-          if (refreshLink) {
-            refreshLink.addEventListener("click", async (ev) => {
-              ev.preventDefault();
-              // Force re-fetch by removing the "tried this session" flag.
-              youniumStatusFetchedThisSession.delete(p.id);
-              pop.innerHTML = "<div class='youniumStatusLoading'>Refreshing…</div>";
-              try {
-                const fresh = await computeYouniumStatus(p);
-                renderInto(fresh);
-              } catch (e) {
-                pop.innerHTML = "<div class='youniumStatusError'>Refresh failed: " + esc(e?.message ?? e) + "</div>";
-              }
-            });
-          }
-        };
-
-        // Initial fetch on open (even when we have a cached verdict —
-        // user explicitly asked for fresh data when they click).
-        computeYouniumStatus(p).then(renderInto).catch((e) => {
-          pop.innerHTML = "<div class='youniumStatusError'>Error: " + esc(e?.message ?? e) + "</div>";
-        });
+      function escHtml(s) {
+        return String(s ?? "").replace(/[<&>]/g, (c) =>
+          c === "<" ? "&lt;" : c === ">" ? "&gt;" : "&amp;");
       }
 
-      els.btnYouniumStatus.addEventListener("click", openYouniumStatusPopover);
+      /**
+       * Pull additional warnings beyond what computeYouniumStatus already
+       * surfaces. Checks customer-name mismatch between the project's
+       * partner and the Younium order accountname, and any existing-link
+       * platform mismatch we can re-detect from the saved URL.
+       */
+      function buildYouniumExtraWarnings(p, verdict) {
+        const out = [];
+        const orderAcct = String(verdict?.raw?.order?.accountname || "").trim();
+        const projPartner = String(p?.client || "").trim();
+        if (orderAcct && projPartner) {
+          const an = matchNormalize(orderAcct);
+          const pn = matchNormalize(projPartner);
+          if (an && pn && !(an.includes(pn) || pn.includes(an))) {
+            out.push("Order customer (" + orderAcct + ") doesn't match Rocketlane partner (" + projPartner + ")");
+          }
+        }
+        const linkMis = detectExistingLinkMismatch("younium", buildProjectMatchContext(p));
+        if (linkMis && linkMis.message) {
+          out.push(linkMis.message);
+        }
+        return out;
+      }
+
+      function renderYouniumStatusModalBody(verdict) {
+        const p = currentYouniumStatusProject;
+        if (!p) return;
+        currentYouniumStatusVerdict = verdict;
+        applyYouniumVerdictToToolbar(p, verdict);
+
+        const order = verdict?.raw?.order || null;
+        const invoices = verdict?.raw?.invoices || [];
+        const quote = verdict?.raw?.quote || null;
+        const fmtDate = (iso) => iso ? new Date(iso).toLocaleString(UI_LOCALE) : "—";
+        const fmtDateOnly = (iso) => iso ? new Date(iso).toLocaleDateString(UI_LOCALE) : "—";
+
+        const lastChange = pickYouniumLastChange(p, verdict);
+        const lastChangeStr = lastChange.iso ? new Date(lastChange.iso).toLocaleString(UI_LOCALE) : "—";
+        const lastChangeSource = lastChange.source || "Unknown";
+
+        const orderLink = p.youniumUrl || (verdict.links && verdict.links.saved) || "";
+        const subLink = p.oneflowSubscriptionUrl || ""; // Younium has no separate subscription URL — fall back to Oneflow sub link
+
+        const extraWarnings = buildYouniumExtraWarnings(p, verdict);
+        const allWarnings = [...(verdict.problems || []), ...extraWarnings];
+
+        const expectedNotMet = verdict.orderStatus !== "Invoiced" || verdict.subscriptionStatus !== "Active";
+
+        // ── Summary header text ──
+        let summaryText;
+        if (verdict.color === "green") summaryText = "OK: Order is Invoiced and Subscription is Active.";
+        else if (verdict.color === "yellow" && verdict.orderStatus === "Invoiced") summaryText = "Pending: Order is Invoiced, but Subscription is not Active yet.";
+        else if (verdict.color === "yellow") summaryText = "Warning: " + (verdict.label || "Status uncertain — see details below.");
+        else if (verdict.color === "red") summaryText = "Error: " + (verdict.label || "Younium state needs attention.");
+        else summaryText = "Missing: No Younium link saved on this project, or no reliable record was found.";
+
+        // ── Order/quote raw table — show fields the user can sanity-check ──
+        const orderRows = order ? [
+          ["id (order)",            order.id],
+          ["orderNumber",           order.orderNumber],
+          ["status (enum)",         order.status],
+          ["orderType",             order.orderType],
+          ["accountId",             order.accountId],
+          ["currency",              order.currency || order.currencyId],
+          ["term (months)",         order.term],
+          ["isLastVersion",         order.isLastVersion],
+          ["isAutoRenewed",         order.isAutoRenewed],
+          ["isRenewed",             order.isRenewed],
+          ["effectiveStartDate",    order.effectiveStartDate],
+          ["effectiveEndDate",      order.effectiveEndDate],
+          ["cancellationDate",      order.cancellationDate],
+          ["orderDate",             order.orderDate],
+          ["created",               order.created],
+          ["modified",              order.modified],
+          ["modifiedWithDependencies", order.modifiedWithDependencies],
+          ["tcv",                   order.tcv],
+          ["acv",                   order.acv],
+          ["cmrr",                  order.cmrr],
+          ["fmrr",                  order.fmrr],
+          ["bookings.length",       Array.isArray(order.bookings) ? order.bookings.length : 0],
+          ["invoices.length",       invoices.length],
+        ] : (quote ? [
+          ["id (quote)",     quote.id],
+          ["number",         quote.number],
+          ["accountName",    quote.accountName],
+          ["plant_id",       quote.plant_id],
+          ["plant_name",     quote.plant_name],
+          ["description",    quote.description],
+          ["status (enum)",  quote.status],
+          ["currencyCode",   quote.currencyCode],
+          ["remarks",        quote.remarks],
+        ] : []);
+
+        const rawTableHtml = orderRows.length
+          ? '<table class="youniumRawTable"><tbody>' +
+            orderRows
+              .filter(([k, v]) => v !== "" && v !== null && v !== undefined)
+              .map(([k, v]) => '<tr><th>' + escHtml(k) + '</th><td>' + escHtml(String(v)) + '</td></tr>')
+              .join("") +
+            '</tbody></table>'
+          : '<div style="color: var(--muted); font-style: italic;">No raw data available.</div>';
+
+        const projectKV = [
+          ["Project name",                p.name],
+          ["Partner",                     p.client],
+          ["Owner",                       p.owner],
+          ["Rocketlane status",           p.status],
+          ["Last RL update (local)",      fmtDate(p.updatedAt)],
+          ["Younium link",                p.youniumUrl
+            ? '<a href="' + escHtml(p.youniumUrl) + '" target="_blank" rel="noopener noreferrer">' + escHtml(p.youniumUrl) + "</a>"
+            : '<em style="color: var(--muted);">none</em>'],
+          ["Rocketlane project ID",       p.rocketlaneProjectId],
+        ];
+
+        const orderTotal = order
+          ? (order.tcv?.amount || order.acv?.amount || order.fmrr?.amount || "—")
+          : "—";
+        const orderCurrency = order
+          ? (order.tcv?.currencyCode || order.acv?.currencyCode || order.fmrr?.currencyCode || order.currency || "—")
+          : "—";
+        const orderName = order
+          ? (order.description || order.orderNumber || verdict.orderNumber || "—")
+          : (quote?.description || quote?.number || "—");
+
+        const orderKV = [
+          ["Order ID",                    order?.id || quote?.id || "—"],
+          ["Order number",                verdict.orderNumber],
+          ["Order name",                  orderName],
+          ["Order status",                verdict.orderStatus],
+          ["Invoice status",              invoices.length
+            ? (invoices.some(i => i.status === 3 || i.posted) ? "Posted/paid (" + invoices.length + ")" : "Drafted (" + invoices.length + ")")
+            : "No invoices yet"],
+          ["Expected status",             "Invoiced"],
+          ["Customer / account",          order?.accountname || quote?.accountName || "—"],
+          ["Total amount",                orderTotal !== "—" ? orderTotal + " " + orderCurrency : "—"],
+          ["Currency",                    orderCurrency],
+          ["Created date",                fmtDate(order?.created)],
+          ["Updated date",                fmtDate(order?.modified || order?.modifiedWithDependencies)],
+          ["Last changed",                lastChangeStr + ' <span style="color: var(--muted2); font-size: 11px; font-style: italic;">(' + escHtml(lastChangeSource) + ")</span>"],
+        ];
+
+        // Subscription is currently derived from order lifecycle (see
+        // CLAUDE.md). When Younium's bookings[] array gets populated,
+        // we can replace this with first-class subscription data.
+        const subKV = [
+          ["Subscription ID",             order?.id ? order.id + " (derived from order)" : "—"],
+          ["Subscription name",           orderName !== "—" ? orderName + " (derived from order)" : "—"],
+          ["Subscription status",         verdict.subscriptionStatus],
+          ["Expected status",             "Active"],
+          ["Customer / account",          order?.accountname || "—"],
+          ["Linked order ID",             order?.id || "—"],
+          ["Start date",                  fmtDateOnly(order?.effectiveStartDate)],
+          ["End date",                    fmtDateOnly(order?.effectiveEndDate)],
+          ["Created date",                fmtDate(order?.created)],
+          ["Updated date",                fmtDate(order?.modified || order?.modifiedWithDependencies)],
+          ["Last changed",                lastChangeStr],
+        ];
+
+        const renderKV = (rows) =>
+          '<dl class="youniumKV">' +
+          rows
+            .filter(([k, v]) => v !== "" && v !== null && v !== undefined)
+            .map(([k, v]) => '<dt>' + escHtml(k) + '</dt><dd>' + (String(v).includes("<") ? v : escHtml(String(v))) + '</dd>')
+            .join("") +
+          '</dl>';
+
+        els.dlgYouniumStatusBody.innerHTML =
+          '<div class="youniumSummary youniumStatus-' + verdict.color + '">' +
+            escHtml(summaryText) +
+            (expectedNotMet
+              ? '<small>Expected: Order = <strong>Invoiced</strong>, Subscription = <strong>Active</strong>.</small>'
+              : "") +
+          '</div>' +
+          (allWarnings.length
+            ? '<div class="youniumWarnings"><strong>Warnings</strong><ul>' +
+              allWarnings.map((w) => '<li>' + escHtml(w) + '</li>').join("") + '</ul></div>'
+            : "") +
+          '<div class="youniumSection">' +
+            '<div class="youniumSectionTitle">Project</div>' +
+            renderKV(projectKV) +
+          '</div>' +
+          '<div class="youniumSection">' +
+            '<div class="youniumSectionTitle">Order / offer</div>' +
+            renderKV(orderKV) +
+          '</div>' +
+          '<div class="youniumSection">' +
+            '<div class="youniumSectionTitle">Subscription</div>' +
+            renderKV(subKV) +
+          '</div>' +
+          '<div class="youniumSection">' +
+            '<div class="youniumSectionTitle">Raw Younium data</div>' +
+            rawTableHtml +
+          '</div>';
+
+        // Footer action buttons — show/hide based on what's available
+        if (orderLink) {
+          els.btnYouniumStatusOpenOrder.href = orderLink;
+          els.btnYouniumStatusOpenOrder.style.display = "";
+        } else {
+          els.btnYouniumStatusOpenOrder.style.display = "none";
+        }
+        if (subLink) {
+          els.btnYouniumStatusOpenSub.href = subLink;
+          els.btnYouniumStatusOpenSub.style.display = "";
+        } else {
+          els.btnYouniumStatusOpenSub.style.display = "none";
+        }
+
+        if (els.dlgYouniumStatusTitle) {
+          els.dlgYouniumStatusTitle.textContent = "Younium status details · " + p.name;
+        }
+
+        try {
+          if (typeof window !== "undefined" && window.__matchDebug !== false) {
+            // eslint-disable-next-line no-console
+            console.log("[Younium status] modal rendered", {
+              project: p.name, projectId: p.id,
+              verdict: { color: verdict.color, label: verdict.label, orderStatus: verdict.orderStatus, subscriptionStatus: verdict.subscriptionStatus },
+              lastChange,
+              warnings: allWarnings,
+            });
+          }
+        } catch (_) {}
+      }
+
+      async function openYouniumStatusModal() {
+        const p = state.projects.find((x) => x.id === state.selectedProjectId);
+        if (!p) return;
+        currentYouniumStatusProject = p;
+        currentYouniumStatusVerdict = null;
+        // Initial loading state
+        els.dlgYouniumStatusBody.innerHTML =
+          '<div style="padding: 24px; text-align: center; color: var(--muted); font-style: italic;">Checking Younium…</div>';
+        if (els.btnYouniumStatusOpenOrder) els.btnYouniumStatusOpenOrder.style.display = "none";
+        if (els.btnYouniumStatusOpenSub) els.btnYouniumStatusOpenSub.style.display = "none";
+        if (els.dlgYouniumStatusTitle) {
+          els.dlgYouniumStatusTitle.textContent = "Younium status details · " + p.name;
+        }
+        try {
+          if (typeof window !== "undefined" && window.__matchDebug !== false) {
+            // eslint-disable-next-line no-console
+            console.log("[Younium status] modal opened for project:", { id: p.id, name: p.name, youniumUrl: p.youniumUrl });
+          }
+        } catch (_) {}
+        els.dlgYouniumStatus.showModal();
+        try {
+          const verdict = await computeYouniumStatus(p);
+          renderYouniumStatusModalBody(verdict);
+        } catch (e) {
+          els.dlgYouniumStatusBody.innerHTML =
+            '<div class="youniumWarnings">Error checking Younium status: ' + escHtml(e?.message ?? e) + '</div>';
+        }
+      }
+
+      els.btnYouniumStatus.addEventListener("click", openYouniumStatusModal);
+
+      // Close handlers
+      const closeYouniumStatusDialog = () => {
+        if (els.dlgYouniumStatus?.open) els.dlgYouniumStatus.close();
+      };
+      els.btnCloseYouniumStatus?.addEventListener("click", closeYouniumStatusDialog);
+      els.btnCloseYouniumStatus2?.addEventListener("click", closeYouniumStatusDialog);
+      // Backdrop-click — when the user clicks the <dialog> itself (the
+      // backdrop area outside the inner box), close.
+      els.dlgYouniumStatus?.addEventListener("click", (ev) => {
+        if (ev.target === els.dlgYouniumStatus) closeYouniumStatusDialog();
+      });
+      els.dlgYouniumStatus?.addEventListener("close", () => {
+        try {
+          if (typeof window !== "undefined" && window.__matchDebug !== false) {
+            // eslint-disable-next-line no-console
+            console.log("[Younium status] modal closed");
+          }
+        } catch (_) {}
+      });
+
+      // Refresh action — force re-fetch
+      els.btnYouniumStatusRefresh?.addEventListener("click", async () => {
+        const p = currentYouniumStatusProject;
+        if (!p) return;
+        youniumStatusFetchedThisSession.delete(p.id);
+        els.dlgYouniumStatusBody.innerHTML =
+          '<div style="padding: 24px; text-align: center; color: var(--muted); font-style: italic;">Refreshing…</div>';
+        try {
+          if (typeof window !== "undefined" && window.__matchDebug !== false) {
+            // eslint-disable-next-line no-console
+            console.log("[Younium status] refresh requested for", p.id);
+          }
+        } catch (_) {}
+        try {
+          const fresh = await computeYouniumStatus(p);
+          renderYouniumStatusModalBody(fresh);
+        } catch (e) {
+          els.dlgYouniumStatusBody.innerHTML =
+            '<div class="youniumWarnings">Refresh failed: ' + escHtml(e?.message ?? e) + '</div>';
+        }
+      });
+
+      // Copy summary action — plain-text dump for sharing in Slack/email
+      els.btnYouniumStatusCopy?.addEventListener("click", async () => {
+        const p = currentYouniumStatusProject;
+        const v = currentYouniumStatusVerdict;
+        if (!p || !v) return;
+        const lc = pickYouniumLastChange(p, v);
+        const lines = [
+          "Younium status — " + p.name,
+          "Verdict: " + (v.label || "?"),
+          "Order / offer: " + (v.orderStatus || "?"),
+          "Subscription: " + (v.subscriptionStatus || "?"),
+          "Order number: " + (v.orderNumber || "?"),
+          "Last plant change: " + (lc.iso ? new Date(lc.iso).toLocaleString(UI_LOCALE) : "?") + " (source: " + (lc.source || "?") + ")",
+          "Last checked: " + (v.lastCheckedAt ? new Date(v.lastCheckedAt).toLocaleString(UI_LOCALE) : "?"),
+          "Younium URL: " + (p.youniumUrl || "(none)"),
+          (v.problems && v.problems.length ? "Issues:\n  - " + v.problems.join("\n  - ") : ""),
+        ].filter(Boolean);
+        const text = lines.join("\n");
+        try {
+          await navigator.clipboard.writeText(text);
+          const btn = els.btnYouniumStatusCopy;
+          const orig = btn.textContent;
+          btn.textContent = "Copied ✓";
+          setTimeout(() => { btn.textContent = orig; }, 1500);
+        } catch (e) {
+          console.warn("[Younium status] copy failed:", e);
+          alert(text); // fallback: show in alert so the user can still grab it
+        }
+      });
 
       // Expose globally so renderDetail() can call it on every project
       // selection without us having to monkey-patch render() (which is
