@@ -27209,6 +27209,22 @@
           ? (order.description || order.orderNumber || verdict.orderNumber || "—")
           : (quote?.description || quote?.number || "—");
 
+        // Order status verdict for color coding — "Invoiced" is the
+        // expected/positive end state; anything else is a warning or
+        // error in the order pipeline.
+        const orderIsInvoiced = verdict.orderStatus === "Invoiced";
+        const orderIsBad = ["Cancelled", "Expired"].includes(verdict.orderStatus)
+          || verdict.orderStatus.startsWith("Draft")
+          || verdict.orderStatus.startsWith("Created");
+        const orderStatusColor = orderIsInvoiced ? "var(--good)" : (orderIsBad ? "var(--bad)" : "var(--warn)");
+        const orderHasPostedInvoices = invoices.length > 0 && invoices.some(i => i.status === 3 || i.posted);
+        const invoiceStatusColor = orderHasPostedInvoices
+          ? "var(--good)"
+          : (invoices.length === 0 ? "var(--bad)" : "var(--warn)");
+        const expectedMatchesActual = orderIsInvoiced;
+        const orderBadgeClass = orderIsInvoiced ? "youniumSubBadge-green"
+          : (orderIsBad ? "youniumSubBadge-red" : "youniumSubBadge-gray");
+
         const orderKV = [
           ["Younium link",                orderLink
             ? '<a href="' + escHtml(orderLink) + '" target="_blank" rel="noopener noreferrer">' + escHtml(orderLink) + "</a>"
@@ -27216,11 +27232,18 @@
           ["Order ID",                    order?.id || quote?.id || "—"],
           ["Order number",                verdict.orderNumber],
           ["Order name",                  orderName],
-          ["Order status",                verdict.orderStatus],
+          ["Order status",                '<strong style="color: ' + orderStatusColor + ';">' +
+                                          (orderIsInvoiced ? "✓ " : "") +
+                                          escHtml(verdict.orderStatus) + '</strong>'],
           ["Invoice status",              invoices.length
-            ? (invoices.some(i => i.status === 3 || i.posted) ? "Posted/paid (" + invoices.length + ")" : "Drafted (" + invoices.length + ")")
-            : "No invoices yet"],
-          ["Expected status",             "Invoiced"],
+            ? '<strong style="color: ' + invoiceStatusColor + ';">' +
+              (orderHasPostedInvoices ? "✓ " : "") +
+              (orderHasPostedInvoices ? "Posted/paid (" + invoices.length + ")" : "Drafted (" + invoices.length + ")") +
+              '</strong>'
+            : '<strong style="color: ' + invoiceStatusColor + ';">No invoices yet</strong>'],
+          ["Expected status",             expectedMatchesActual
+            ? '<span style="color: var(--good);">Invoiced</span> <span style="color: var(--muted2); font-size: 11px; font-style: italic;">(matches actual ✓)</span>'
+            : '<span style="color: var(--muted);">Invoiced</span> <span style="color: var(--bad); font-size: 11px; font-style: italic;">(actual: ' + escHtml(verdict.orderStatus) + ')</span>'],
           ["Customer / account",          order?.accountname || quote?.accountName || "—"],
           ["Total amount",                orderTotal !== "—" ? orderTotal + " " + orderCurrency : "—"],
           ["Currency",                    orderCurrency],
@@ -27298,7 +27321,9 @@
             renderKV(projectKV) +
           '</div>' +
           '<div class="youniumSection">' +
-            '<div class="youniumSectionTitle">Order / offer</div>' +
+            '<div class="youniumSectionTitle">Order / offer' +
+              ' <span class="youniumSubBadge ' + orderBadgeClass + '">' + escHtml(verdict.orderStatus) + '</span>' +
+            '</div>' +
             renderKV(orderKV) +
           '</div>' +
           '<div class="youniumSection youniumSubSection">' +
