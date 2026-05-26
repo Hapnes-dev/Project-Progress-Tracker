@@ -3067,19 +3067,37 @@
       .tag.hold   { background: var(--surface-3); color: var(--muted); }
       .tag.assist { background: var(--warn-soft); color: var(--warn); font-weight: 600; }
 
-      /* ── Younium status button (lives in the top action bar, left of Import CSV) ──
-         Uses the .btn base for height / padding / radius / font-size,
-         then a color tint per verdict. Color tokens match the in-app
-         palette so the button blends with other .btn elements. */
+      /* ── Younium status chip ──
+         Lives in the project header meta row between the Updated chip
+         and the RL sync chip. Element is still a <button> so the
+         click handler + role stay intact, but visually it matches the
+         .tag chips around it: rounded pill, small font, subtle border.
+         Color tint per verdict comes from .youniumStatus-<color>. */
       .youniumStatusBtn {
-        white-space: nowrap;
+        /* Override the .btn base so the chip matches .tag sizing. */
+        height: auto;
+        padding: 5px 10px;
+        font-size: 11px;
         font-weight: 500;
+        line-height: 1.2;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--muted);
+        white-space: nowrap;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
       }
-      .youniumStatusBtn:hover:not(:disabled) { filter: brightness(1.1); }
+      .youniumStatusBtn:hover:not(:disabled) {
+        filter: brightness(1.15);
+        background: rgba(255, 255, 255, 0.05);
+      }
       .youniumStatus-green  { background: var(--good-soft);   color: var(--good);   border-color: rgba(52,211,153,0.45); }
       .youniumStatus-yellow { background: var(--warn-soft);   color: var(--warn);   border-color: rgba(251,191,36,0.45); }
       .youniumStatus-red    { background: var(--bad-soft);    color: var(--bad);    border-color: rgba(251,113,133,0.45); }
-      .youniumStatus-gray   { /* leave default .btn surface for the neutral case */ }
+      .youniumStatus-gray   { /* uses chip defaults above (subtle bg, muted text, hairline border) */ }
 
       .youniumStatusPopover {
         position: fixed;
