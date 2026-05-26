@@ -853,6 +853,20 @@
         background: rgba(0, 0, 0, 0.12);
         border: 1px solid var(--border);
       }
+      /* Shown in place of the compose box when the ticket is closed.
+         Zendesk rejects POSTs to closed tickets with 422, so we surface
+         the constraint up-front rather than letting the user type a
+         reply that will fail. */
+      .zendeskComposeClosed {
+        padding: 12px 14px;
+        border-radius: 8px;
+        background: rgba(148, 163, 184, 0.10);
+        border: 1px dashed var(--hairline-strong);
+        color: var(--muted);
+        font-size: 12.5px;
+        font-style: italic;
+        text-align: center;
+      }
       .zendeskComposeToolbar {
         display: flex;
         gap: 12px;
@@ -1776,6 +1790,36 @@
         color: var(--muted2);
         white-space: nowrap;
       }
+      /* Match-percentage badge on each picker row. Color-coded by
+         confidence so the user can scan the list visually:
+           green  ≥ 80% — auto-fill territory
+           yellow 60..79 — picker territory but plausible
+           gray   < 60% — weak; included for context only */
+      .oneflowFindPickerScore {
+        font-size: 11px;
+        font-weight: 600;
+        white-space: nowrap;
+        padding: 3px 8px;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.16);
+        color: var(--muted2);
+        border: 1px solid transparent;
+      }
+      .oneflowFindPickerScore.highConfidence {
+        background: rgba(52, 211, 153, 0.16);
+        color: rgba(52, 211, 153, 0.95);
+        border-color: rgba(52, 211, 153, 0.32);
+      }
+      .oneflowFindPickerScore.medConfidence {
+        background: rgba(251, 191, 36, 0.16);
+        color: rgba(251, 191, 36, 0.95);
+        border-color: rgba(251, 191, 36, 0.32);
+      }
+      .oneflowFindPickerScore.lowConfidence {
+        background: rgba(148, 163, 184, 0.12);
+        color: var(--muted2);
+        border-color: rgba(148, 163, 184, 0.24);
+      }
 
       /* Compact toolbar row of project link buttons (Zendesk / Oneflow /
          Younium / HubSpot / Rocketlane). Mirrors the .btn style used by
@@ -2159,17 +2203,20 @@
       }
 
       .statusMenu {
-        /* Overlay menu (does not resize the task row) */
+        /* Overlay menu — same visual language as .projectStatusMenu:
+           a free-standing rounded card anchored 4px below its button,
+           aligned to the button's left edge, full borders on all four
+           sides, all four corners rounded. The button keeps its own
+           shape (no "attached / squared bottom corner" trick) so the
+           dropdown reads as a separate menu that belongs to the button,
+           not a continuation of the button's body. */
         position: absolute;
         left: 0;
         right: 0;
-        top: calc(100% - 1px); /* visually attached to button border */
+        top: calc(100% + 4px);
         border: 1px solid var(--hairline-strong);
-        border-top: none;
-        /* Fully opaque background — earlier ~98% opacity let neighboring
-           task buttons bleed through and made the menu look "faded". */
         background: #0f1424;
-        border-radius: 0 0 12px 12px;
+        border-radius: 12px;
         overflow: hidden;
         display: none;
         z-index: 1500;
@@ -2183,24 +2230,13 @@
         }
       }
 
-      .statusPicker.open .statusBtn {
-        border-radius: 12px 12px 0 0;
-      }
-
       .statusPicker.open .statusMenu {
         display: block;
       }
 
-      .statusPicker.open.up .statusBtn {
-        border-radius: 0 0 12px 12px;
-      }
-
       .statusPicker.open.up .statusMenu {
         top: auto;
-        bottom: calc(100% - 1px); /* visually attached to button border */
-        border-top: 1px solid var(--border);
-        border-bottom: none;
-        border-radius: 12px 12px 0 0;
+        bottom: calc(100% + 4px);
       }
 
       /* Prevent "flash" when we measure and flip */
@@ -2213,25 +2249,24 @@
       }
 
       .statusOpt {
+        /* Mirrors .projectStatusOpt: block-level row, generous padding,
+           no inter-item borders. Hover uses the same accent-soft tint.
+           Selected state keeps an accent color so the user still sees
+           the current value, but without the dividing checkmark slot
+           that pushed the option text rightward. */
+        display: block;
         width: 100%;
         text-align: left;
-        padding: 9px 12px;
+        padding: 10px 14px;
         background: transparent;
         border: none;
         color: var(--text);
-        font-size: 12.5px;
+        font-size: 13px;
         cursor: pointer;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        display: flex;
-        align-items: center;
-        gap: 8px;
         transition: background 80ms ease;
-      }
-
-      .statusOpt + .statusOpt {
-        border-top: 1px solid var(--hairline);
       }
 
       .statusOpt:hover {
@@ -2243,16 +2278,6 @@
         background: var(--accent-soft);
         color: var(--accent);
         font-weight: 600;
-      }
-      .statusOpt.selected::before {
-        content: "✓";
-        font-size: 11px;
-        opacity: 0.9;
-      }
-      .statusOpt:not(.selected)::before {
-        content: "";
-        width: 11px;
-        display: inline-block;
       }
 
       /* Project status tag – click to change */
@@ -3591,12 +3616,12 @@
       .task.s-blocked        .statusBtn { background: var(--bad-soft);  border-color: rgba(251, 113, 133, 0.30); color: var(--bad);  }
       .task.s-waiting_partner .statusBtn { background: var(--info-soft); border-color: rgba(96, 165, 250, 0.30); color: var(--info); }
       .statusMenu {
+        /* Match .projectStatusMenu's card radius + shadow — all four
+           corners equally rounded, no leftover "attached top" override. */
         background: #0f1424;
         border-color: var(--hairline-strong);
         box-shadow: var(--shadow-lg);
-        border-radius: var(--radius);
-        border-top-left-radius: 0;
-        border-top-right-radius: 0;
+        border-radius: var(--radius-lg);
       }
       @media (prefers-color-scheme: light) {
         .statusMenu { background: #ffffff; }
@@ -7640,6 +7665,633 @@
       } catch (_) {}
 
       // ──────────────────────────────────────────────────────────────────
+      // Shared Find-button matching framework (used by Oneflow / HubSpot /
+      // Younium auto-find).
+      //
+      // Each platform's API returns its own shape, but the *question* is
+      // identical: "given the project the user is editing, which of these
+      // search results is the best match?". We answer it the same way for
+      // all three:
+      //
+      //   1. Build a single `projectMatchContext` from the edit form.
+      //   2. Each platform has an adapter that maps a raw API result to a
+      //      common `Candidate` shape (primaryText / partyNames /
+      //      contactNames / plantId / status / date / raw).
+      //   3. `scoreCandidate(candidate, ctx)` returns
+      //      `{ score, percent, signals: [{label, points}] }` using the
+      //      same point budget across platforms.
+      //   4. `decideMatchOutcome(scored)` returns either { autoFill: entry }
+      //      or { showPicker: scored } based on percent + lead thresholds.
+      //   5. `renderMatchPicker(scored, ...)` is the shared picker UI
+      //      that shows the percentage and a tooltip breakdown.
+      //
+      // Point budget — designed so a perfect score sums to exactly 100:
+      //   Plant ID exact (start of name):          50
+      //   Plant ID present in any matchable text:  25  (mutually exclusive
+      //                                                  with "exact" — we
+      //                                                  award the higher)
+      //   Name token overlap (Jaccard):            0..25
+      //   Partner / company-party match:           0..12
+      //   Owner / contact match:                   0..4
+      //   Date proximity (vs project due/start):   0..5
+      //   "Live" status (not closed/cancelled):    0..4
+      // ──────────────────────────────────────────────────────────────────
+
+      /** Normalize text for matching: lowercase, strip diacritics, collapse spaces. */
+      function matchNormalize(s) {
+        return String(s ?? "")
+          .normalize("NFD")
+          .replace(/\p{Diacritic}/gu, "")
+          .toLowerCase()
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      /** Extract the leading plant ID (digit prefix) from a project / candidate name. */
+      function matchExtractPlantId(text) {
+        const m = String(text ?? "").match(/^\s*(\d{2,6})\b/);
+        return m ? m[1] : "";
+      }
+
+      /**
+       * Pull a Norwegian organisation number out of free text. Norwegian
+       * orgnr is exactly 9 digits, often grouped "NNN NNN NNN" or
+       * "NNNNNNNNN". We also accept the formal "MVA"/"VAT" suffix.
+       * Returns the normalized 9-digit string or "".
+       */
+      function matchExtractOrgNumber(text) {
+        const s = String(text ?? "").replace(/[ .–-]/g, "");
+        const m = s.match(/\b(\d{9})\b/);
+        return m ? m[1] : "";
+      }
+
+      /**
+       * Parse a money amount out of mixed input — accepts numbers,
+       * "1 234,56", "16377.00", "16 377 NOK". Returns NaN if none found.
+       */
+      function matchExtractMoneyAmount(input) {
+        if (typeof input === "number" && Number.isFinite(input)) return input;
+        const s = String(input ?? "").trim();
+        if (!s) return NaN;
+        const cleaned = s
+          .replace(/[A-Za-zÀ-ÿ\s]+$/g, "")
+          .replace(/\s+/g, "")
+          .replace(/(\d)\.(\d{3}\b)/g, "$1$2")
+          .replace(/,/g, ".");
+        const n = Number(cleaned);
+        return Number.isFinite(n) ? n : NaN;
+      }
+
+      /** Closeness score 0..1 for two money amounts (NaN-safe). */
+      function matchMoneyCloseness(a, b) {
+        if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0) return 0;
+        const pctDiff = Math.abs(a - b) / Math.max(a, b);
+        // 0% diff = 1.0; 50% diff = 0; linear in between (clamped).
+        if (pctDiff >= 0.5) return 0;
+        return 1 - pctDiff * 2;
+      }
+
+      /**
+       * Extract the email-address domain (lowercased). Handles
+       * "Name <foo@bar.com>" and bare addresses.
+       */
+      function matchExtractEmailDomain(text) {
+        const s = String(text ?? "");
+        const m = s.match(/[\w.+-]+@([a-z0-9.-]+\.[a-z]{2,})/i);
+        return m ? m[1].toLowerCase() : "";
+      }
+
+      /** Tokenize for Jaccard-style overlap: strip leading plant ID + punctuation, drop short tokens. */
+      function matchTokenize(s) {
+        return new Set(
+          matchNormalize(s)
+            .replace(/^\s*\d+\s*[-–:]?\s*/, "")
+            .replace(/[^a-z0-9æøå\s]/g, " ")
+            .split(/\s+/)
+            .filter((t) => t && t.length > 1),
+        );
+      }
+
+      /** Token-overlap ratio: |A ∩ B| / max(|A|, |B|). 0..1, returns 0 on either-empty. */
+      function matchTokenOverlap(setA, setB) {
+        if (!setA?.size || !setB?.size) return 0;
+        let intersect = 0;
+        for (const t of setA) if (setB.has(t)) intersect += 1;
+        return intersect / Math.max(setA.size, setB.size);
+      }
+
+      /**
+       * Heuristics to harvest "platform foreign keys" stored on a
+       * Rocketlane project's custom `fields[]`. The tenant has fields
+       * like `HubspotDealID_357728` whose value (when populated) is the
+       * literal HubSpot dealId. If we have that, we should *prefer* it
+       * over any fuzzy matching — it's a direct foreign key.
+       *
+       * Returns `{ hubspotDealId, oneflowAgreementId, youniumOrderId }`
+       * — any of which may be "" if the project hasn't been linked yet.
+       */
+      function extractRocketlaneForeignKeys(projectObject) {
+        const fields = Array.isArray(projectObject?.fields) ? projectObject.fields : [];
+        const get = (namePrefix) => {
+          const f = fields.find(
+            (x) => String(x?.fieldName ?? "").toLowerCase().replace(/\s+/g, "")
+              .startsWith(String(namePrefix).toLowerCase())
+          );
+          const v = f?.value;
+          if (v == null) return "";
+          if (typeof v === "string") return v.trim();
+          if (typeof v === "number") return String(v);
+          if (typeof v === "object" && v.value != null) return String(v.value).trim();
+          return "";
+        };
+        return {
+          hubspotDealId:      get("hubspotdealid"),
+          oneflowAgreementId: get("oneflowagreementid") || get("oneflowid"),
+          youniumOrderId:     get("youniumorderid")     || get("youniumid"),
+        };
+      }
+
+      /**
+       * Build a comparison context from the Edit-Project form (or a state
+       * project object). Used by all three find-* orchestrators.
+       *
+       * @param {{
+       *   name?: string, client?: string, owner?: string, due?: string,
+       *   oneflowUrl?: string, hubspotUrl?: string, youniumUrl?: string,
+       *   projectFee?: number, customer?: object, projectOwner?: object,
+       *   fields?: Array, startDate?: string, dueDate?: string,
+       * } | null} sourceObject
+       *   Optional starting point; falls back to reading els.f* directly.
+       */
+      function buildProjectMatchContext(sourceObject) {
+        const fromEls = (id) => (typeof document !== "undefined"
+          ? document.getElementById(id)?.value
+          : "");
+        const name    = String(sourceObject?.name        ?? fromEls("fName")        ?? "").trim();
+        const partner = String(sourceObject?.client      ?? fromEls("fClient")      ?? "").trim();
+        const owner   = String(sourceObject?.owner       ?? fromEls("fOwner")       ?? "").trim();
+        const due     = String(sourceObject?.due         ?? sourceObject?.dueDate   ?? fromEls("fDue") ?? "").trim();
+        const start   = String(sourceObject?.startDate   ?? "").trim();
+        const ofUrl   = String(sourceObject?.oneflowUrl  ?? fromEls("fOneflowUrl")  ?? "").trim();
+        const hsUrl   = String(sourceObject?.hubspotUrl  ?? fromEls("fHubspotUrl")  ?? "").trim();
+        const ynUrl   = String(sourceObject?.youniumUrl  ?? fromEls("fYouniumUrl")  ?? "").trim();
+        const plantId = matchExtractPlantId(name);
+
+        // Rich signals — only present when sourceObject is a live
+        // Rocketlane project payload (not just the form-fields shape).
+        const fee = Number(sourceObject?.projectFee);
+        const ownerEmail = String(sourceObject?.projectOwner?.emailId ?? "").toLowerCase().trim();
+        const customerOrg = matchExtractOrgNumber(sourceObject?.customer?.organisationNumber || "");
+        const partnerOrg  = matchExtractOrgNumber(sourceObject?.partner?.organisationNumber  || "");
+        // Foreign keys from custom fields — only present if the project
+        // has been linked previously and the user filled in the IDs.
+        const fks = sourceObject?.fields ? extractRocketlaneForeignKeys(sourceObject) : { hubspotDealId: "", oneflowAgreementId: "", youniumOrderId: "" };
+
+        return Object.freeze({
+          name,
+          nameNormalized: matchNormalize(name),
+          nameTokens: matchTokenize(name),
+          plantId,
+          partner,
+          partnerNormalized: matchNormalize(partner),
+          partnerTokens: matchTokenize(partner),
+          owner,
+          ownerNormalized: matchNormalize(owner),
+          ownerTokens: matchTokenize(owner),
+          ownerEmail,
+          ownerEmailDomain: matchExtractEmailDomain(ownerEmail),
+          due,
+          dueTimestamp: due ? Date.parse(due) : NaN,
+          startDate: start,
+          startTimestamp: start ? Date.parse(start) : NaN,
+          projectFee: Number.isFinite(fee) && fee > 0 ? fee : NaN,
+          customerOrgNumber: customerOrg,
+          partnerOrgNumber:  partnerOrg,
+          foreignKeys: fks,
+          existingLinks: { oneflow: ofUrl, hubspot: hsUrl, younium: ynUrl },
+        });
+      }
+
+      /**
+       * Enrich a project context by fetching the live Rocketlane payload
+       * (which carries `projectFee`, `customer.organisationNumber`,
+       * `projectOwner.emailId`, and the custom-fields foreign-key IDs).
+       * Returns a richer context that scoreMatchCandidate can use for
+       * money / org-number / FK signals.
+       *
+       * Falls back to the form-fields-only context if there's no
+       * Rocketlane project ID yet (new unsaved project) or the fetch
+       * fails. Either way you get a valid context — the only loss is
+       * the strongest cross-platform signals.
+       */
+      async function buildEnrichedProjectMatchContext() {
+        const projectIdRaw = String(
+          (typeof document !== "undefined"
+            ? document.getElementById("fRocketlaneProjectId")?.value
+            : "") ?? "",
+        ).trim();
+        if (!/^\d+$/.test(projectIdRaw)) return buildProjectMatchContext(null);
+        try {
+          const proj = await rocketlaneRequestJson(
+            "GET",
+            "/projects/" + encodeURIComponent(projectIdRaw),
+          );
+          // The form values are still the source of truth for fields the
+          // user just edited (might not be saved yet). We merge: take
+          // form name/client/owner/due, layer in the rich fields from
+          // the API payload.
+          const sourceObject = {
+            ...proj,
+            // Map Rocketlane fields → buildProjectMatchContext shape.
+            name:        proj?.projectName,
+            client:      proj?.customer?.companyName,
+            owner:       (proj?.projectOwner?.firstName || "") + " " + (proj?.projectOwner?.lastName || ""),
+            due:         proj?.dueDate,
+            startDate:   proj?.startDate,
+            customer:    proj?.customer,
+            partner:     Array.isArray(proj?.partners) ? proj.partners[0] : null,
+            projectOwner: proj?.projectOwner,
+            projectFee:  proj?.projectFee,
+            fields:      proj?.fields,
+          };
+          return buildProjectMatchContext(sourceObject);
+        } catch (_) {
+          return buildProjectMatchContext(null);
+        }
+      }
+
+      /** Statuses that mean "this thing is not actionable" — penalize across platforms. */
+      const MATCH_DEAD_STATUSES = new Set([
+        "cancelled", "canceled", "declined", "closed", "lost",
+        "void", "voided", "expired", "rejected", "overdue",
+      ]);
+
+      /**
+       * Score a single candidate against the project context.
+       * Returns { score, percent, signals } where signals explains the
+       * breakdown. Percent is capped to 100 — multiple corroborating
+       * signals can push a strong match over the raw cap, but the user
+       * still sees a clean 100%.
+       *
+       * Point budget (revised after Playwright deep-dive against
+       * Rocketlane + Oneflow + HubSpot + Younium for plant 3299):
+       *
+       *   Foreign-key ID exact (project↔platform reference field):  35
+       *   Plant ID exact (native field or leading digits):           35
+       *   Plant ID elsewhere in text (mutually exclusive with above): 18
+       *   Org number exact match:                                    20
+       *   Name token overlap:                                       0..15
+       *   Partner / company match:                                  0..10
+       *   Money proximity (project fee vs candidate value):          0..8
+       *   Contact / participant email matches owner:                0..5
+       *   Email-domain matches owner domain (weaker — e.g. kiona):  0..3
+       *   Owner / contact name match:                               0..4
+       *   Date proximity (start or due, ≤30 days):                  0..4
+       *   "Live" status bonus (not closed / cancelled / declined):  0..3
+       *
+       * Candidate shape (built by per-platform adapters):
+       *   {
+       *     id, platform, primaryText, secondaryText,
+       *     matchableTexts: string[],
+       *     partyNames:    string[],
+       *     contactNames:  string[],
+       *     contactEmails: string[],
+       *     orgNumbers:    string[],
+       *     plantId:       string,
+       *     status:        string,
+       *     date:          string|null,
+       *     amount:        number|null,
+       *     currency:      string,
+       *     raw:           original API object,
+       *   }
+       */
+      function scoreMatchCandidate(candidate, ctx) {
+        const signals = [];
+        let raw = 0;
+
+        // ── Foreign-key ID (the "we've already wired these up" signal) ──
+        // If the Rocketlane project has e.g. HubspotDealID custom field
+        // populated with the actual deal's objectId, that's a direct FK
+        // — no fuzzy matching needed. 35 pts.
+        const platform = String(candidate.platform || "").toLowerCase();
+        const fkKey =
+          platform === "hubspot"  ? "hubspotDealId" :
+          platform === "oneflow"  ? "oneflowAgreementId" :
+          platform === "younium"  ? "youniumOrderId" : null;
+        const fkExpected = fkKey ? String(ctx.foreignKeys?.[fkKey] || "").trim() : "";
+        if (fkExpected) {
+          if (String(candidate.id) === fkExpected) {
+            signals.push({ label: "Foreign-key ID match (" + fkExpected + ")", points: 35 });
+            raw += 35;
+          }
+        }
+
+        // ── Plant ID — strongest fuzzy signal ──
+        if (ctx.plantId) {
+          const candidatePlantExact = candidate.plantId &&
+            String(candidate.plantId).trim() === ctx.plantId;
+          const primaryStartsWithPlant = !candidatePlantExact &&
+            matchExtractPlantId(candidate.primaryText) === ctx.plantId;
+          if (candidatePlantExact || primaryStartsWithPlant) {
+            const label = candidatePlantExact
+              ? "Plant ID exact (" + ctx.plantId + ")"
+              : "Plant ID prefix (" + ctx.plantId + ")";
+            signals.push({ label, points: 35 });
+            raw += 35;
+          } else {
+            const re = new RegExp("\\b" + ctx.plantId + "\\b");
+            const anywhere = candidate.matchableTexts.some((t) => re.test(String(t ?? "")));
+            if (anywhere) {
+              signals.push({ label: "Plant ID in text (" + ctx.plantId + ")", points: 18 });
+              raw += 18;
+            }
+          }
+        }
+
+        // ── Org number (Norwegian: 9-digit) ──
+        // Strong but rare signal — most search-tier responses don't
+        // include it, so this typically fires only after enrichment.
+        if ((ctx.customerOrgNumber || ctx.partnerOrgNumber) && Array.isArray(candidate.orgNumbers)) {
+          const want = new Set([ctx.customerOrgNumber, ctx.partnerOrgNumber].filter(Boolean));
+          const hit = candidate.orgNumbers.find((n) => want.has(matchExtractOrgNumber(n)));
+          if (hit) {
+            signals.push({ label: "Org number exact (" + matchExtractOrgNumber(hit) + ")", points: 20 });
+            raw += 20;
+          }
+        }
+
+        // ── Name token overlap (Jaccard) ──
+        if (ctx.nameTokens.size) {
+          const candTokens = new Set();
+          for (const t of candidate.matchableTexts) {
+            for (const tok of matchTokenize(t)) candTokens.add(tok);
+          }
+          const ratio = matchTokenOverlap(candTokens, ctx.nameTokens);
+          const pts = Math.round(ratio * 15);
+          if (pts > 0) {
+            signals.push({
+              label: "Name similarity " + Math.round(ratio * 100) + "%",
+              points: pts,
+            });
+            raw += pts;
+          }
+        }
+
+        // ── Partner / company match ──
+        if (ctx.partner && candidate.partyNames.length) {
+          const wantNorm = ctx.partnerNormalized;
+          let bestRatio = 0;
+          let bestParty = "";
+          for (const party of candidate.partyNames) {
+            const partyNorm = matchNormalize(party);
+            if (!partyNorm) continue;
+            if (partyNorm === wantNorm) { bestRatio = 1; bestParty = party; break; }
+            if (partyNorm.includes(wantNorm) || wantNorm.includes(partyNorm)) {
+              if (bestRatio < 0.85) { bestRatio = 0.85; bestParty = party; }
+              continue;
+            }
+            const r = matchTokenOverlap(matchTokenize(party), ctx.partnerTokens);
+            if (r > bestRatio) { bestRatio = r; bestParty = party; }
+          }
+          const pts = Math.round(bestRatio * 10);
+          if (pts > 0) {
+            signals.push({ label: "Partner match (" + bestParty + ")", points: pts });
+            raw += pts;
+          }
+        }
+
+        // ── Money proximity ──
+        // Plant 3299 in practice: RL fee 31238, Oneflow 16377, HubSpot
+        // 27902 — they're related but not identical. So we score 0..8
+        // on a "within 50%" linear ramp. 5% diff ≈ 7 pts; 50% ≈ 0.
+        if (Number.isFinite(ctx.projectFee) && Number.isFinite(candidate.amount)) {
+          const ratio = matchMoneyCloseness(ctx.projectFee, candidate.amount);
+          const pts = Math.round(ratio * 8);
+          if (pts > 0) {
+            const cur = candidate.currency || "";
+            const diffPct = Math.round(Math.abs(ctx.projectFee - candidate.amount) / Math.max(ctx.projectFee, candidate.amount) * 100);
+            signals.push({
+              label: "Money within " + diffPct + "% (" +
+                Math.round(candidate.amount).toLocaleString() + (cur ? " " + cur : "") + ")",
+              points: pts,
+            });
+            raw += pts;
+          }
+        }
+
+        // ── Owner email exact / domain match ──
+        if (ctx.ownerEmail && Array.isArray(candidate.contactEmails) && candidate.contactEmails.length) {
+          const wantFull = ctx.ownerEmail;
+          const wantDomain = ctx.ownerEmailDomain;
+          let exactHit = "";
+          let domainHit = "";
+          for (const e of candidate.contactEmails) {
+            const en = String(e).toLowerCase().trim();
+            if (!en) continue;
+            if (en === wantFull) { exactHit = en; break; }
+            if (wantDomain && matchExtractEmailDomain(en) === wantDomain) {
+              if (!domainHit) domainHit = en;
+            }
+          }
+          if (exactHit) {
+            signals.push({ label: "Owner email exact (" + exactHit + ")", points: 5 });
+            raw += 5;
+          } else if (domainHit) {
+            signals.push({ label: "Same domain (" + matchExtractEmailDomain(domainHit) + ")", points: 3 });
+            raw += 3;
+          }
+        }
+
+        // ── Owner / contact NAME match ──
+        if (ctx.owner && candidate.contactNames.length) {
+          const wantNorm = ctx.ownerNormalized;
+          let hit = "";
+          for (const c of candidate.contactNames) {
+            const cn = matchNormalize(c);
+            if (!cn) continue;
+            if (cn === wantNorm || cn.includes(wantNorm) || wantNorm.includes(cn)) {
+              hit = c; break;
+            }
+          }
+          if (hit) {
+            signals.push({ label: "Owner name match (" + hit + ")", points: 4 });
+            raw += 4;
+          }
+        }
+
+        // ── Date proximity (vs project due OR start, whichever is closer) ──
+        if (candidate.date) {
+          const candTs = Date.parse(String(candidate.date));
+          if (Number.isFinite(candTs)) {
+            const targets = [ctx.dueTimestamp, ctx.startTimestamp].filter(Number.isFinite);
+            if (targets.length) {
+              const minDays = Math.min(
+                ...targets.map((t) => Math.abs(candTs - t) / (1000 * 60 * 60 * 24))
+              );
+              let pts = 0;
+              if (minDays <= 7) pts = 4;
+              else if (minDays <= 14) pts = 3;
+              else if (minDays <= 30) pts = 2;
+              if (pts > 0) {
+                signals.push({
+                  label: "Date within " + Math.round(minDays) + " days",
+                  points: pts,
+                });
+                raw += pts;
+              }
+            }
+          }
+        }
+
+        // ── "Live" status bonus ──
+        if (candidate.status) {
+          const sNorm = matchNormalize(candidate.status);
+          if (!MATCH_DEAD_STATUSES.has(sNorm)) {
+            signals.push({ label: "Active status (" + candidate.status + ")", points: 3 });
+            raw += 3;
+          }
+        }
+
+        const percent = Math.min(100, Math.max(0, Math.round(raw)));
+        return { score: raw, percent, signals };
+      }
+
+      /**
+       * Decide whether to auto-fill or show a picker based on a sorted
+       * (desc) array of `{ candidate, score, percent, signals }`.
+       *
+       * Auto-fill criteria:
+       *   • Best ≥ 80%
+       *   • AND best beats #2 by at least 15 percentage points
+       * Otherwise → picker, regardless of #1's absolute score.
+       *
+       * If there's only one candidate and its percent is ≥ 80, that's
+       * also an auto-fill (no #2 to compare against, the threshold is
+       * the safety net).
+       */
+      function decideMatchOutcome(scored, options) {
+        const minPct = options?.autoFillMinPercent ?? 85;
+        const minLead = options?.autoFillMinLeadPercent ?? 15;
+        const best = scored[0];
+        const second = scored[1];
+        if (!best) return { kind: "none" };
+        const beats = !second || (best.percent - second.percent) >= minLead;
+        if (best.percent >= minPct && beats) {
+          return { kind: "auto", entry: best, reason: second
+            ? "best " + best.percent + "% beats #2 " + second.percent + "% by ≥" + minLead + "pp"
+            : "best " + best.percent + "% (only candidate ≥" + minPct + "%)",
+          };
+        }
+        if (!best || best.percent === 0) return { kind: "none" };
+        return {
+          kind: "picker",
+          entries: scored,
+          reason:
+            best.percent < minPct
+              ? "best " + best.percent + "% < " + minPct + "% auto-fill threshold"
+              : "best " + best.percent + "% only " + (best.percent - (second?.percent ?? 0)) + "pp ahead — too close to call",
+        };
+      }
+
+      /**
+       * Render the shared picker. Each row shows primaryText + secondaryText
+       * on the left and a "NN% match" badge on the right (color-coded by
+       * confidence). Hovering the row shows the per-signal breakdown in
+       * a native title tooltip — no extra DOM, no positioning logic.
+       *
+       * @param {HTMLElement} statusEl       the `.oneflowFindStatus` label
+       *                                     element; picker is appended to
+       *                                     its parentElement.
+       * @param {Array<{candidate, percent, signals}>} scored
+       * @param {(entry) => void|Promise<void>} onSelect
+       */
+      function renderMatchPicker(statusEl, scored, onSelect) {
+        const picker = document.createElement("div");
+        picker.className = "oneflowFindPicker";
+        for (const entry of scored.slice(0, 8)) {
+          const item = document.createElement("button");
+          item.type = "button";
+          item.className = "oneflowFindPickerItem";
+
+          const left = document.createElement("div");
+          const name = document.createElement("div");
+          name.className = "oneflowFindPickerName";
+          name.textContent = entry.candidate.primaryText || "(no name)";
+          const meta = document.createElement("div");
+          meta.className = "oneflowFindPickerMeta";
+          meta.textContent = entry.candidate.secondaryText || "";
+          left.appendChild(name);
+          left.appendChild(meta);
+
+          const right = document.createElement("div");
+          right.className = "oneflowFindPickerScore";
+          if (entry.percent >= 80) right.classList.add("highConfidence");
+          else if (entry.percent >= 60) right.classList.add("medConfidence");
+          else right.classList.add("lowConfidence");
+          right.textContent = entry.percent + "% match";
+
+          // Native tooltip — no JS popover plumbing, works on every browser,
+          // accessible to screen readers via the title attribute.
+          const tooltipLines = entry.signals.length
+            ? entry.signals.map((s) => "+" + s.points + "  " + s.label)
+            : ["(no matching signals)"];
+          item.title = tooltipLines.join("\n");
+
+          item.appendChild(left);
+          item.appendChild(right);
+          item.addEventListener("click", () => { void onSelect(entry, picker); });
+          picker.appendChild(item);
+        }
+        statusEl.parentElement?.appendChild(picker);
+        return picker;
+      }
+
+      /**
+       * Pretty console dump of a Find run. Collapsed by default so it
+       * doesn't spam DevTools; expand to see the project context, every
+       * candidate with score + signals, and the decision rationale.
+       *
+       * Toggle off globally:   window.__matchDebug = false
+       * (Defaults to true so users get visibility for free.)
+       */
+      function debugLogMatch(label, ctx, scored, decision) {
+        try {
+          if (typeof window !== "undefined" && window.__matchDebug === false) return;
+          const tag = "[" + label + " Find]";
+          // Use a collapsed group so the default DevTools view stays clean.
+          // eslint-disable-next-line no-console
+          console.groupCollapsed(tag + " " + scored.length + " candidate" +
+            (scored.length === 1 ? "" : "s") +
+            (decision?.kind === "auto" ? " → auto-fill" :
+             decision?.kind === "picker" ? " → picker" : " → no match"));
+          // eslint-disable-next-line no-console
+          console.log("Project context:", {
+            name: ctx.name,
+            plantId: ctx.plantId,
+            partner: ctx.partner,
+            owner: ctx.owner,
+            due: ctx.due || null,
+            existingLinks: ctx.existingLinks,
+          });
+          // eslint-disable-next-line no-console
+          console.table(scored.slice(0, 12).map((s, i) => ({
+            "#": i + 1,
+            percent: s.percent,
+            score: s.score,
+            name: s.candidate.primaryText,
+            status: s.candidate.status || "",
+            signals: s.signals.map((x) => "+" + x.points + " " + x.label).join(" | "),
+          })));
+          // eslint-disable-next-line no-console
+          console.log("Decision:", decision);
+          // eslint-disable-next-line no-console
+          console.groupEnd();
+        } catch (_) {
+          /* DevTools closed or console restricted — silent. */
+        }
+      }
+
+      // ──────────────────────────────────────────────────────────────────
       // Oneflow API access (via Tampermonkey OneflowBridge).
       // Same constraints as Zendesk: app.oneflow.com only allows same-
       // origin requests, so the bridge routes calls through
@@ -7703,48 +8355,6 @@
         return "https://app.oneflow.com/documents/" + encodeURIComponent(id);
       }
 
-      /**
-       * Score how well an Oneflow agreement matches a tracker project.
-       * Higher = better match. Components:
-       *   • Plant-ID prefix match (strong signal):    +50
-       *   • Token overlap on names (Jaccard-ish):     0..+30
-       *   • Partner name appears in agreement parties: +20
-       * Anything ≥ 60 is considered "high confidence" → auto-fill OK.
-       */
-      function oneflowMatchScore(agreement, project, plantId, partner) {
-        const aName = String(agreement?.name ?? "").toLowerCase();
-        const pName = String(project?.name ?? "").toLowerCase();
-        let score = 0;
-        if (plantId) {
-          // Plant ID at start of both names = strongest indicator.
-          const aPrefix = (aName.match(/^\s*(\d+)/) || [])[1];
-          if (aPrefix && aPrefix === String(plantId)) score += 50;
-        }
-        // Token overlap on stripped names (ignore plant ID, punctuation).
-        const tokenize = (s) => String(s ?? "")
-          .toLowerCase()
-          .replace(/^\s*\d+\s*[-–:]?\s*/, "") // strip leading plant id
-          .replace(/[^a-zà-ÿæøå0-9\s]/gi, " ")
-          .split(/\s+/)
-          .filter((t) => t && t.length > 1);
-        const aTok = new Set(tokenize(agreement?.name));
-        const pTok = new Set(tokenize(project?.name));
-        if (aTok.size && pTok.size) {
-          let intersect = 0;
-          for (const t of pTok) if (aTok.has(t)) intersect += 1;
-          const denom = Math.max(aTok.size, pTok.size);
-          score += Math.round((intersect / denom) * 30);
-        }
-        if (partner) {
-          const partyMatch = Array.isArray(agreement?.parties) &&
-            agreement.parties.some((p) =>
-              String(p?.name ?? "").toLowerCase().includes(String(partner).toLowerCase())
-            );
-          if (partyMatch) score += 20;
-        }
-        return score;
-      }
-
       const ONEFLOW_STATE_LABEL = {
         0: "Draft",
         1: "Pending",
@@ -7755,11 +8365,78 @@
       };
 
       /**
-       * Auto-find the best Oneflow agreement for the project currently
-       * being edited. Reads values directly from the form fields so the
-       * user gets a match against whatever they've typed (even unsaved).
-       * If exactly one high-confidence match is found, fills the URL
-       * field. Otherwise renders a picker list under the field.
+       * Map an Oneflow agreement (raw API response) to the shared
+       * Candidate shape consumed by scoreMatchCandidate.
+       *
+       * Oneflow returns: { id, name, state, parties: [{name, ...}], ... }
+       * Some installations also include created_time / updated_time and
+       * a "value" object for currency — we extract date hints from both.
+       */
+      function oneflowToMatchCandidate(a) {
+        const stateLabel = ONEFLOW_STATE_LABEL[a?.state] ?? ("state " + a?.state);
+        const parties = Array.isArray(a?.parties) ? a.parties : [];
+        const partyNames = parties.map((p) => String(p?.name ?? "").trim()).filter(Boolean);
+        // Harvest emails from party + participants for owner-email scoring.
+        const contactEmails = [];
+        const contactNames = [];
+        const orgNumbers = [];
+        for (const p of parties) {
+          if (p?.email) contactEmails.push(String(p.email).toLowerCase());
+          // Oneflow exposes orgnr as a top-level party field. Older
+          // installations may use party.identification_number.value.
+          const onr = p?.orgnr ?? p?.identification_number?.value ?? "";
+          if (onr) orgNumbers.push(String(onr));
+          if (Array.isArray(p?.participants)) {
+            for (const part of p.participants) {
+              if (part?.email) contactEmails.push(String(part.email).toLowerCase());
+              if (part?.fullname) contactNames.push(String(part.fullname));
+            }
+          }
+        }
+        // Money: Oneflow search responses include agreement_value
+        // (amount + currency). May be missing for older draft contracts.
+        const amount = Number(a?.agreement_value?.amount);
+        const currency = String(a?.agreement_value?.currency ?? "");
+        // Prefer signed/start time over created — better reflects
+        // "when this matched a project".
+        const date = a?.sign_time ?? a?.start_time ?? a?.created_time ?? a?.updated_time ?? null;
+        return {
+          id: a?.id,
+          platform: "oneflow",
+          primaryText: String(a?.name ?? "").trim() || "(no name)",
+          secondaryText: stateLabel + (partyNames.length ? " · " + partyNames.join(", ") : ""),
+          matchableTexts: [a?.name, ...partyNames].filter(Boolean),
+          partyNames,
+          contactNames,
+          contactEmails,
+          orgNumbers,
+          plantId: matchExtractPlantId(a?.name ?? ""),
+          status: stateLabel,
+          date,
+          amount: Number.isFinite(amount) && amount > 0 ? amount : null,
+          currency,
+          raw: a,
+        };
+      }
+
+      /**
+       * Back-compat shim for window.__of.score (DevTools diagnostics).
+       * Returns the raw score using the shared scorer so anyone calling
+       * the legacy signature still gets a sensible number.
+       */
+      function oneflowMatchScore(agreement, project, plantId, partner) {
+        const ctx = buildProjectMatchContext({
+          name: project?.name,
+          client: partner,
+        });
+        return scoreMatchCandidate(oneflowToMatchCandidate(agreement), ctx).score;
+      }
+
+      /**
+       * Auto-find the best Oneflow agreement for the project being
+       * edited. Reads form fields live (no save required). Uses the
+       * shared scoring framework, so the auto-fill threshold and picker
+       * layout match Younium / HubSpot exactly.
        */
       async function findOneflowDocumentForEditDialog() {
         const statusEl = els?.oneflowFindStatus;
@@ -7767,31 +8444,25 @@
         if (!statusEl || !inputEl) return;
         statusEl.className = "oneflowFindStatus";
         statusEl.textContent = "Searching Oneflow…";
-        // Clear any prior picker.
         const oldPicker = statusEl.parentElement?.querySelector(".oneflowFindPicker");
         if (oldPicker) oldPicker.remove();
 
-        const projName = String(els?.fName?.value ?? "").trim();
-        const partner = String(els?.fPartner?.value ?? "").trim();
-        const plantMatch = projName.match(/^\s*(\d+)/);
-        const plantId = plantMatch ? plantMatch[1] : "";
-        if (!plantId && !projName) {
+        const ctx = await buildEnrichedProjectMatchContext();
+        if (!ctx.plantId && !ctx.name) {
           statusEl.className = "oneflowFindStatus error";
           statusEl.textContent = "Need at least a project name (or plant ID) to search.";
           return;
         }
 
-        // Search by plant ID first (most precise); fall back to project
-        // name if plant ID returns nothing.
-        const projectShape = { name: projName };
+        // Search by plant ID first (most precise); fall back to the
+        // stripped project name if plant ID returns nothing.
         let results = [];
         try {
-          if (plantId) {
-            results = await oneflowSearchAgreements(plantId, 30);
+          if (ctx.plantId) {
+            results = await oneflowSearchAgreements(ctx.plantId, 30);
           }
-          if (results.length === 0 && projName) {
-            // Drop the plant-id prefix to widen the search.
-            const stripped = projName.replace(/^\s*\d+\s*[-–:]?\s*/, "").trim();
+          if (results.length === 0 && ctx.name) {
+            const stripped = ctx.name.replace(/^\s*\d+\s*[-–:]?\s*/, "").trim();
             if (stripped && stripped.length > 2) {
               results = await oneflowSearchAgreements(stripped, 30);
             }
@@ -7807,63 +8478,38 @@
           return;
         }
 
-        // Score + sort.
+        // Map → score → sort. Shared framework handles all of this.
         const scored = results
-          .map((a) => ({ a, score: oneflowMatchScore(a, projectShape, plantId, partner) }))
-          .sort((x, y) => y.score - x.score);
-        const best = scored[0];
-        const second = scored[1];
+          .map((a) => {
+            const candidate = oneflowToMatchCandidate(a);
+            const { score, percent, signals } = scoreMatchCandidate(candidate, ctx);
+            return { candidate, score, percent, signals };
+          })
+          .sort((x, y) => y.percent - x.percent || y.score - x.score);
 
-        // Auto-fill if best is high-confidence AND clearly better than #2.
-        const HIGH_CONFIDENCE = 60;
-        const CLEAR_LEAD = 20;
-        if (best.score >= HIGH_CONFIDENCE &&
-            (!second || best.score - second.score >= CLEAR_LEAD)) {
-          inputEl.value = oneflowDocumentUrl(best.a.id);
+        const decision = decideMatchOutcome(scored);
+        debugLogMatch("Oneflow", ctx, scored, decision);
+
+        if (decision.kind === "auto") {
+          inputEl.value = oneflowDocumentUrl(decision.entry.candidate.raw?.id);
           statusEl.className = "oneflowFindStatus success";
-          statusEl.textContent = "Matched: " + (best.a.name ?? "(no name)");
+          statusEl.textContent =
+            "Matched (" + decision.entry.percent + "%): " + decision.entry.candidate.primaryText;
           return;
         }
 
-        // Otherwise show a picker with the top candidates.
         statusEl.className = "oneflowFindStatus";
         statusEl.textContent =
           scored.length === 1
             ? "Low-confidence match — confirm:"
             : "Multiple candidates — pick one:";
-        const picker = document.createElement("div");
-        picker.className = "oneflowFindPicker";
-        for (const entry of scored.slice(0, 8)) {
-          const item = document.createElement("button");
-          item.type = "button";
-          item.className = "oneflowFindPickerItem";
-          const left = document.createElement("div");
-          const name = document.createElement("div");
-          name.className = "oneflowFindPickerName";
-          name.textContent = entry.a.name ?? "(no name)";
-          const meta = document.createElement("div");
-          meta.className = "oneflowFindPickerMeta";
-          const stateLabel = ONEFLOW_STATE_LABEL[entry.a.state] ?? "state " + entry.a.state;
-          const partyList = Array.isArray(entry.a.parties)
-            ? entry.a.parties.map((p) => p.name).filter(Boolean).join(", ")
-            : "";
-          meta.textContent = stateLabel + (partyList ? " · " + partyList : "");
-          left.appendChild(name);
-          left.appendChild(meta);
-          const scoreTag = document.createElement("div");
-          scoreTag.className = "oneflowFindPickerMeta";
-          scoreTag.textContent = entry.score + "%";
-          item.appendChild(left);
-          item.appendChild(scoreTag);
-          item.addEventListener("click", () => {
-            inputEl.value = oneflowDocumentUrl(entry.a.id);
-            statusEl.className = "oneflowFindStatus success";
-            statusEl.textContent = "Selected: " + (entry.a.name ?? "(no name)");
-            picker.remove();
-          });
-          picker.appendChild(item);
-        }
-        statusEl.parentElement?.appendChild(picker);
+        renderMatchPicker(statusEl, scored, (entry, picker) => {
+          inputEl.value = oneflowDocumentUrl(entry.candidate.raw?.id);
+          statusEl.className = "oneflowFindStatus success";
+          statusEl.textContent =
+            "Selected (" + entry.percent + "%): " + entry.candidate.primaryText;
+          picker.remove();
+        });
       }
 
       // Wire the 🔎 Find button click via event delegation on document.
@@ -7954,44 +8600,6 @@
         return csrfStatus.host + "/contacts/" + csrfStatus.portalId + "/record/0-3/" + encodeURIComponent(dealId);
       }
 
-      /**
-       * Score a HubSpot deal against a project. Same shape as the
-       * Oneflow matcher so the auto-fill threshold logic stays
-       * consistent. Tokens-overlap on dealname + plant-ID prefix +
-       * partner-name in deal name (optional bonus).
-       */
-      function hubspotMatchScore(deal, project, plantId, partner) {
-        // HubSpot deal properties come as `{ value: "..." }`. Extract.
-        const dealName = String(deal?.properties?.dealname?.value ?? "").toLowerCase();
-        const pName = String(project?.name ?? "").toLowerCase();
-        let score = 0;
-        if (plantId) {
-          // Plant ID anywhere in deal name (HubSpot deal naming is less
-          // consistent than Oneflow agreement naming — could be at start
-          // or middle, e.g. "Coolteam AS - 3299 ny regulator").
-          const re = new RegExp("\\b" + String(plantId) + "\\b");
-          if (re.test(dealName)) score += 50;
-        }
-        const tokenize = (s) => String(s ?? "")
-          .toLowerCase()
-          .replace(/^\s*\d+\s*[-–:]?\s*/, "")
-          .replace(/[^a-zà-ÿæøå0-9\s]/gi, " ")
-          .split(/\s+/)
-          .filter((t) => t && t.length > 1);
-        const aTok = new Set(tokenize(dealName));
-        const pTok = new Set(tokenize(pName));
-        if (aTok.size && pTok.size) {
-          let intersect = 0;
-          for (const t of pTok) if (aTok.has(t)) intersect += 1;
-          const denom = Math.max(aTok.size, pTok.size);
-          score += Math.round((intersect / denom) * 30);
-        }
-        if (partner) {
-          if (dealName.includes(String(partner).toLowerCase())) score += 20;
-        }
-        return score;
-      }
-
       // HubSpot deal stage IDs are portal-specific — we don't try to
       // resolve them to labels here. The picker just shows the deal name
       // + amount + a generic "Deal" tag (extending is easy if the user
@@ -7999,10 +8607,91 @@
       const HUBSPOT_DEAL_TAG = "Deal";
 
       /**
-       * Auto-find the best HubSpot deal for the project currently being
-       * edited. Reads form fields directly (live, no save needed).
-       * High-confidence match (>=60 AND >=20 lead) auto-fills. Otherwise
-       * picker. Mirrors findOneflowDocumentForEditDialog's flow.
+       * Map a HubSpot deal (raw API result) to the shared Candidate
+       * shape. HubSpot properties come as `{ value: "…" }`, so we have
+       * a tiny `get(k)` accessor. We pull every property that *could*
+       * be informative — dealname, description, company associations,
+       * owner — so the shared scorer has something to chew on.
+       */
+      function hubspotToMatchCandidate(d) {
+        const props = d?.properties || {};
+        const get = (k) => String(props?.[k]?.value ?? "").trim();
+        const dealname = get("dealname");
+        const amountRaw = get("amount");
+        const amountNum = matchExtractMoneyAmount(amountRaw);
+        // HubSpot stores currency on the property's `unit` metadata field
+        // — confirmed via Playwright: properties.amount.unit = "NOK".
+        const currency = String(props?.amount?.unit ?? "").trim();
+        const amountText = Number.isFinite(amountNum) && amountNum > 0
+          ? Math.round(amountNum).toLocaleString() + (currency ? " " + currency : "")
+          : "";
+        // Company associations vary by portal config — try several common keys.
+        const partyNames = [
+          get("hs_associated_company"),
+          get("companyname"),
+          get("associated_company"),
+          get("partner"),
+          get("dealname_partner"),
+        ].filter(Boolean);
+        const contactNames = [
+          get("hubspot_owner_name"),
+          get("hs_deal_owner_email"),
+        ].filter(Boolean);
+        // Owner / deal-contact emails — HubSpot may expose any of these.
+        const contactEmails = [
+          get("hs_deal_owner_email"),
+          get("hubspot_owner_email"),
+          get("email"),
+        ].filter(Boolean).map((s) => s.toLowerCase());
+        // Org number isn't on the deal itself — would need a company
+        // association round-trip. Leave empty for now; the framework
+        // handles it gracefully.
+        const orgNumbers = [];
+        // closedate / createdate are returned as epoch-ms strings.
+        const rawDate = get("closedate") || get("createdate") || "";
+        const dateMs = rawDate ? Number(rawDate) : NaN;
+        const date = Number.isFinite(dateMs) && dateMs > 0
+          ? new Date(dateMs).toISOString()
+          : (rawDate || null);
+        const status = get("dealstage_label") || get("dealstage") || "";
+        return {
+          id: d?.objectId,
+          platform: "hubspot",
+          primaryText: dealname || "(no name)",
+          secondaryText: HUBSPOT_DEAL_TAG + (amountText ? " · " + amountText : ""),
+          matchableTexts: [
+            dealname,
+            get("description"),
+            get("dealtype"),
+            ...partyNames,
+          ].filter(Boolean),
+          partyNames,
+          contactNames,
+          contactEmails,
+          orgNumbers,
+          plantId: matchExtractPlantId(dealname),
+          status,
+          date,
+          amount: Number.isFinite(amountNum) && amountNum > 0 ? amountNum : null,
+          currency,
+          raw: d,
+        };
+      }
+
+      /** Back-compat shim for window.__hs.score (DevTools diagnostics). */
+      function hubspotMatchScore(deal, project, plantId, partner) {
+        const ctx = buildProjectMatchContext({
+          name: project?.name,
+          client: partner,
+        });
+        return scoreMatchCandidate(hubspotToMatchCandidate(deal), ctx).score;
+      }
+
+      /**
+       * Auto-find the best HubSpot deal for the project being edited.
+       * Same flow as findOneflowDocumentForEditDialog — both use the
+       * shared scorer / picker / decision logic so the two behave
+       * identically (and improvements land for both at once).
        */
       async function findHubspotDealForEditDialog() {
         const statusEl = els?.hubspotFindStatus;
@@ -8013,11 +8702,8 @@
         const oldPicker = statusEl.parentElement?.querySelector(".oneflowFindPicker");
         if (oldPicker) oldPicker.remove();
 
-        const projName = String(els?.fName?.value ?? "").trim();
-        const partner = String(els?.fPartner?.value ?? "").trim();
-        const plantMatch = projName.match(/^\s*(\d+)/);
-        const plantId = plantMatch ? plantMatch[1] : "";
-        if (!plantId && !projName) {
+        const ctx = await buildEnrichedProjectMatchContext();
+        if (!ctx.plantId && !ctx.name) {
           statusEl.className = "oneflowFindStatus error";
           statusEl.textContent = "Need at least a project name (or plant ID) to search.";
           return;
@@ -8025,11 +8711,11 @@
 
         let json;
         try {
-          if (plantId) {
-            json = await hubspotSearchDeals(plantId, 20);
+          if (ctx.plantId) {
+            json = await hubspotSearchDeals(ctx.plantId, 20);
           }
-          if (!json?.results?.length && projName) {
-            const stripped = projName.replace(/^\s*\d+\s*[-–:]?\s*/, "").trim();
+          if (!json?.results?.length && ctx.name) {
+            const stripped = ctx.name.replace(/^\s*\d+\s*[-–:]?\s*/, "").trim();
             if (stripped && stripped.length > 2) {
               json = await hubspotSearchDeals(stripped, 20);
             }
@@ -8046,20 +8732,22 @@
           return;
         }
 
-        const projectShape = { name: projName };
         const scored = results
-          .map((d) => ({ d, score: hubspotMatchScore(d, projectShape, plantId, partner) }))
-          .sort((x, y) => y.score - x.score);
-        const best = scored[0];
-        const second = scored[1];
-        const HIGH_CONFIDENCE = 60;
-        const CLEAR_LEAD = 20;
+          .map((d) => {
+            const candidate = hubspotToMatchCandidate(d);
+            const { score, percent, signals } = scoreMatchCandidate(candidate, ctx);
+            return { candidate, score, percent, signals };
+          })
+          .sort((x, y) => y.percent - x.percent || y.score - x.score);
 
-        if (best.score >= HIGH_CONFIDENCE &&
-            (!second || best.score - second.score >= CLEAR_LEAD)) {
-          inputEl.value = await hubspotDealUrl(best.d.objectId);
+        const decision = decideMatchOutcome(scored);
+        debugLogMatch("HubSpot", ctx, scored, decision);
+
+        if (decision.kind === "auto") {
+          inputEl.value = await hubspotDealUrl(decision.entry.candidate.raw?.objectId);
           statusEl.className = "oneflowFindStatus success";
-          statusEl.textContent = "Matched: " + (best.d.properties?.dealname?.value ?? "(no name)");
+          statusEl.textContent =
+            "Matched (" + decision.entry.percent + "%): " + decision.entry.candidate.primaryText;
           return;
         }
 
@@ -8068,37 +8756,13 @@
           scored.length === 1
             ? "Low-confidence match — confirm:"
             : "Multiple candidates — pick one:";
-        const picker = document.createElement("div");
-        picker.className = "oneflowFindPicker";
-        for (const entry of scored.slice(0, 8)) {
-          const item = document.createElement("button");
-          item.type = "button";
-          item.className = "oneflowFindPickerItem";
-          const left = document.createElement("div");
-          const name = document.createElement("div");
-          name.className = "oneflowFindPickerName";
-          name.textContent = entry.d.properties?.dealname?.value ?? "(no name)";
-          const meta = document.createElement("div");
-          meta.className = "oneflowFindPickerMeta";
-          const amount = entry.d.properties?.amount?.value;
-          const amountText = amount ? Number(amount).toLocaleString(undefined, { maximumFractionDigits: 0 }) + " NOK" : "";
-          meta.textContent = HUBSPOT_DEAL_TAG + (amountText ? " · " + amountText : "");
-          left.appendChild(name);
-          left.appendChild(meta);
-          const scoreTag = document.createElement("div");
-          scoreTag.className = "oneflowFindPickerMeta";
-          scoreTag.textContent = entry.score + "%";
-          item.appendChild(left);
-          item.appendChild(scoreTag);
-          item.addEventListener("click", async () => {
-            inputEl.value = await hubspotDealUrl(entry.d.objectId);
-            statusEl.className = "oneflowFindStatus success";
-            statusEl.textContent = "Selected: " + (entry.d.properties?.dealname?.value ?? "(no name)");
-            picker.remove();
-          });
-          picker.appendChild(item);
-        }
-        statusEl.parentElement?.appendChild(picker);
+        renderMatchPicker(statusEl, scored, async (entry, picker) => {
+          inputEl.value = await hubspotDealUrl(entry.candidate.raw?.objectId);
+          statusEl.className = "oneflowFindStatus success";
+          statusEl.textContent =
+            "Selected (" + entry.percent + "%): " + entry.candidate.primaryText;
+          picker.remove();
+        });
       }
 
       // Wire 🔎 Find for HubSpot via document delegation (same reason as
@@ -8194,17 +8858,75 @@
       };
 
       /**
-       * Auto-find the best Younium order for the project currently being
-       * edited. Strategy is different from Oneflow/HubSpot because
-       * Younium orders carry a NATIVE plant_id field — we can do exact
-       * matching instead of fuzzy name matching.
-       *
-       * Decision tree:
-       *   1. No plant ID in project name → "need plant ID" error
-       *   2. Exactly 1 order with matching plant_id → auto-fill
-       *   3. Multiple matching orders → picker (the newest is on top,
-       *      but the user picks which year/order they want)
-       *   4. No matching orders → "no match" error
+       * Map a Younium order to the shared Candidate shape. Younium is
+       * the most data-rich of the three: it exposes an explicit
+       * `plant_id` field (which is what makes its matching strongest),
+       * plus accountname, plant_name, orderNumber, status, and dates.
+       */
+      function youniumToMatchCandidate(o) {
+        const statusLabel = YOUNIUM_STATUS_LABEL[o?.status] ?? ("status " + o?.status);
+        const partyNames = [o?.accountname].filter(Boolean).map(String);
+        const dateRaw = o?.effectiveStartDate ?? o?.effectiveEndDate ?? null;
+        const dateDisplay = dateRaw ? String(dateRaw).slice(0, 10) : "";
+        // Pricing — Younium exposes several money fields. Prefer total
+        // contract value, fall back to annual or monthly recurring.
+        // (Search responses sometimes only carry one of these; we pick
+        // whichever is populated.)
+        const totalContractValue = matchExtractMoneyAmount(o?.totalContractValue);
+        const annualContractValue = matchExtractMoneyAmount(o?.annualContractValue ?? o?.arr);
+        const monthlyRecurringRevenue = matchExtractMoneyAmount(o?.mrr);
+        const bestAmount =
+          Number.isFinite(totalContractValue) && totalContractValue > 0 ? totalContractValue :
+          Number.isFinite(annualContractValue) && annualContractValue > 0 ? annualContractValue :
+          Number.isFinite(monthlyRecurringRevenue) && monthlyRecurringRevenue > 0 ? monthlyRecurringRevenue :
+          null;
+        const currency = String(o?.currency ?? o?.currencyCode ?? "").trim();
+        // Order Tracking Number is a free-text custom reference on
+        // Younium orders — confirmed via the orders-list UI column.
+        // Anything there is a candidate "project reference".
+        const trackingNumber = String(o?.order_tracking_number ?? o?.trackingNumber ?? "").trim();
+        return {
+          id: o?.id,
+          platform: "younium",
+          primaryText:
+            (o?.orderNumber ?? "(no number)") +
+            (o?.plant_name ? " — " + o.plant_name : ""),
+          secondaryText:
+            statusLabel +
+            (o?.accountname ? " · " + o.accountname : "") +
+            (dateDisplay ? " · " + dateDisplay : "") +
+            (bestAmount ? " · " + Math.round(bestAmount).toLocaleString() + (currency ? " " + currency : "") : ""),
+          matchableTexts: [
+            o?.orderNumber,
+            o?.plant_name,
+            o?.accountname,
+            trackingNumber,
+          ].filter(Boolean).map(String),
+          partyNames,
+          contactNames: [],
+          contactEmails: [],
+          orgNumbers: [],
+          plantId: String(o?.plant_id ?? "").trim(),
+          status: statusLabel,
+          date: dateRaw,
+          amount: bestAmount,
+          currency,
+          raw: o,
+        };
+      }
+
+      /**
+       * Auto-find the best Younium order for the project being edited.
+       * Younium-specific quirks layered on top of the shared scorer:
+       *   1. We MUST filter the API's text search by exact `plant_id`
+       *      because the search returns positives like "O-013299" when
+       *      asked for "3299". Without this, the picker fills with junk.
+       *   2. If the project lacks a plant ID, we bail with a clear
+       *      "need plant ID" message rather than scoring everything by
+       *      name (which produces noise on this API).
+       *   3. Older orders for the same plant ID can score equally —
+       *      that's intentional. The picker shows them all, newest
+       *      first, and the user picks the right year.
        */
       async function findYouniumOrderForEditDialog() {
         const statusEl = els?.youniumFindStatus;
@@ -8215,10 +8937,8 @@
         const oldPicker = statusEl.parentElement?.querySelector(".oneflowFindPicker");
         if (oldPicker) oldPicker.remove();
 
-        const projName = String(els?.fName?.value ?? "").trim();
-        const plantMatch = projName.match(/^\s*(\d+)/);
-        const plantId = plantMatch ? plantMatch[1] : "";
-        if (!plantId) {
+        const ctx = await buildEnrichedProjectMatchContext();
+        if (!ctx.plantId) {
           statusEl.className = "oneflowFindStatus error";
           statusEl.textContent = "Project name needs to start with a plant ID (e.g. \"3299 - …\").";
           return;
@@ -8226,71 +8946,65 @@
 
         let json;
         try {
-          json = await youniumSearchOrders(plantId, 20);
+          json = await youniumSearchOrders(ctx.plantId, 20);
         } catch (e) {
           statusEl.className = "oneflowFindStatus error";
           statusEl.textContent = String(e?.message ?? e ?? "Younium search failed.");
           return;
         }
         const allResults = Array.isArray(json?.result) ? json.result : [];
-        // EXACT match on plant_id — search returns false positives when
-        // the plant ID happens to appear in an order number (e.g.
-        // "3299" inside "O-013299"). Filter strictly.
-        const matches = allResults.filter((o) => String(o?.plant_id ?? "").trim() === plantId);
+        // Filter by EXACT plant_id — see comment above. The text search
+        // is intentionally permissive on Younium's side, so we tighten
+        // it here before scoring.
+        const matches = allResults.filter(
+          (o) => String(o?.plant_id ?? "").trim() === ctx.plantId
+        );
         if (matches.length === 0) {
           statusEl.className = "oneflowFindStatus error";
-          statusEl.textContent = "No matching Younium orders found for plant " + plantId + ".";
+          statusEl.textContent = "No matching Younium orders found for plant " + ctx.plantId + ".";
           return;
         }
-        // Sort by effectiveStartDate desc — newest first.
+
+        // Stable secondary sort by effectiveStartDate desc so when the
+        // scorer ties (multiple orders, same plant_id, equal name/party
+        // signals), the newest wins.
         matches.sort((a, b) => {
           const at = Date.parse(String(a?.effectiveStartDate ?? "")) || 0;
           const bt = Date.parse(String(b?.effectiveStartDate ?? "")) || 0;
           return bt - at;
         });
 
-        if (matches.length === 1) {
-          inputEl.value = await youniumOrderUrl(matches[0].id);
+        const scored = matches
+          .map((o) => {
+            const candidate = youniumToMatchCandidate(o);
+            const { score, percent, signals } = scoreMatchCandidate(candidate, ctx);
+            return { candidate, score, percent, signals };
+          })
+          .sort((x, y) => y.percent - x.percent || y.score - x.score);
+
+        const decision = decideMatchOutcome(scored);
+        debugLogMatch("Younium", ctx, scored, decision);
+
+        if (decision.kind === "auto") {
+          inputEl.value = await youniumOrderUrl(decision.entry.candidate.raw?.id);
           statusEl.className = "oneflowFindStatus success";
-          statusEl.textContent = "Matched: " + (matches[0].orderNumber ?? matches[0].id) +
-            (matches[0].accountname ? " · " + matches[0].accountname : "");
+          statusEl.textContent =
+            "Matched (" + decision.entry.percent + "%): " + decision.entry.candidate.primaryText;
           return;
         }
 
-        // Multiple matches → picker. Newest is on top; user picks.
         statusEl.className = "oneflowFindStatus";
-        statusEl.textContent = "Multiple orders for plant " + plantId + " — pick one (newest first):";
-        const picker = document.createElement("div");
-        picker.className = "oneflowFindPicker";
-        for (const entry of matches.slice(0, 10)) {
-          const item = document.createElement("button");
-          item.type = "button";
-          item.className = "oneflowFindPickerItem";
-          const left = document.createElement("div");
-          const name = document.createElement("div");
-          name.className = "oneflowFindPickerName";
-          name.textContent =
-            (entry.orderNumber ?? "(no number)") +
-            (entry.plant_name ? " — " + entry.plant_name : "");
-          const meta = document.createElement("div");
-          meta.className = "oneflowFindPickerMeta";
-          const statusLabel = YOUNIUM_STATUS_LABEL[entry.status] ?? ("status " + entry.status);
-          const date = entry.effectiveStartDate ? String(entry.effectiveStartDate).slice(0, 10) : "";
-          meta.textContent = statusLabel +
-            (entry.accountname ? " · " + entry.accountname : "") +
-            (date ? " · " + date : "");
-          left.appendChild(name);
-          left.appendChild(meta);
-          item.appendChild(left);
-          item.addEventListener("click", async () => {
-            inputEl.value = await youniumOrderUrl(entry.id);
-            statusEl.className = "oneflowFindStatus success";
-            statusEl.textContent = "Selected: " + (entry.orderNumber ?? entry.id);
-            picker.remove();
-          });
-          picker.appendChild(item);
-        }
-        statusEl.parentElement?.appendChild(picker);
+        statusEl.textContent =
+          scored.length === 1
+            ? "Low-confidence match — confirm:"
+            : "Multiple orders for plant " + ctx.plantId + " — pick one (newest first):";
+        renderMatchPicker(statusEl, scored, async (entry, picker) => {
+          inputEl.value = await youniumOrderUrl(entry.candidate.raw?.id);
+          statusEl.className = "oneflowFindStatus success";
+          statusEl.textContent =
+            "Selected (" + entry.percent + "%): " + entry.candidate.primaryText;
+          picker.remove();
+        });
       }
 
       // Wire the Younium 🔎 Find button via document delegation.
@@ -18373,7 +19087,7 @@
                 card.classList.toggle("expanded", willOpen);
                 if (willOpen && !detailLoaded) {
                   detailLoaded = true;
-                  await loadTicketDetail(t.id, detail);
+                  await loadTicketDetail(t.id, detail, t.status);
                 }
               };
               row.addEventListener("click", (e) => {
@@ -18451,6 +19165,24 @@
                 }
               };
 
+              // Jump the conversation thread to the most recent reply so
+              // the user lands at the latest message + their compose box,
+              // not the ancient first comment of a long-running ticket.
+              // Double-RAF: first frame lets the fullscreen layout settle
+              // (sizes change as `.zendeskConvo` flips from a fixed
+              // max-height to flex: 1), second frame reads the now-final
+              // scrollHeight. A trailing setTimeout catches reflows from
+              // inline images that arrive a bit later.
+              const scrollConvoToBottom = () => {
+                const convo = detail.querySelector(".zendeskConvo");
+                if (!convo) return;
+                requestAnimationFrame(() => {
+                  requestAnimationFrame(() => {
+                    convo.scrollTop = convo.scrollHeight;
+                  });
+                });
+              };
+
               const toggleFullscreen = () => {
                 isFullscreen = !isFullscreen;
                 document.body.classList.toggle("zendeskFullscreenOpen", isFullscreen);
@@ -18468,13 +19200,26 @@
                   card.classList.add("zendeskCardFullscreen");
 
                   // Make sure the detail panel is loaded.
+                  let pendingLoad = null;
                   if (!detailLoaded || detail.style.display === "none") {
                     detail.style.display = "";
                     card.classList.add("expanded");
                     if (!detailLoaded) {
                       detailLoaded = true;
-                      loadTicketDetail(t.id, detail);
+                      pendingLoad = loadTicketDetail(t.id, detail, t.status);
                     }
+                  }
+                  // Warm path: convo is already populated, scroll now.
+                  // Cold path: schedule the scroll after load resolves.
+                  // Always also schedule one ~250ms later in case inline
+                  // images bump scrollHeight after the initial layout.
+                  scrollConvoToBottom();
+                  if (pendingLoad && typeof pendingLoad.then === "function") {
+                    pendingLoad
+                      .then(scrollConvoToBottom, scrollConvoToBottom)
+                      .finally(() => setTimeout(scrollConvoToBottom, 250));
+                  } else {
+                    setTimeout(scrollConvoToBottom, 250);
                   }
                   document.addEventListener("keydown", exitOnEsc);
                   document.addEventListener("mousedown", exitOnMouseBack, true);
@@ -18533,7 +19278,10 @@
 
             // Fetch comments + render them as a chat-like thread with a
             // compose box for replying. Reloads on successful submit.
-            const loadTicketDetail = async (ticketId, container) => {
+            // `ticketStatus` is the ticket's current status (open/pending/
+            // hold/solved/closed) — used to suppress the compose box on
+            // closed tickets, which Zendesk's API rejects with 422.
+            const loadTicketDetail = async (ticketId, container, ticketStatus) => {
               container.innerHTML = "";
               const loading = document.createElement("div");
               loading.className = "chatHistoryEmpty";
@@ -18874,6 +19622,20 @@
               requestAnimationFrame(() => { convo.scrollTop = convo.scrollHeight; });
               container.appendChild(convo);
 
+              // Closed tickets in Zendesk cannot accept new comments — the
+              // API returns 422 with "Status: closed cannot have comments
+              // added". Show a clear notice instead of a compose box the
+              // user would expect to work.
+              const isTicketClosed = String(ticketStatus ?? "").toLowerCase() === "closed";
+              if (isTicketClosed) {
+                const closedNotice = document.createElement("div");
+                closedNotice.className = "zendeskComposeClosed";
+                closedNotice.textContent =
+                  "This ticket is closed and cannot receive new replies. Re-open it in Zendesk to reply.";
+                container.appendChild(closedNotice);
+                return;
+              }
+
               // Compose — public reply by default, with toggle for internal note.
               const compose = document.createElement("div");
               compose.className = "zendeskCompose";
@@ -18960,8 +19722,10 @@
                   ta.value = "";
                   statusLine.textContent = "Sent.";
                   // Reload conversation so the new reply appears + last-reply
-                  // timestamp in the row updates on next refresh.
-                  await loadTicketDetail(ticketId, container);
+                  // timestamp in the row updates on next refresh. Keep the
+                  // same status — a successful POST means the ticket
+                  // wasn't closed at submit time.
+                  await loadTicketDetail(ticketId, container, ticketStatus);
                 } catch (e) {
                   statusLine.textContent = "Failed: " + String(e?.message ?? e);
                   statusLine.classList.add("error");
