@@ -27399,21 +27399,19 @@
           ["Order status",                '<strong style="color: ' + orderStatusColor + ';">' +
                                           (orderIsInvoiced ? "✓ " : "") +
                                           escHtml(verdict.orderStatus) + '</strong>'],
-          // Invoice status — neutral / muted when the order itself is in
+          // Invoice status — hidden entirely when the order itself is in
           // a bad state (Draft, Cancelled, Expired). In those cases the
           // invoices Younium returns belong to a PRIOR version of the
-          // order, not this saved draft — applying the green ✓ would
-          // be misleading.
-          ["Invoice status",              invoices.length
-            ? (orderIsBad
-                ? '<span style="color: var(--muted2);">' +
-                  (orderHasPostedInvoices ? "Posted/paid (" + invoices.length + ")" : "Drafted (" + invoices.length + ")") +
-                  ' <em style="font-size: 11px; font-style: italic;">(from prior order version)</em></span>'
-                : '<strong style="color: ' + invoiceStatusColor + ';">' +
+          // order, not this saved draft, so showing them is misleading.
+          // renderKV() drops rows whose value is null.
+          ["Invoice status",              orderIsBad
+            ? null
+            : (invoices.length
+                ? '<strong style="color: ' + invoiceStatusColor + ';">' +
                   (orderHasPostedInvoices ? "✓ " : "") +
                   (orderHasPostedInvoices ? "Posted/paid (" + invoices.length + ")" : "Drafted (" + invoices.length + ")") +
-                  '</strong>')
-            : '<strong style="color: ' + invoiceStatusColor + ';">No invoices yet</strong>'],
+                  '</strong>'
+                : '<strong style="color: ' + invoiceStatusColor + ';">No invoices yet</strong>')],
           ["Total amount",                orderTotal !== "—" ? orderTotal + " " + orderCurrency : "—"],
           ["Currency",                    orderCurrency],
           ["Created date",                fmtDate(order?.created)],
