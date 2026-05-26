@@ -3142,19 +3142,6 @@
         flex-direction: column;
         overflow: hidden;
       }
-      /* The dialog now wraps its content in <form method="dialog"> so
-         that the close buttons close natively (no JS needed). The form
-         needs to inherit the flex layout so the body scrolls between
-         a sticky header and footer. */
-      dialog.dlgYouniumStatus > form {
-        display: flex;
-        flex-direction: column;
-        flex: 1 1 auto;
-        min-height: 0;
-        max-height: 100%;
-        margin: 0;
-        padding: 0;
-      }
       dialog.dlgYouniumStatus::backdrop {
         background: rgba(0, 0, 0, 0.6);
       }
@@ -3171,20 +3158,16 @@
           background: rgba(15, 23, 42, 0.035);
         }
       }
-      /* X-icon close button in the title bar — same compact icon
-         button style as the other dialogs in this app. Distinct from
-         the footer "Close" button so the user isn't confused by two
-         identical labels. */
-      .dlgYouniumStatusHd .btnCloseIcon {
-        width: 28px;
-        height: 28px;
-        padding: 0;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 16px;
-        line-height: 1;
-        border-radius: 8px;
+      /* Close hint in the title bar — replaces the X button that
+         was removed because its click handler was being intercepted
+         in the user's environment. Backdrop click + Esc are the
+         reliable close paths; this hint documents them. */
+      .dlgYouniumStatusCloseHint {
+        font-size: 11.5px;
+        color: var(--muted2);
+        font-style: italic;
+        margin-left: 12px;
+        white-space: nowrap;
       }
       .dlgYouniumStatusHd {
         display: flex;
@@ -6624,42 +6607,27 @@
     </dialog>
 
     <!-- Younium status details (fullscreen modal — opened by the top-bar Younium Status button)
-         User diagnostic: backdrop-click closes the modal; button clicks
-         do not (even with form-method-dialog). Some environment-specific
-         issue prevents form submission default action from firing.
-         Fix: piggyback close-button clicks onto the SAME dialog-level
-         click listener that handles backdrop clicks (see line ~27050).
-         Buttons are plain type="button" — no form submission needed. -->
+         X and Close buttons removed per user request — in their environment
+         clicks on <button> elements inside the dialog get intercepted by
+         something (extension/userscript) and never fire the close handler.
+         The reliable close paths are: (1) clicking outside the modal
+         (backdrop) and (2) pressing Escape — both browser-native, neither
+         affected by the interception. A subtle hint in the footer
+         documents the available close gestures. -->
     <dialog id="dlgYouniumStatus" class="dlgYouniumStatus" aria-labelledby="dlgYouniumStatusTitle">
-      <form method="dialog" id="formYouniumStatus">
-        <div class="dlgHd dlgYouniumStatusHd">
-          <strong id="dlgYouniumStatusTitle">Younium status details</strong>
-          <!-- Plain button; close path is the dialog click listener below. -->
-          <button
-            class="btn btnCloseIcon"
-            id="btnCloseYouniumStatus"
-            type="button"
-            aria-label="Close"
-            title="Close (Esc)"
-          >✕</button>
-        </div>
-        <div class="dlgYouniumStatusBody" id="dlgYouniumStatusBody">
-          <!-- Populated by openYouniumStatusModal() -->
-        </div>
-        <div class="dlgYouniumStatusFooter" id="dlgYouniumStatusFooter">
-          <button class="btn" type="button" id="btnYouniumStatusRefresh">Refresh status</button>
-          <button class="btn" type="button" id="btnYouniumStatusCopy">Copy summary</button>
-          <a class="btn" id="btnYouniumStatusOpenOrder" target="_blank" rel="noopener noreferrer" style="display: none;">Open Younium order</a>
-          <a class="btn" id="btnYouniumStatusOpenSub" target="_blank" rel="noopener noreferrer" style="display: none;">Open subscription</a>
-          <span style="flex: 1;"></span>
-          <!-- Plain button; close path is the dialog click listener below. -->
-          <button
-            class="btn primary"
-            id="btnCloseYouniumStatus2"
-            type="button"
-          >Close</button>
-        </div>
-      </form>
+      <div class="dlgHd dlgYouniumStatusHd">
+        <strong id="dlgYouniumStatusTitle">Younium status details</strong>
+        <span class="dlgYouniumStatusCloseHint" aria-hidden="true">Click outside or press Esc to close</span>
+      </div>
+      <div class="dlgYouniumStatusBody" id="dlgYouniumStatusBody">
+        <!-- Populated by openYouniumStatusModal() -->
+      </div>
+      <div class="dlgYouniumStatusFooter" id="dlgYouniumStatusFooter">
+        <button class="btn" type="button" id="btnYouniumStatusRefresh">Refresh status</button>
+        <button class="btn" type="button" id="btnYouniumStatusCopy">Copy summary</button>
+        <a class="btn" id="btnYouniumStatusOpenOrder" target="_blank" rel="noopener noreferrer" style="display: none;">Open Younium order</a>
+        <a class="btn" id="btnYouniumStatusOpenSub" target="_blank" rel="noopener noreferrer" style="display: none;">Open subscription</a>
+      </div>
     </dialog>
 
     <!-- CSV Importer -->
@@ -17657,8 +17625,7 @@
         dlgYouniumStatus: document.getElementById("dlgYouniumStatus"),
         dlgYouniumStatusTitle: document.getElementById("dlgYouniumStatusTitle"),
         dlgYouniumStatusBody: document.getElementById("dlgYouniumStatusBody"),
-        btnCloseYouniumStatus: document.getElementById("btnCloseYouniumStatus"),
-        btnCloseYouniumStatus2: document.getElementById("btnCloseYouniumStatus2"),
+        // X / Close buttons removed — close via backdrop click or Esc.
         btnYouniumStatusRefresh: document.getElementById("btnYouniumStatusRefresh"),
         btnYouniumStatusCopy: document.getElementById("btnYouniumStatusCopy"),
         btnYouniumStatusOpenOrder: document.getElementById("btnYouniumStatusOpenOrder"),
@@ -27042,30 +27009,17 @@
       els.btnYouniumStatus.addEventListener("click", openYouniumStatusModal);
 
       // ── Close handlers ──
-      // User diagnostic: clicking outside the modal (backdrop) closes
-      // it cleanly, but clicks on the X / Close buttons do not. Some
-      // environment-specific quirk (extension, polyfill, or browser
-      // bug) blocks the button-level handlers and the form-method-
-      // dialog submission. The dialog-level click listener IS firing
-      // though (the backdrop case proves it).
+      // X and Close buttons were removed because clicks on <button>
+      // elements inside the dialog were being intercepted in the
+      // user's environment (extension/userscript). Only two close
+      // paths are needed and both are reliable:
       //
-      // Fix: handle both backdrop AND button clicks in ONE listener
-      // attached to the dialog. Whatever blocks button-level events
-      // doesn't block clicks bubbling up to the dialog.
+      //   1. Backdrop click — target is the dialog itself (clicks on
+      //      the dim area outside the inner box). The handler below.
+      //   2. Escape key — browser-native for <dialog>. No JS needed.
       els.dlgYouniumStatus?.addEventListener("click", (ev) => {
-        if (!els.dlgYouniumStatus.open) return;
-        const target = ev.target;
-        // Case 1: backdrop click — target is the dialog itself.
-        if (target === els.dlgYouniumStatus) {
+        if (ev.target === els.dlgYouniumStatus && els.dlgYouniumStatus.open) {
           els.dlgYouniumStatus.close();
-          return;
-        }
-        // Case 2: close-button click — target is one of the close
-        // buttons OR a descendant of one (e.g., the ✕ glyph).
-        // closest() walks up the ancestor chain to find a match.
-        if (target.closest && target.closest("#btnCloseYouniumStatus, #btnCloseYouniumStatus2")) {
-          els.dlgYouniumStatus.close();
-          return;
         }
       });
 
