@@ -3278,6 +3278,23 @@
         color: var(--muted);
         margin-top: 6px;
       }
+      /* Status badge next to the "Subscription" section title.
+         Green = Active subscription, red = anything else, gray = no
+         IWMAC subscription product on this order. */
+      .youniumSubBadge {
+        display: inline-block;
+        margin-left: 8px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        vertical-align: middle;
+      }
+      .youniumSubBadge-green { background: var(--good-soft); color: var(--good); border: 1px solid rgba(52,211,153,0.45); }
+      .youniumSubBadge-red   { background: var(--bad-soft);  color: var(--bad);  border: 1px solid rgba(251,113,133,0.45); }
+      .youniumSubBadge-gray  { background: rgba(255,255,255,0.04); color: var(--muted); border: 1px solid var(--hairline); }
       .youniumStatusProblems { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--hairline); }
       .youniumStatusProblems ul { margin: 4px 0 0; padding-left: 18px; }
       .youniumStatusProblems li { color: var(--bad); margin-bottom: 2px; }
@@ -9886,6 +9903,52 @@
       // Fetches happen via the v1.9.10 bridge methods getOrderById /
       // getInvoicesForOrder / getQuoteById.
 
+      // ── Subscription-product detection ──
+      // Per user spec: a Younium order that creates a subscription
+      // always has a product line called "IWMAC Abonnement" or
+      // "IWMAC Subscription". Walk every possible array on the order
+      // payload (bookings, products, charges, …) and look for that
+      // product name. Returns the matching item or null.
+      const IWMAC_SUBSCRIPTION_NAME_PATTERN = /\bIWMAC\s*(?:Abonnement|Subscription)\b/i;
+      function findIwmacSubscriptionItem(order) {
+        if (!order || typeof order !== "object") return null;
+        // The order response shape varies across Younium environments —
+        // sometimes products live on order.bookings, sometimes on
+        // order.products, etc. Try every plausible field.
+        const candidateArrays = [
+          order.bookings,
+          order.products,
+          order.charges,
+          order.orderProducts,
+          order.subscriptions,
+          order.subscriptionProducts,
+          order.lineItems,
+          order.items,
+        ];
+        for (const arr of candidateArrays) {
+          if (!Array.isArray(arr)) continue;
+          for (const item of arr) {
+            if (!item || typeof item !== "object") continue;
+            const nameFields = [
+              item.productName,
+              item.name,
+              item.subscriptionName,
+              item.product?.name,
+              item.product?.productName,
+              item.subscriptionProduct?.name,
+              item.subscriptionProduct?.productName,
+              item.subscription_product_name,
+            ].filter(Boolean);
+            for (const n of nameFields) {
+              if (IWMAC_SUBSCRIPTION_NAME_PATTERN.test(String(n))) {
+                return { item, productName: String(n) };
+              }
+            }
+          }
+        }
+        return null;
+      }
+
       async function youniumFetchOrderDetails(id) {
         const bridge = window.YouniumBridge;
         if (!bridge?.getOrderById) {
@@ -10002,12 +10065,34 @@
         }
         out.orderNumber = order.orderNumber || classified.recordId;
         out.raw = { order };
+
+        // ── Subscription product check ──
+        // If the order contains an IWMAC Abonnement / IWMAC Subscription
+        // product line, this order creates a subscription. Stash the
+        // product name (and the array we found it in) so the modal can
+        // render a Subscription section.
+        const subMatch = findIwmacSubscriptionItem(order);
+        out.subscriptionProduct = subMatch ? {
+          productName: subMatch.productName,
+          item: subMatch.item,
+        } : null;
+        out.hasSubscriptionProduct = !!subMatch;
         dbg("order:", {
           orderNumber: order.orderNumber, status: order.status,
           effectiveStartDate: order.effectiveStartDate,
           effectiveEndDate: order.effectiveEndDate,
           cancellationDate: order.cancellationDate,
           isLastVersion: order.isLastVersion,
+          hasSubscriptionProduct: out.hasSubscriptionProduct,
+          subscriptionProductName: out.subscriptionProduct?.productName,
+          // Log array shapes so we can see what's actually on this
+          // order tenant — helps when the IWMAC detection misses.
+          arrayShapes: {
+            bookings: Array.isArray(order.bookings) ? order.bookings.length : "n/a",
+            products: Array.isArray(order.products) ? order.products.length : "n/a",
+            charges:  Array.isArray(order.charges)  ? order.charges.length  : "n/a",
+            orderProducts: Array.isArray(order.orderProducts) ? order.orderProducts.length : "n/a",
+          },
         });
 
         const now = Date.now();
@@ -10090,6 +10175,18 @@
           out.color = "yellow";
           out.label = "Younium: Not invoiced";
           out.problems.push("Order has no posted invoices yet — should be invoiced");
+        } else if (out.hasSubscriptionProduct && out.subscriptionStatus !== "Active") {
+          // Order is invoiced and has IWMAC subscription product BUT
+          // subscription isn't Active — that's bad per user spec
+          // (Active = good, everything else = bad).
+          out.color = "red";
+          out.label = "Younium: Subscription " + out.subscriptionStatus;
+          out.problems.push(
+            "Order contains IWMAC subscription product '" +
+            (out.subscriptionProduct?.productName || "Abonnement") +
+            "' but subscription state is '" + out.subscriptionStatus +
+            "' — should be Active"
+          );
         } else if (out.subscriptionStatus === "Active") {
           out.color = "green";
           out.label = "Younium: OK";
@@ -10097,6 +10194,11 @@
           out.color = "yellow";
           out.label = "Younium: Pending";
           out.problems.push("Subscription starts " + (order.effectiveStartDate || "").slice(0, 10));
+        } else if (!out.hasSubscriptionProduct && postedInvoices.length > 0) {
+          // Invoiced, but no IWMAC subscription product in the order
+          // — likely a one-time sale. Order side is fine.
+          out.color = "green";
+          out.label = "Younium: Invoiced (one-time sale)";
         } else {
           out.color = "yellow";
           out.label = "Younium: Uncertain";
@@ -26914,15 +27016,30 @@
         const extraWarnings = buildYouniumExtraWarnings(p, verdict);
         const allWarnings = [...(verdict.problems || []), ...extraWarnings];
 
-        const expectedNotMet = verdict.orderStatus !== "Invoiced" || verdict.subscriptionStatus !== "Active";
+        // Subscription expected to be Active ONLY when the order has
+        // an IWMAC subscription product. One-time sales don't have
+        // a subscription to check.
+        const expectedNotMet = verdict.orderStatus !== "Invoiced" ||
+          (verdict.hasSubscriptionProduct && verdict.subscriptionStatus !== "Active");
 
         // ── Summary header text ──
+        // Tailored to whether the order has an IWMAC subscription
+        // product on it. Orders without IWMAC are one-time sales —
+        // no subscription state to report.
         let summaryText;
-        if (verdict.color === "green") summaryText = "OK: Order is Invoiced and Subscription is Active.";
-        else if (verdict.color === "yellow" && verdict.orderStatus === "Invoiced") summaryText = "Pending: Order is Invoiced, but Subscription is not Active yet.";
-        else if (verdict.color === "yellow") summaryText = "Warning: " + (verdict.label || "Status uncertain — see details below.");
-        else if (verdict.color === "red") summaryText = "Error: " + (verdict.label || "Younium state needs attention.");
-        else summaryText = "Missing: No Younium link saved on this project, or no reliable record was found.";
+        if (verdict.color === "green" && verdict.hasSubscriptionProduct) {
+          summaryText = "OK: Order is Invoiced and Subscription is Active.";
+        } else if (verdict.color === "green") {
+          summaryText = "OK: Order is Invoiced (one-time sale — no IWMAC subscription product).";
+        } else if (verdict.color === "yellow" && verdict.orderStatus === "Invoiced") {
+          summaryText = "Pending: Order is Invoiced, but Subscription is not Active yet.";
+        } else if (verdict.color === "yellow") {
+          summaryText = "Warning: " + (verdict.label || "Status uncertain — see details below.");
+        } else if (verdict.color === "red") {
+          summaryText = "Error: " + (verdict.label || "Younium state needs attention.");
+        } else {
+          summaryText = "Missing: No Younium link saved on this project, or no reliable record was found.";
+        }
 
         const projectKV = [
           ["Project name",                p.name],
@@ -26966,6 +27083,33 @@
           ["Last changed",                lastChangeStr + ' <span style="color: var(--muted2); font-size: 11px; font-style: italic;">(' + escHtml(lastChangeSource) + ")</span>"],
         ];
 
+        // ── Subscription section ──
+        // Show whether this order has an IWMAC subscription product
+        // and what the lifecycle state of the subscription is.
+        // Per user spec: Active = good (green), anything else = bad (red).
+        const subActive = verdict.subscriptionStatus === "Active";
+        const subStatusBadgeColor = subActive ? "var(--good)" : "var(--bad)";
+        const subStatusBadgeText = subActive ? "● Active (good)" : "● " + verdict.subscriptionStatus + " (should be Active)";
+        const subscriptionKV = verdict.hasSubscriptionProduct
+          ? [
+              ["Has IWMAC subscription",   '<span style="color: var(--good);">Yes</span>'],
+              ["Product name",             verdict.subscriptionProduct?.productName || "—"],
+              ["Subscription status",      '<strong style="color: ' + subStatusBadgeColor + ';">' + escHtml(verdict.subscriptionStatus) + '</strong>'],
+              ["Expected status",          "Active"],
+              ["Start date",               fmtDateOnly(order?.effectiveStartDate)],
+              ["End date",                 fmtDateOnly(order?.effectiveEndDate)],
+              ["Cancellation date",        order?.cancellationDate ? fmtDateOnly(order.cancellationDate) : "—"],
+              ["Auto-renew",               order?.isAutoRenewed ? "Yes" : "No"],
+              ["Renewed",                  order?.isRenewed ? "Yes" : "No"],
+              ["Latest version",           order?.isLastVersion ? "Yes" : "No"],
+              ["Term (months)",            order?.term ?? "—"],
+              ["Customer / account",       order?.accountname || "—"],
+            ]
+          : [
+              ["Has IWMAC subscription",   '<span style="color: var(--muted);">No (no IWMAC Abonnement / Subscription product found in this order)</span>'],
+              ["Note",                     "This may be a one-time sale rather than a subscription order. No subscription status to check."],
+            ];
+
         const renderKV = (rows) =>
           '<dl class="youniumKV">' +
           rows
@@ -26992,6 +27136,14 @@
           '<div class="youniumSection">' +
             '<div class="youniumSectionTitle">Order / offer</div>' +
             renderKV(orderKV) +
+          '</div>' +
+          '<div class="youniumSection youniumSubSection">' +
+            '<div class="youniumSectionTitle">Subscription' +
+              (verdict.hasSubscriptionProduct
+                ? ' <span class="youniumSubBadge youniumSubBadge-' + (subActive ? "green" : "red") + '">' + escHtml(verdict.subscriptionStatus) + '</span>'
+                : ' <span class="youniumSubBadge youniumSubBadge-gray">none</span>') +
+            '</div>' +
+            renderKV(subscriptionKV) +
           '</div>';
 
         // Footer action buttons — show/hide based on what's available
