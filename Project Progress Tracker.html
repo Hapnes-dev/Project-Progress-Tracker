@@ -27105,11 +27105,19 @@
           forceCloseYouniumDialog("hint-click[" + ev.type + "]");
         }
       }
-      // Three event types × capture phase × document level. If ANY of
-      // these get through, the dialog closes.
+      // Three event types × capture phase × document AND window level.
+      // window listeners fire even higher in the propagation chain
+      // than document — if anything traps clicks before document
+      // capture, the window listener still gets them.
       document.addEventListener("click",         closeIfTargetIsCloseHint, true);
       document.addEventListener("mousedown",     closeIfTargetIsCloseHint, true);
       document.addEventListener("pointerdown",   closeIfTargetIsCloseHint, true);
+      window.addEventListener("click",           closeIfTargetIsCloseHint, true);
+      window.addEventListener("mousedown",       closeIfTargetIsCloseHint, true);
+      window.addEventListener("pointerdown",     closeIfTargetIsCloseHint, true);
+      window.addEventListener("mouseup",         closeIfTargetIsCloseHint, true);
+      window.addEventListener("pointerup",       closeIfTargetIsCloseHint, true);
+      window.addEventListener("touchend",        closeIfTargetIsCloseHint, true);
 
       // Backdrop click (target IS the dialog itself) — already works.
       els.dlgYouniumStatus?.addEventListener("click", (ev) => {
