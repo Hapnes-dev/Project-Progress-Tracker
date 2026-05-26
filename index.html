@@ -6671,7 +6671,8 @@
         <button class="btn" type="button" id="btnYouniumStatusRefresh">Refresh status</button>
         <button class="btn" type="button" id="btnYouniumStatusCopy">Copy summary</button>
         <a class="btn" id="btnYouniumStatusOpenOrder" target="_blank" rel="noopener noreferrer" style="display: none;">Open Younium order</a>
-        <a class="btn" id="btnYouniumStatusOpenSub" target="_blank" rel="noopener noreferrer" style="display: none;">Open subscription</a>
+        <a class="btn" id="btnYouniumStatusOpenYouniumSub" target="_blank" rel="noopener noreferrer" style="display: none;">Open Younium subscription</a>
+        <a class="btn" id="btnYouniumStatusOpenSub" target="_blank" rel="noopener noreferrer" style="display: none;">Open Oneflow subscription</a>
       </div>
     </dialog>
 
@@ -17923,6 +17924,7 @@
         btnYouniumStatusRefresh: document.getElementById("btnYouniumStatusRefresh"),
         btnYouniumStatusCopy: document.getElementById("btnYouniumStatusCopy"),
         btnYouniumStatusOpenOrder: document.getElementById("btnYouniumStatusOpenOrder"),
+        btnYouniumStatusOpenYouniumSub: document.getElementById("btnYouniumStatusOpenYouniumSub"),
         btnYouniumStatusOpenSub: document.getElementById("btnYouniumStatusOpenSub"),
         saveState: document.getElementById("saveState"),
         saveError: document.getElementById("saveError"),
@@ -27244,13 +27246,14 @@
           (subStatusEnum != null ? "status " + subStatusEnum : "—");
         const subscriptionKV = verdict.hasSubscriptionProduct
           ? [
+              ["Younium link",             subOrderLink
+                ? '<a href="' + escHtml(subOrderLink) + '" target="_blank" rel="noopener noreferrer">' + escHtml(subOrderLink) + '</a>' +
+                  (verdict.subscriptionOrderIsSeparate
+                    ? ' <span style="color: var(--muted2); font-size: 11px; font-style: italic;">(found via plant_id search — different from saved Younium link)</span>'
+                    : '')
+                : '<em style="color: var(--muted);">none</em>'],
               ["Has IWMAC subscription",   '<span style="color: var(--good);">Yes</span>'],
               ["Product name",             verdict.subscriptionProduct?.productName || "—"],
-              ["Subscription order",       verdict.subscriptionOrderIsSeparate
-                ? '<a href="' + escHtml(subOrderLink || "") + '" target="_blank" rel="noopener noreferrer">' +
-                  escHtml(subOrder?.orderNumber || subOrder?.id || "—") +
-                  '</a> <span style="color: var(--muted2); font-size: 11px; font-style: italic;">(found via plant_id search — different from saved Younium link)</span>'
-                : '<span style="color: var(--muted2); font-style: italic;">Same as the order above</span>'],
               ["Order number",             subOrder?.orderNumber
                 ? escHtml(String(subOrder.orderNumber))
                 : '<strong style="color: var(--bad);">— (no number assigned → Draft)</strong>'],
@@ -27314,6 +27317,17 @@
         } else {
           els.btnYouniumStatusOpenOrder.style.display = "none";
         }
+        // Younium subscription button — only show when the subscription
+        // order is a SEPARATE order from the saved primary (otherwise
+        // "Open Younium order" already points to it). Hides otherwise.
+        if (els.btnYouniumStatusOpenYouniumSub) {
+          if (subOrderLink && verdict.subscriptionOrderIsSeparate) {
+            els.btnYouniumStatusOpenYouniumSub.href = subOrderLink;
+            els.btnYouniumStatusOpenYouniumSub.style.display = "";
+          } else {
+            els.btnYouniumStatusOpenYouniumSub.style.display = "none";
+          }
+        }
         if (subLink) {
           els.btnYouniumStatusOpenSub.href = subLink;
           els.btnYouniumStatusOpenSub.style.display = "";
@@ -27347,6 +27361,7 @@
         els.dlgYouniumStatusBody.innerHTML =
           '<div style="padding: 24px; text-align: center; color: var(--muted); font-style: italic;">Checking Younium…</div>';
         if (els.btnYouniumStatusOpenOrder) els.btnYouniumStatusOpenOrder.style.display = "none";
+        if (els.btnYouniumStatusOpenYouniumSub) els.btnYouniumStatusOpenYouniumSub.style.display = "none";
         if (els.btnYouniumStatusOpenSub) els.btnYouniumStatusOpenSub.style.display = "none";
         if (els.dlgYouniumStatusTitle) {
           els.dlgYouniumStatusTitle.textContent = "Younium status details · " + p.name;
