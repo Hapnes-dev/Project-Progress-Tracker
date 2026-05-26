@@ -27400,7 +27400,6 @@
           ["Currency",                    orderCurrency],
           ["Created date",                fmtDate(order?.created)],
           ["Updated date",                fmtDate(order?.modified || order?.modifiedWithDependencies)],
-          ["Last changed",                lastChangeStr + ' <span style="color: var(--muted2); font-size: 11px; font-style: italic;">(' + escHtml(lastChangeSource) + ")</span>"],
           // Order audit-log attribution (bridge v1.9.11+). Filtered out
           // automatically by renderKV when no eventlog data is available.
           ["Created by",                  renderEvent(verdict.orderCreatedEvent)],
