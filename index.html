@@ -1746,6 +1746,23 @@
         color: var(--muted2);
         min-height: 14px;
       }
+      /* Small gray hint under each link field showing where its
+         currently-saved value came from: Internal Quality Control task,
+         HubSpot Deal Description fallback, or manual entry. Hidden when
+         the field is empty (no source to attribute). */
+      .linkSourceHint {
+        margin-top: 3px;
+        font-size: 10.5px;
+        color: var(--muted2);
+        font-style: italic;
+        line-height: 1.3;
+        min-height: 0;
+      }
+      .linkSourceHint:empty { display: none; }
+      .linkSourceHint::before {
+        content: "↳ ";
+        opacity: 0.7;
+      }
       .oneflowFindStatus.error { color: rgba(251, 113, 133, 0.95); }
       .oneflowFindStatus.success { color: rgba(52, 211, 153, 0.95); }
       /* Multi-match picker list — appears below the input when more than
@@ -6486,6 +6503,7 @@
               >🔎 Find</button>
             </div>
             <div class="oneflowFindStatus" id="oneflowFindStatus" aria-live="polite"></div>
+            <div class="linkSourceHint" id="fOneflowUrlSource"></div>
           </div>
           <div class="oneflowLinkBlock">
             <label class="small" for="fOneflowSubscriptionUrl">Oneflow link (Subscription agreement)</label>
@@ -6504,6 +6522,7 @@
               >🔎 Find</button>
             </div>
             <div class="oneflowFindStatus" id="oneflowSubscriptionFindStatus" aria-live="polite"></div>
+            <div class="linkSourceHint" id="fOneflowSubscriptionUrlSource"></div>
           </div>
           <div class="youniumLinkBlock">
             <label class="small" for="fYouniumUrl">Younium link</label>
@@ -6522,6 +6541,7 @@
               >🔎 Find</button>
             </div>
             <div class="oneflowFindStatus" id="youniumFindStatus" aria-live="polite"></div>
+            <div class="linkSourceHint" id="fYouniumUrlSource"></div>
           </div>
           <div class="hubspotLinkBlock">
             <label class="small" for="fHubspotUrl">HubSpot link</label>
@@ -6540,6 +6560,7 @@
               >🔎 Find</button>
             </div>
             <div class="oneflowFindStatus" id="hubspotFindStatus" aria-live="polite"></div>
+            <div class="linkSourceHint" id="fHubspotUrlSource"></div>
           </div>
           <div>
             <!-- Rocketlane link + projectId hidden from the UI — both are
@@ -16282,6 +16303,11 @@
           p.oneflowSubscriptionUrl = String(p.oneflowSubscriptionUrl ?? "");
           p.youniumUrl = String(p.youniumUrl ?? "");
           p.hubspotUrl = String(p.hubspotUrl ?? "");
+          // Per-field source attribution for the link hints in the
+          // Edit dialog. Defaults to {} so legacy projects show no
+          // hint until either the auto-fetch fills a slot OR the user
+          // manually edits one.
+          if (!p.linkSources || typeof p.linkSources !== "object") p.linkSources = {};
           // Clean up legacy persisted flags from older versions. These
           // were accidentally JSON.stringify'd into state and would
           // permanently block the auto-fetch from retrying. Session-only
@@ -17644,6 +17670,10 @@
         fOneflowSubscriptionUrl: document.getElementById("fOneflowSubscriptionUrl"),
         btnFindOneflowSubscription: document.getElementById("btnFindOneflowSubscription"),
         oneflowSubscriptionFindStatus: document.getElementById("oneflowSubscriptionFindStatus"),
+        fOneflowUrlSource: document.getElementById("fOneflowUrlSource"),
+        fOneflowSubscriptionUrlSource: document.getElementById("fOneflowSubscriptionUrlSource"),
+        fYouniumUrlSource: document.getElementById("fYouniumUrlSource"),
+        fHubspotUrlSource: document.getElementById("fHubspotUrlSource"),
         btnFindHubspot: document.getElementById("btnFindHubspot"),
         hubspotFindStatus: document.getElementById("hubspotFindStatus"),
         btnFindYounium: document.getElementById("btnFindYounium"),
@@ -18956,12 +18986,18 @@
                 } catch (_) {}
 
                 let changed = false;
+                // Initialize the per-field source map. We attribute every
+                // filled field so the dialog hint can show "Auto-filled
+                // from Internal Quality Control" / "Auto-filled from
+                // HubSpot Deal Description" later.
+                p.linkSources = p.linkSources || {};
                 const fill = (key, value, sourceLabel) => {
                   if (!value) return;
                   // Never overwrite a manually-saved value silently.
                   // (The auto-fetch only fills EMPTY slots.)
                   if (String(p[key] ?? "").trim()) return;
                   p[key] = value;
+                  p.linkSources[key] = sourceLabel; // "iqc" | "dealDescription"
                   changed = true;
                   try {
                     if (typeof window !== "undefined" && window.__matchDebug !== false) {
@@ -24086,6 +24122,10 @@
         els.fOverviewUrl.value = p.overviewUrl ?? "";
         if (els.fOneflowUrl) els.fOneflowUrl.value = p.oneflowUrl ?? "";
         if (els.fOneflowSubscriptionUrl) els.fOneflowSubscriptionUrl.value = p.oneflowSubscriptionUrl ?? "";
+        // Paint source attribution hints under each link field. Reads
+        // p.linkSources (persisted across reloads). Hint stays empty
+        // when the field is empty OR the source is unknown.
+        paintAllLinkSourceHints(p);
         // Clear any previous "🔎 Find" search status / picker when the
         // dialog is reopened for a different project.
         if (els.oneflowFindStatus) {
@@ -24132,7 +24172,29 @@
             els.fYouniumUrl, els.fHubspotUrl, els.fRocketlaneUrl,
           ].filter(Boolean);
           const touched = new WeakSet();
-          const markTouched = (ev) => touched.add(ev.currentTarget);
+          // Map from input element → the state key whose source should
+          // flip to "manual" when the user edits it.
+          const inputToStateKey = new Map([
+            [els.fOverviewUrl,             "overviewUrl"],
+            [els.fOneflowUrl,              "oneflowUrl"],
+            [els.fOneflowSubscriptionUrl,  "oneflowSubscriptionUrl"],
+            [els.fYouniumUrl,              "youniumUrl"],
+            [els.fHubspotUrl,              "hubspotUrl"],
+            [els.fRocketlaneUrl,           "rocketlaneUrl"],
+          ]);
+          const markTouched = (ev) => {
+            const input = ev.currentTarget;
+            touched.add(input);
+            // Flip the saved source attribution to "manual" so the
+            // hint updates the next time the dialog opens (and the
+            // current paint below).
+            const key = inputToStateKey.get(input);
+            if (key) {
+              p.linkSources = p.linkSources || {};
+              p.linkSources[key] = "manual";
+              paintAllLinkSourceHints(p);
+            }
+          };
           for (const input of linkInputs) {
             input.addEventListener("input", markTouched, { once: true });
           }
@@ -24173,17 +24235,28 @@
                 console.groupEnd();
               }
             } catch (_) {}
-            const fillEmpty = (input, value) => {
+            // Build a per-form source tracker so we can paint hints
+            // immediately after auto-fill, then commit to state on save.
+            const formSources = p.linkSources ? { ...p.linkSources } : {};
+            const fillEmptyTracked = (input, value, stateKey, sourceLabel) => {
               if (!input || !value) return;
               if (touched.has(input)) return; // user typed/deleted — respect their intent
-              if (!String(input.value || "").trim()) input.value = value;
+              if (String(input.value || "").trim()) return; // already has a value
+              input.value = value;
+              formSources[stateKey] = sourceLabel;
             };
-            fillEmpty(els.fOverviewUrl,             merged.zendesk);
-            fillEmpty(els.fOneflowUrl,              merged.oneflowOrder);
-            fillEmpty(els.fOneflowSubscriptionUrl,  merged.oneflowSubscription);
-            fillEmpty(els.fYouniumUrl,              merged.younium);
-            fillEmpty(els.fHubspotUrl,              merged.hubspot);
-            fillEmpty(els.fRocketlaneUrl,           merged.rocketlane);
+            fillEmptyTracked(els.fOverviewUrl,             merged.zendesk,             "overviewUrl",            sources.zendesk);
+            fillEmptyTracked(els.fOneflowUrl,              merged.oneflowOrder,        "oneflowUrl",             sources.oneflowOrder);
+            fillEmptyTracked(els.fOneflowSubscriptionUrl,  merged.oneflowSubscription, "oneflowSubscriptionUrl", sources.oneflowSubscription);
+            fillEmptyTracked(els.fYouniumUrl,              merged.younium,             "youniumUrl",             sources.younium);
+            fillEmptyTracked(els.fHubspotUrl,              merged.hubspot,             "hubspotUrl",             sources.hubspot);
+            fillEmptyTracked(els.fRocketlaneUrl,           merged.rocketlane,          "rocketlaneUrl",          sources.rocketlane);
+            // Stash the up-to-date sources on the project object — the
+            // save-on-submit handler reads this back. We don't write
+            // localStorage here (save happens on submit), but the UI
+            // hints reflect the new state immediately.
+            p.linkSources = formSources;
+            paintAllLinkSourceHints(p);
           }).catch((err) => {
             console.warn("[EditDialog] link fetch failed:", err);
           });
@@ -26665,6 +26738,39 @@
         }
       }
 
+      // ── Link source attribution hints (under each Edit-dialog input) ──
+      //
+      // Each link field has a small gray "↳ Auto-filled from Internal
+      // Quality Control" hint underneath. The source is persisted on
+      // p.linkSources so it survives reloads and shows on every Edit
+      // dialog open — not just immediately after auto-fetch.
+      //
+      // Values: "iqc" | "dealDescription" | "manual" | ""(absent).
+      const LINK_SOURCE_LABEL = {
+        iqc:             "Auto-filled from Internal Quality Control task",
+        dealDescription: "Auto-filled from HubSpot Deal Description",
+        manual:          "Manually entered",
+      };
+
+      function paintLinkSourceHint(hintEl, inputEl, source) {
+        if (!hintEl || !inputEl) return;
+        const hasValue = !!String(inputEl.value || "").trim();
+        if (!hasValue || !source) {
+          hintEl.textContent = "";
+          return;
+        }
+        hintEl.textContent = LINK_SOURCE_LABEL[source] || "";
+      }
+
+      function paintAllLinkSourceHints(p) {
+        if (!p) return;
+        const src = p.linkSources || {};
+        paintLinkSourceHint(els.fOneflowUrlSource,             els.fOneflowUrl,             src.oneflowUrl);
+        paintLinkSourceHint(els.fOneflowSubscriptionUrlSource, els.fOneflowSubscriptionUrl, src.oneflowSubscriptionUrl);
+        paintLinkSourceHint(els.fYouniumUrlSource,             els.fYouniumUrl,             src.youniumUrl);
+        paintLinkSourceHint(els.fHubspotUrlSource,             els.fHubspotUrl,             src.hubspotUrl);
+      }
+
       function refreshYouniumStatusButtonFaceForSelected() {
         const btn = els.btnYouniumStatus;
         if (!btn) return;
@@ -27383,6 +27489,14 @@
           p.hubspotUrl = hubspotUrl || "";
           p.rocketlaneUrl = rocketlaneUrl || "";
           p.rocketlaneProjectId = rocketlaneProjectId || "";
+          // Persist per-field source attribution (set by either the
+          // auto-fetch flow OR the markTouched handler when the user
+          // edited a link manually). Empty fields shouldn't claim a
+          // source — clear those out before saving.
+          p.linkSources = p.linkSources || {};
+          for (const key of ["overviewUrl", "oneflowUrl", "oneflowSubscriptionUrl", "youniumUrl", "hubspotUrl", "rocketlaneUrl"]) {
+            if (!String(p[key] || "").trim()) delete p.linkSources[key];
+          }
           // Keep existing notes unchanged (Notes field removed from dialog)
           touchProject(p.id);
           saveState(state);
