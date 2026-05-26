@@ -7028,6 +7028,16 @@
         const id = OWNER_TEAM_GROUP_LOOKUP.get(normalizeTeamMemberName(ownerKey));
         return id || "others";
       }
+      // Session-only sets that track the HubSpot Deal Description auto-
+      // fetch state per project. Intentionally NOT persisted to
+      // localStorage — every page reload resets so we always re-attempt
+      // the fetch once per session. Previously these were per-project
+      // properties (`p._autoLinkFetchTried`) which got JSON.stringify'd
+      // into state and permanently disabled re-fetching after the first
+      // attempt, even across browser restarts.
+      const autoLinkFetchInFlight = new Set();
+      const autoLinkFetchTriedThisSession = new Set();
+
       // Collapse state — persisted in localStorage so the choice survives
       // reloads. Default: everything expanded.
       const collapsedTeamGroups = (() => {
@@ -15648,6 +15658,13 @@
           p.oneflowSubscriptionUrl = String(p.oneflowSubscriptionUrl ?? "");
           p.youniumUrl = String(p.youniumUrl ?? "");
           p.hubspotUrl = String(p.hubspotUrl ?? "");
+          // Clean up legacy persisted flags from older versions. These
+          // were accidentally JSON.stringify'd into state and would
+          // permanently block the auto-fetch from retrying. Session-only
+          // Sets (autoLinkFetchTriedThisSession / autoLinkFetchInFlight)
+          // replace them.
+          delete p._autoLinkFetchTried;
+          delete p._autoLinkFetchInFlight;
           p.overviewNotes = p.overviewNotes ?? "";
           p.privateChat = p.privateChat ?? "";
           p.hideTasks = p.hideTasks === undefined ? true : !!p.hideTasks;
@@ -18229,17 +18246,28 @@
         if (els.detailDynamicLinks) {
           els.detailDynamicLinks.innerHTML = "";
           // If the project is synced with Rocketlane but local link fields
-          // are empty, kick off a one-time fetch of HubSpot Deal Description
-          // links and persist them into the project so the toolbar buttons
+          // are empty, fetch HubSpot Deal Description links from Rocketlane
+          // and persist them into the project state so the toolbar icons
           // appear without the user having to open + save the Edit dialog.
+          //
+          // Tracking is module-level (autoLinkFetchTriedThisSession +
+          // autoLinkFetchInFlight Sets — declared near the top of the
+          // script). Both reset on every page load so a previously-failed
+          // or empty fetch doesn't permanently block re-fetch on future
+          // sessions. Within a session, we only attempt once per project.
           const rlPid = String(p.rocketlaneProjectId ?? "").trim();
           const missingAny =
             !String(p.overviewUrl ?? "").trim() ||
             !String(p.oneflowUrl  ?? "").trim() ||
             !String(p.youniumUrl  ?? "").trim() ||
             !String(p.hubspotUrl  ?? "").trim();
-          if (rlPid && missingAny && !p._autoLinkFetchInFlight && !p._autoLinkFetchTried) {
-            p._autoLinkFetchInFlight = true;
+          if (
+            rlPid &&
+            missingAny &&
+            !autoLinkFetchInFlight.has(p.id) &&
+            !autoLinkFetchTriedThisSession.has(p.id)
+          ) {
+            autoLinkFetchInFlight.add(p.id);
             rocketlaneFetchHubspotDealDescription(rlPid)
               .then(({ links }) => {
                 let changed = false;
@@ -18256,14 +18284,17 @@
                 if (links.rocketlane) fill("rocketlaneUrl", links.rocketlane);
                 if (changed) {
                   save();
-                  // Re-render the detail view so the new buttons appear
+                  // Re-render so the toolbar icons appear immediately,
+                  // and also re-render the project LIST so list-view
+                  // affordances reflect the new state.
                   if (state.selectedProjectId === p.id) renderDetail();
+                  if (typeof renderList === "function") renderList();
                 }
               })
               .catch((err) => console.warn("[ProjectLinks] auto-fetch failed:", err))
               .finally(() => {
-                p._autoLinkFetchInFlight = false;
-                p._autoLinkFetchTried = true;
+                autoLinkFetchInFlight.delete(p.id);
+                autoLinkFetchTriedThisSession.add(p.id);
               });
           }
           const faviconFor = (host) =>
