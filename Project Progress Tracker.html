@@ -6320,6 +6320,10 @@
           <span class="chip" id="saveState" title="Data is saved to SQL when you click Sync now.">Saved to SQL</span>
           <button class="btn" id="btnSaveAsDataFile" type="button" title="Force immediate sync to SQL backend.">Sync now</button>
           <span class="chip" id="dataFileStatus" style="display: none;"></span>
+          <!-- btnYouniumStatus lives here at startup so the els cache
+               can find it; renderDetail() moves it into the project
+               meta row between the Updated and RL sync chips when a
+               project is selected. -->
           <button class="btn" id="btnYouniumStatus" type="button" title="Check Younium order + subscription status for the selected project">Younium: …</button>
           <button class="btn" id="btnImportCsv" type="button">Import CSV</button>
           <button class="btn primary" id="btnNew" type="button">+ New project</button>
@@ -19338,9 +19342,14 @@
         upd.textContent = "Updated: " + new Date(p.updatedAt).toLocaleString(UI_LOCALE);
         meta.appendChild(upd);
 
-        // (Younium status chip used to live here in the project meta
-        // row. It now lives in the top action bar — see els.btnYouniumStatus
-        // + setupYouniumStatusButton() near the bottom of the script.)
+        // Younium status chip lives BETWEEN the Updated chip and the
+        // RL sync chip. Element is created in HTML at the top action
+        // bar; we MOVE it here (appendChild detaches from old parent
+        // automatically). All event listeners on the button stay
+        // attached after the move.
+        if (els.btnYouniumStatus) {
+          meta.appendChild(els.btnYouniumStatus);
+        }
 
         const linkedRocketlaneProjectId = String(p.rocketlaneProjectId ?? "").trim();
         if (linkedRocketlaneProjectId) {
