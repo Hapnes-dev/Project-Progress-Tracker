@@ -1365,10 +1365,40 @@
         background: rgba(251, 113, 133, 0.08);
       }
 
+      /* RL sync chip — interactive clickable chip for triggering a
+         single-project Rocketlane sync. Matches the .tag sizing of
+         its meta-row neighbours (Partner / Owner / Updated / Younium)
+         and adds a sync-icon glyph + clear hover state since the chip
+         is clickable. The previous opacity:0.65 + 10px font was too
+         dim to spot. */
       .tag.rlSyncQuiet {
-        opacity: 0.65;
-        font-size: 10px;
-        padding: 3px 7px;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s, transform 0.05s;
+      }
+      .tag.rlSyncQuiet:hover {
+        filter: brightness(1.18);
+      }
+      .tag.rlSyncQuiet:active {
+        transform: scale(0.97);
+      }
+      /* Refresh glyph rendered via pseudo-element so we don't have to
+         change every JS callsite that sets textContent. The glyph
+         spins while a sync is in flight (the .warn modifier is
+         applied during sync). */
+      .tag.rlSyncQuiet::before {
+        content: "↻";
+        display: inline-block;
+        margin-right: 4px;
+        font-weight: 600;
+        font-size: 12px;
+        line-height: 1;
+      }
+      .tag.rlSyncQuiet.warn::before {
+        animation: rlSyncSpin 1s linear infinite;
+      }
+      @keyframes rlSyncSpin {
+        from { transform: rotate(0deg); }
+        to   { transform: rotate(360deg); }
       }
 
       .progress {
