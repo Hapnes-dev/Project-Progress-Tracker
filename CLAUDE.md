@@ -269,12 +269,30 @@ Each platform has a `xToMatchCandidate(rawApiResult)` function returning the com
 
 | Platform | Adapter | URL builder | Notes |
 |---|---|---|---|
-| Oneflow | `oneflowToMatchCandidate` | `oneflowDocumentUrl(id)` | Harvests `agreement_value.amount` + `currency`, `parties[].orgnr`, `parties[].email`, `parties[].participants[].email/fullname`. |
+| Oneflow | `oneflowToMatchCandidate` | `oneflowDocumentUrl(id)` | Harvests `agreement_value.amount` + `currency`, `parties[].orgnr`, `parties[].email`, `parties[].participants[].email/fullname`. Sets `oneflowKind: "order" \| "subscription"` via `classifyOneflowDocumentKind(name)` — names containing "Abonnementsavtale" or "Subscription agreement" classify as subscription. PrimaryText is prefixed with 📄 Order or 📑 Subscription. |
 | HubSpot | `hubspotToMatchCandidate` | `hubspotDealUrl(objectId)` (async — needs portalId from bridge) | Reads `properties.amount.value` AND `properties.amount.unit` (currency). closedate/createdate are epoch-ms strings → converted to ISO. |
 | Younium (orders) | `youniumToMatchCandidate` | `youniumOrderUrl(id)` (async — needs region from bridge) | Hard-filters by exact `plant_id` (search returns false positives like `O-013299` for query `3299`). Money picks `totalContractValue` > `annualContractValue` > `mrr`. `recordType: "order"`. |
 | Younium (quotes) | `youniumToQuoteMatchCandidate` | `youniumQuoteUrl(id)` (async) | Quotes use `/api/data/query/quote` (entity `"quote"`). Many quotes have **empty `plant_id`** even when matching — promoting a quote to an order is what fills it. Loose filter: accept on plant_id exact OR plant_name/accountName token overlap with project name OR plant ID literal in description/remarks. `recordType: "quote"`. Picker label prefixed with 📄 to distinguish from orders. |
 
 The legacy `oneflowMatchScore` / `hubspotMatchScore` functions still exist as **thin shims** over the shared scorer so `window.__of.score` / `window.__hs.score` DevTools diagnostics keep working.
+
+#### Two-slot Oneflow (Order/offer vs Subscription agreement)
+
+Each project has **two** Oneflow link fields, not one:
+
+| Project field (state) | Form input ID | Find button | Status element |
+|---|---|---|---|
+| `oneflowUrl` | `fOneflowUrl` | `btnFindOneflow` | `oneflowFindStatus` |
+| `oneflowSubscriptionUrl` | `fOneflowSubscriptionUrl` | `btnFindOneflowSubscription` | `oneflowSubscriptionFindStatus` |
+
+A single `findOneflowDocumentForEditDialog(opts)` powers both buttons via `opts.wantKind` (`"order"` or `"subscription"`). Scoring adjustment:
+
+- Candidate kind matches the request → +6 ("Matches requested kind")
+- Candidate kind is wrong → **–25** ("Wrong document kind")
+
+So a perfect-on-everything subscription document scored against the Order/offer slot drops by 25 percentage points — usually below the 85% auto-fill threshold and demoted in the picker, while still visible for manual override.
+
+The state schema migration adds `p.oneflowSubscriptionUrl` (default `""`). The HubSpot Deal Description push (`buildProjectLinksHtml`) now writes BOTH Oneflow URLs back to Rocketlane as separate `Oneflow (Order): <url>` and `Oneflow (Subscription): <url>` lines. The project-info link toolbar shows separate favicon-buttons "Oneflow (Order)" and "Oneflow (Subscription)".
 
 #### Real cross-platform values (plant 3299, captured via Playwright)
 

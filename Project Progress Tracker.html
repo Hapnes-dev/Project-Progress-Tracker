@@ -6264,22 +6264,40 @@
                it's parsed back into this hidden value on save. -->
           <input type="hidden" id="fOverviewUrl" />
           <div class="oneflowLinkBlock">
-            <label class="small" for="fOneflowUrl">Oneflow link</label>
+            <label class="small" for="fOneflowUrl">Oneflow link (Order / offer)</label>
             <div class="oneflowFindRow">
               <input
                 class="input"
                 id="fOneflowUrl"
-                placeholder="Paste Oneflow link (or keep empty)"
+                placeholder="Paste Oneflow Order / offer link (or keep empty)"
                 inputmode="url"
               />
               <button
                 type="button"
                 class="btn oneflowFindBtn"
                 id="btnFindOneflow"
-                title="Search Oneflow for a contract matching this project (plant ID + name)"
+                title="Search Oneflow for an Order/offer matching this project (plant ID + name). Subscription-named docs are de-prioritized."
               >🔎 Find</button>
             </div>
             <div class="oneflowFindStatus" id="oneflowFindStatus" aria-live="polite"></div>
+          </div>
+          <div class="oneflowLinkBlock">
+            <label class="small" for="fOneflowSubscriptionUrl">Oneflow link (Subscription agreement)</label>
+            <div class="oneflowFindRow">
+              <input
+                class="input"
+                id="fOneflowSubscriptionUrl"
+                placeholder="Paste Oneflow Subscription agreement link (or keep empty)"
+                inputmode="url"
+              />
+              <button
+                type="button"
+                class="btn oneflowFindBtn"
+                id="btnFindOneflowSubscription"
+                title="Search Oneflow for a Subscription agreement (e.g. 'Abonnementsavtale') matching this project"
+              >🔎 Find</button>
+            </div>
+            <div class="oneflowFindStatus" id="oneflowSubscriptionFindStatus" aria-live="polite"></div>
           </div>
           <div class="youniumLinkBlock">
             <label class="small" for="fYouniumUrl">Younium link</label>
@@ -8894,6 +8912,26 @@
       };
 
       /**
+       * Classify an Oneflow agreement as Order/offer vs. Subscription
+       * by name pattern. Verified via Playwright across plant 2511,
+       * 3299, 4728 docs: subscriptions in this tenant always have
+       * "Abonnementsavtale" (Norwegian for "Subscription agreement")
+       * in the name, while orders/offers do not. English "Subscription
+       * agreement" is also accepted as a fallback for non-Norwegian
+       * usages.
+       *
+       * Returns "subscription" or "order".
+       */
+      function classifyOneflowDocumentKind(name) {
+        const n = matchNormalize(name);
+        if (!n) return "order";
+        if (/\babonnementsavtale\b|\bsubscription agreement\b|\bsubscription\b/i.test(n)) {
+          return "subscription";
+        }
+        return "order";
+      }
+
+      /**
        * Map an Oneflow agreement (raw API response) to the shared
        * Candidate shape consumed by scoreMatchCandidate.
        *
@@ -8932,10 +8970,14 @@
         // Prefer signed/start time over created — better reflects
         // "when this matched a project".
         const date = a?.sign_time ?? a?.start_time ?? a?.created_time ?? a?.updated_time ?? null;
+        const kind = classifyOneflowDocumentKind(a?.name);
+        const kindBadge = kind === "subscription" ? "📑 Subscription · " : "📄 Order · ";
         return {
           id: a?.id,
           platform: "oneflow",
-          primaryText: String(a?.name ?? "").trim() || "(no name)",
+          // Show kind badge inline so the picker visually separates
+          // Order/offer from Subscription rows.
+          primaryText: kindBadge + (String(a?.name ?? "").trim() || "(no name)"),
           secondaryText: stateLabel + (partyNames.length ? " · " + partyNames.join(", ") : ""),
           matchableTexts: [a?.name, ...partyNames].filter(Boolean),
           partyNames,
@@ -8948,6 +8990,7 @@
           date,
           amount: Number.isFinite(amount) && amount > 0 ? amount : null,
           currency,
+          oneflowKind: kind, // "subscription" | "order"
           raw: a,
         };
       }
@@ -8970,13 +9013,24 @@
        * edited. Reads form fields live (no save required). Uses the
        * shared scoring framework, so the auto-fill threshold and picker
        * layout match Younium / HubSpot exactly.
+       *
+       * @param {{ wantKind?: "order" | "subscription" }} [opts]
+       *   When wantKind is set, candidates of the opposite kind are
+       *   penalized (-25 pts, breakdown shows "Wrong document kind").
+       *   Same-kind candidates get +6 ("Matches requested kind"). The
+       *   target input field is picked by wantKind as well — order
+       *   → fOneflowUrl, subscription → fOneflowSubscriptionUrl.
        */
-      async function findOneflowDocumentForEditDialog() {
-        const statusEl = els?.oneflowFindStatus;
-        const inputEl = els?.fOneflowUrl;
+      async function findOneflowDocumentForEditDialog(opts) {
+        const wantKind = opts?.wantKind === "subscription" ? "subscription" : "order";
+        const isSubscription = wantKind === "subscription";
+        const statusEl = isSubscription ? els?.oneflowSubscriptionFindStatus : els?.oneflowFindStatus;
+        const inputEl  = isSubscription ? els?.fOneflowSubscriptionUrl       : els?.fOneflowUrl;
         if (!statusEl || !inputEl) return;
         statusEl.className = "oneflowFindStatus";
-        statusEl.textContent = "Searching Oneflow…";
+        statusEl.textContent = isSubscription
+          ? "Searching Oneflow subscription agreements…"
+          : "Searching Oneflow order/offer documents…";
         const oldPicker = statusEl.parentElement?.querySelector(".oneflowFindPicker");
         if (oldPicker) oldPicker.remove();
 
@@ -9042,18 +9096,63 @@
           return;
         }
 
-        // Map → score → sort. Shared framework handles all of this.
+        // Map → score → sort. Shared framework handles all of this,
+        // then we adjust per-candidate based on the requested kind
+        // (Order/offer vs Subscription agreement). The classifier on
+        // oneflowToMatchCandidate already tagged each as .oneflowKind.
         const scored = results
           .map((a) => {
             const candidate = oneflowToMatchCandidate(a);
             const { score, percent, signals } = scoreMatchCandidate(candidate, ctx);
-            return { candidate, score, percent, signals };
+            // Kind-aware adjustment — only meaningful when the user
+            // asked for a specific kind via the dedicated Find button.
+            const kindMatch = candidate.oneflowKind === wantKind;
+            const adjustedSignals = signals.slice();
+            let adjustedScore = score;
+            if (kindMatch) {
+              adjustedSignals.push({
+                label: "Matches requested kind (" + wantKind + ")",
+                points: 6,
+              });
+              adjustedScore += 6;
+            } else {
+              adjustedSignals.push({
+                label: "Wrong document kind (got " + candidate.oneflowKind + ", want " + wantKind + ")",
+                points: -25,
+              });
+              adjustedScore -= 25;
+            }
+            return {
+              candidate,
+              score: adjustedScore,
+              percent: Math.min(100, Math.max(0, Math.round(adjustedScore))),
+              signals: adjustedSignals,
+            };
           })
           .sort((x, y) => y.percent - x.percent || y.score - x.score);
 
+        // Existing-link mismatch only fires for the *correct* slot's
+        // currently-saved URL — we don't want the subscription-slot
+        // mismatch warning when the user is finding for the order
+        // slot. Use the per-slot field reference.
+        const existingForSlot = isSubscription
+          ? String(els?.fOneflowSubscriptionUrl?.value || "").trim()
+          : String(els?.fOneflowUrl?.value || "").trim();
+        let warning = null;
+        if (existingForSlot) {
+          const classified = classifyLinkUrl(existingForSlot);
+          if (!classified) {
+            warning = { kind: "orphan", message: "Saved link couldn't be parsed.", savedUrl: existingForSlot };
+          } else if (classified.platform !== "oneflow") {
+            warning = {
+              kind: "wrongPlatform",
+              message: "Saved " + (isSubscription ? "subscription" : "order/offer") + " link points to " + classified.platform + ".",
+              savedUrl: existingForSlot,
+            };
+          }
+        }
         const decision = decideMatchOutcome(scored);
-        const warning = detectExistingLinkMismatch("oneflow", ctx);
-        debugLogMatch("Oneflow", ctx, scored, decision, warning);
+        debugLogMatch("Oneflow " + wantKind, ctx, scored, decision, warning);
 
         // Never auto-overwrite a saved link when we detected a
         // mismatch — show the picker so the user makes the call.
@@ -9090,7 +9189,12 @@
         if (!t) return;
         if (t.id === "btnFindOneflow" || t.closest?.("#btnFindOneflow")) {
           e.preventDefault();
-          void findOneflowDocumentForEditDialog();
+          void findOneflowDocumentForEditDialog({ wantKind: "order" });
+          return;
+        }
+        if (t.id === "btnFindOneflowSubscription" || t.closest?.("#btnFindOneflowSubscription")) {
+          e.preventDefault();
+          void findOneflowDocumentForEditDialog({ wantKind: "subscription" });
         }
       });
 
@@ -10893,9 +10997,10 @@
         // section), and Rocketlane viewing this field already has its own
         // project URL — a self-link would just be noise.
         const rows = [
-          ["Oneflow", links.oneflow],
-          ["Younium", links.younium],
-          ["HubSpot", links.hubspot],
+          ["Oneflow (Order)",        links.oneflow],
+          ["Oneflow (Subscription)", links.oneflowSubscription],
+          ["Younium",                links.younium],
+          ["HubSpot",                links.hubspot],
         ].filter(([, url]) => url && /^https?:/i.test(url));
         if (!rows.length) return "";
         const esc = (s) => String(s)
@@ -15540,6 +15645,7 @@
           p.owner = p.owner ?? "";
         // Do not auto-create default categories on load.
           p.oneflowUrl = String(p.oneflowUrl ?? "");
+          p.oneflowSubscriptionUrl = String(p.oneflowSubscriptionUrl ?? "");
           p.youniumUrl = String(p.youniumUrl ?? "");
           p.hubspotUrl = String(p.hubspotUrl ?? "");
           p.overviewNotes = p.overviewNotes ?? "";
@@ -16884,6 +16990,9 @@
         fOneflowUrl: document.getElementById("fOneflowUrl"),
         btnFindOneflow: document.getElementById("btnFindOneflow"),
         oneflowFindStatus: document.getElementById("oneflowFindStatus"),
+        fOneflowSubscriptionUrl: document.getElementById("fOneflowSubscriptionUrl"),
+        btnFindOneflowSubscription: document.getElementById("btnFindOneflowSubscription"),
+        oneflowSubscriptionFindStatus: document.getElementById("oneflowSubscriptionFindStatus"),
         btnFindHubspot: document.getElementById("btnFindHubspot"),
         hubspotFindStatus: document.getElementById("hubspotFindStatus"),
         btnFindYounium: document.getElementById("btnFindYounium"),
@@ -18165,7 +18274,8 @@
           // third-party services.
           const linkDefs = [
             { url: p.overviewUrl,    icon: faviconFor("zendesk.com"),    label: "Zendesk" },
-            { url: p.oneflowUrl,     icon: faviconFor("oneflow.com"),    label: "Oneflow" },
+            { url: p.oneflowUrl,     icon: faviconFor("oneflow.com"),    label: "Oneflow (Order)" },
+            { url: p.oneflowSubscriptionUrl, icon: faviconFor("oneflow.com"), label: "Oneflow (Subscription)" },
             { url: p.youniumUrl,     icon: faviconFor("younium.com"),    label: "Younium" },
             { url: p.hubspotUrl,     icon: faviconFor("hubspot.com"),    label: "HubSpot" },
           ];
@@ -23228,6 +23338,7 @@
         els.fDue.value = "";
         els.fOverviewUrl.value = "";
         if (els.fOneflowUrl) els.fOneflowUrl.value = "";
+        if (els.fOneflowSubscriptionUrl) els.fOneflowSubscriptionUrl.value = "";
         if (els.fYouniumUrl) els.fYouniumUrl.value = "";
         if (els.fHubspotUrl) els.fHubspotUrl.value = "";
         els.fRocketlaneUrl.value = "";
@@ -23249,12 +23360,19 @@
         els.fDue.value = p.due ?? "";
         els.fOverviewUrl.value = p.overviewUrl ?? "";
         if (els.fOneflowUrl) els.fOneflowUrl.value = p.oneflowUrl ?? "";
+        if (els.fOneflowSubscriptionUrl) els.fOneflowSubscriptionUrl.value = p.oneflowSubscriptionUrl ?? "";
         // Clear any previous "🔎 Find" search status / picker when the
         // dialog is reopened for a different project.
         if (els.oneflowFindStatus) {
           els.oneflowFindStatus.className = "oneflowFindStatus";
           els.oneflowFindStatus.textContent = "";
           const stalePicker = els.oneflowFindStatus.parentElement?.querySelector(".oneflowFindPicker");
+          if (stalePicker) stalePicker.remove();
+        }
+        if (els.oneflowSubscriptionFindStatus) {
+          els.oneflowSubscriptionFindStatus.className = "oneflowFindStatus";
+          els.oneflowSubscriptionFindStatus.textContent = "";
+          const stalePicker = els.oneflowSubscriptionFindStatus.parentElement?.querySelector(".oneflowFindPicker");
           if (stalePicker) stalePicker.remove();
         }
         if (els.hubspotFindStatus) {
@@ -23285,8 +23403,8 @@
         const rlPid = String(p.rocketlaneProjectId ?? "").trim();
         if (rlPid) {
           const linkInputs = [
-            els.fOverviewUrl, els.fOneflowUrl, els.fYouniumUrl,
-            els.fHubspotUrl, els.fRocketlaneUrl,
+            els.fOverviewUrl, els.fOneflowUrl, els.fOneflowSubscriptionUrl,
+            els.fYouniumUrl, els.fHubspotUrl, els.fRocketlaneUrl,
           ].filter(Boolean);
           const touched = new WeakSet();
           const markTouched = (ev) => touched.add(ev.currentTarget);
@@ -25997,6 +26115,7 @@
         const due = els.fDue.value;
         const overviewUrl = els.fOverviewUrl.value.trim();
         const oneflowUrl = (els.fOneflowUrl?.value ?? "").trim();
+        const oneflowSubscriptionUrl = (els.fOneflowSubscriptionUrl?.value ?? "").trim();
         const youniumUrl = (els.fYouniumUrl?.value ?? "").trim();
         const hubspotUrl = (els.fHubspotUrl?.value ?? "").trim();
         const rocketlaneProjectId = (els.fRocketlaneProjectId?.value ?? "").trim();
@@ -26019,6 +26138,7 @@
             notes: "",
             overviewUrl: overviewUrl || "",
             oneflowUrl: oneflowUrl || "",
+            oneflowSubscriptionUrl: oneflowSubscriptionUrl || "",
             youniumUrl: youniumUrl || "",
             hubspotUrl: hubspotUrl || "",
             rocketlaneUrl: rocketlaneUrl || "",
@@ -26054,6 +26174,7 @@
           p.due = due || "";
           p.overviewUrl = overviewUrl || "";
           p.oneflowUrl = oneflowUrl || "";
+          p.oneflowSubscriptionUrl = oneflowSubscriptionUrl || "";
           p.youniumUrl = youniumUrl || "";
           p.hubspotUrl = hubspotUrl || "";
           p.rocketlaneUrl = rocketlaneUrl || "";
@@ -26079,11 +26200,12 @@
                   return;
                 }
                 const html = buildProjectLinksHtml({
-                  zendesk:    p.overviewUrl,
-                  oneflow:    p.oneflowUrl,
-                  younium:    p.youniumUrl,
-                  hubspot:    p.hubspotUrl,
-                  rocketlane: p.rocketlaneUrl,
+                  zendesk:             p.overviewUrl,
+                  oneflow:             p.oneflowUrl,
+                  oneflowSubscription: p.oneflowSubscriptionUrl,
+                  younium:             p.youniumUrl,
+                  hubspot:             p.hubspotUrl,
+                  rocketlane:          p.rocketlaneUrl,
                 });
                 await rocketlaneUpdateHubspotDealDescription(p.rocketlaneProjectId, current.fieldId, html);
                 console.log("[DealDescription] pushed to Rocketlane:", html);
