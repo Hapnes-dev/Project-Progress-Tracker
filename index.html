@@ -27400,7 +27400,6 @@
               ["Order number",             subOrder?.orderNumber
                 ? escHtml(String(subOrder.orderNumber))
                 : '<strong style="color: var(--bad);">— (no number assigned → Draft)</strong>'],
-              ["Order name",               subOrder?.description || subOrder?.orderNumber || "—"],
               ["Subscription status",      '<strong style="color: ' + subStatusBadgeColor + ';">' + escHtml(verdict.subscriptionStatus) + '</strong>'],
               ["Expected status",          "Active"],
               ["Start date",               fmtDateOnly(subOrder?.effectiveStartDate)],
