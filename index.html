@@ -10031,6 +10031,51 @@
         catch (e) { console.warn("[Younium status] quote fetch failed:", e); return null; }
       }
 
+      /**
+       * Fetch the audit / timeline event log for a Younium order.
+       * Verified endpoint: GET /api/eventlog/order/id/{id}.
+       * Requires bridge userscript v1.9.11+. Returns an array of
+       * events (or empty if anything fails — never throws).
+       */
+      async function youniumFetchOrderEventLog(id) {
+        const bridge = window.YouniumBridge;
+        if (!bridge?.getOrderEventLog) return [];
+        try { return await bridge.getOrderEventLog(id); }
+        catch (e) { console.warn("[Younium status] eventlog fetch failed:", e); return []; }
+      }
+
+      /**
+       * Pick the latest event from a Younium eventlog response and
+       * extract its user + timestamp + description. Defensive about
+       * field names since we haven't seen the response shape directly
+       * (the page's Bearer token blocked our direct inspection).
+       *
+       * Expected entry fields (best-effort, falls back gracefully):
+       *   timestamp / createdDate / eventDate / created / when
+       *   userEmail / email / userDisplayName / userName / user
+       *   description / message / event / type
+       */
+      function extractLatestEvent(events) {
+        if (!Array.isArray(events) || events.length === 0) return null;
+        const getTs = (e) =>
+          Date.parse(e?.timestamp || e?.createdDate || e?.eventDate ||
+                     e?.created || e?.when || e?.date || "") || 0;
+        // Sort descending by timestamp — most recent first.
+        const sorted = events.slice().sort((a, b) => getTs(b) - getTs(a));
+        const top = sorted[0];
+        if (!top) return null;
+        return {
+          timestamp: top.timestamp || top.createdDate || top.eventDate ||
+                     top.created || top.when || top.date || null,
+          user: top.userEmail || top.email || top.userDisplayName ||
+                top.userName || top.user || top.modifiedByUserDisplayName ||
+                top.modifiedBy || null,
+          description: top.description || top.message || top.event ||
+                       top.type || top.eventType || null,
+          raw: top,
+        };
+      }
+
       // Map invoice.status numeric → label. Status 3 was "posted/paid"
       // in samples; 0/1/2 are typically draft/posted-but-unpaid stages.
       const YOUNIUM_INVOICE_STATUS_LABEL = {
@@ -10167,6 +10212,24 @@
         out.hasSubscriptionProduct = !!subMatch;
         out.subscriptionOrder = subscriptionOrder;
         out.subscriptionOrderIsSeparate = subscriptionOrderIsSeparate;
+
+        // Fetch the eventlog (timeline) for the subscription order so we
+        // can show 'Last updated by' on the modal. Bridge v1.9.11+.
+        // Fails silently if older bridge — non-fatal.
+        if (subscriptionOrder?.id) {
+          try {
+            const events = await youniumFetchOrderEventLog(subscriptionOrder.id);
+            out.raw.subscriptionEventLog = events;
+            out.subscriptionLatestEvent = extractLatestEvent(events);
+            dbg("subscription eventlog:", {
+              orderId: subscriptionOrder.id,
+              eventCount: events.length,
+              latestEvent: out.subscriptionLatestEvent,
+            });
+          } catch (e) {
+            dbg("subscription eventlog fetch failed:", e);
+          }
+        }
         dbg("order:", {
           orderNumber: order.orderNumber, status: order.status,
           effectiveStartDate: order.effectiveStartDate,
@@ -27294,12 +27357,25 @@
               ["Term (months)",            subOrder?.term ?? "—"],
               ["Created date",             fmtDate(subOrder?.created)],
               ["Updated date",             fmtDate(subOrder?.modified || subOrder?.modifiedWithDependencies)],
-              // 'Last updated by' isn't on /api/order/{id}. Younium's
-              // timeline panel pulls it from a separate (still-undiscovered)
-              // endpoint. Keep a placeholder row IF any candidate field
-              // is populated, but hide entirely when all are empty so
-              // we don't render a useless '—'.
+              // 'Last updated by' from the eventlog endpoint (bridge
+              // v1.9.11+). When the timeline returns events, show the
+              // most recent event's user. Falls back to the order
+              // payload's modifiedBy* fields if eventlog isn't available.
               ...(function () {
+                const ev = verdict.subscriptionLatestEvent;
+                if (ev && ev.user) {
+                  let val = escHtml(String(ev.user));
+                  if (ev.timestamp) {
+                    val += ' <span style="color: var(--muted2); font-size: 11px; font-style: italic;">on ' +
+                           escHtml(new Date(ev.timestamp).toLocaleString(UI_LOCALE)) + '</span>';
+                  }
+                  if (ev.description) {
+                    val += '<br><span style="color: var(--muted); font-size: 11px;">' +
+                           escHtml(String(ev.description)) + '</span>';
+                  }
+                  return [["Last updated by", val]];
+                }
+                // Fall back to direct order fields (rarely populated).
                 const v = subOrder?.modifiedByUserDisplayName ||
                   subOrder?.modifiedByDisplayName ||
                   subOrder?.modifiedByUser ||

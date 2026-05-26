@@ -1,14 +1,21 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.8.1
-// @description  Bridges Rocketlane chat API to the local Project Progress Tracker, bypassing CORS.
+// @version      1.9.11
+// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS.
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
 // @supportURL   https://github.com/Hapnes-dev/Project-Progress-Tracker/issues
 // @updateURL    https://raw.githubusercontent.com/hapnes-dev/tampermonkey-scripts/main/rocketlane-chat-bridge/rocketlane-chat-bridge.user.js
 // @downloadURL  https://raw.githubusercontent.com/hapnes-dev/tampermonkey-scripts/main/rocketlane-chat-bridge/rocketlane-chat-bridge.user.js
 // @match        https://kiona.rocketlane.com/*
+// @match        https://iwmac.zendesk.com/*
+// @match        https://app.oneflow.com/*
+// @match        https://app.hubspot.com/*
+// @match        https://app-eu1.hubspot.com/*
+// @match        https://eu.younium.com/*
+// @match        https://us.younium.com/*
+// @match        https://app.younium.com/*
 // @match        file:///*
 // @match        https://hapnes-dev.github.io/Project-Progress-Tracker/*
 // @grant        GM_xmlhttpRequest
@@ -16,6 +23,13 @@
 // @grant        GM_getValue
 // @grant        unsafeWindow
 // @connect      kiona.api.rocketlane.com
+// @connect      iwmac.zendesk.com
+// @connect      app.oneflow.com
+// @connect      app.hubspot.com
+// @connect      app-eu1.hubspot.com
+// @connect      auth.eu.younium.com
+// @connect      auth.us.younium.com
+// @connect      api.younium.com
 // @connect      s3.us-east-1.amazonaws.com
 // @connect      s3.amazonaws.com
 // @connect      amazonaws.com
@@ -29,6 +43,35 @@
   "use strict";
 
   const TENANT_API = "https://kiona.api.rocketlane.com/api/v1";
+  // Zendesk lives at the subdomain root; the API is mounted at /api/v2
+  // and authenticates via the user's session cookie (set when they're
+  // logged into iwmac.zendesk.com in a normal browser tab). We don't
+  // capture or store any token — GM_xmlhttpRequest automatically
+  // includes cookies for the request URL's origin, so the same session
+  // the user already has is reused for tracker calls.
+  const ZENDESK_HOST = "https://iwmac.zendesk.com";
+  const ZENDESK_API  = ZENDESK_HOST + "/api/v2";
+  // Oneflow uses session cookies (HttpOnly) for auth and a NON-HttpOnly
+  // `xsrf-token` cookie for CSRF on non-GET requests (Spring/Laravel
+  // double-submit pattern). The userscript on app.oneflow.com pages
+  // reads the cookie value into GM storage; the bridge attaches it as
+  // X-XSRF-Token automatically on writes.
+  const ONEFLOW_HOST = "https://app.oneflow.com";
+  const ONEFLOW_API  = ONEFLOW_HOST + "/api";
+  // HubSpot has two regional hublets — US (app.hubspot.com) and EU
+  // (app-eu1.hubspot.com). The captured host below tracks which one the
+  // user is logged into so the bridge calls the right region.
+  // Every API call requires portalId in the query string + csrf header
+  // from the `hubspotapi-csrf` cookie. CSRF + portal are captured on
+  // hubspot pages and stored in GM storage.
+
+  // Younium uses Frontegg auth — no token is stored anywhere readable
+  // by JS. Instead, the bridge mints a fresh access token on demand by
+  // POSTing to /frontegg/.../token/refresh with the HttpOnly refresh
+  // cookie. The minted access token is a 24h JWT that we cache in GM
+  // storage with an expiry timestamp. On API calls, we use it as a
+  // Bearer token against api.younium.com.
+  const YOUNIUM_API = "https://api.younium.com";
 
   // ──────────────────────────────────────────────────────────────────────────
   // Side A — On Rocketlane: capture the api-key from localStorage.
@@ -67,6 +110,140 @@
     // Refresh every 5 minutes in case the api-key rotates while the tab is open.
     setInterval(captureNow, 5 * 60 * 1000);
     return; // don't run the bridge side
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Side A2 — On Zendesk: capture the CSRF token from the meta tag.
+  // The session cookie is sent automatically by the browser, but state-
+  // changing requests (POST/PUT/PATCH/DELETE) also require the CSRF token
+  // in the X-CSRF-Token header. We grab it from the meta tag and store it
+  // in GM storage so the bridge can attach it on the tracker side.
+  // ──────────────────────────────────────────────────────────────────────────
+  if (location.hostname.endsWith("iwmac.zendesk.com")) {
+    function captureZendeskCsrf() {
+      try {
+        const meta = document.querySelector('meta[name="csrf-token"]');
+        const token = meta && meta.getAttribute("content");
+        if (token && token !== GM_getValue("zdCsrfToken", "")) {
+          GM_setValue("zdCsrfToken", token);
+          GM_setValue("zdCsrfCapturedAt", Date.now());
+          return true;
+        }
+      } catch (_) {}
+      return false;
+    }
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", captureZendeskCsrf);
+    } else {
+      captureZendeskCsrf();
+    }
+    // Refresh every minute — the token can rotate when Zendesk renews
+    // the session. Cheap to read a meta tag.
+    setInterval(captureZendeskCsrf, 60 * 1000);
+    return; // don't run the bridge side here either
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Side A3 — On Oneflow: capture the xsrf-token cookie value.
+  // The session cookie is HttpOnly (browser handles it) but Oneflow uses
+  // the double-submit-cookie CSRF pattern: a NON-HttpOnly `xsrf-token`
+  // cookie whose value must be echoed as the `X-XSRF-Token` header on
+  // POST/PUT/PATCH/DELETE. We read the value via document.cookie and
+  // stash it for the bridge to attach.
+  // ──────────────────────────────────────────────────────────────────────────
+  if (location.hostname === "app.oneflow.com") {
+    function captureOneflowXsrf() {
+      try {
+        const raw = document.cookie || "";
+        const entry = raw.split(";").map((s) => s.trim()).find((s) => s.startsWith("xsrf-token="));
+        if (!entry) return false;
+        const value = decodeURIComponent(entry.slice("xsrf-token=".length));
+        if (value && value !== GM_getValue("ofXsrfToken", "")) {
+          GM_setValue("ofXsrfToken", value);
+          GM_setValue("ofXsrfCapturedAt", Date.now());
+          return true;
+        }
+      } catch (_) {}
+      return false;
+    }
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", captureOneflowXsrf);
+    } else {
+      captureOneflowXsrf();
+    }
+    // Refresh every 60s — Oneflow rotates the token periodically and
+    // we want the bridge to have a fresh value when writes happen.
+    setInterval(captureOneflowXsrf, 60 * 1000);
+    return; // don't run the bridge side here
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Side A4 — On HubSpot: capture the hublet host + portal ID + CSRF token.
+  // HubSpot has TWO regional hublets (app.hubspot.com / app-eu1.hubspot.com)
+  // and every internal API call needs:
+  //   • The right hublet host (so requests reach the user's region)
+  //   • portalId query param (extracted from the URL — most paths embed it)
+  //   • hubspotapi-csrf cookie value, echoed as X-HubSpot-CSRF-hubspotapi
+  // The session cookie is HttpOnly so the browser handles it.
+  // ──────────────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────────────
+  // Side A5 — On Younium: remember the hublet region (eu / us).
+  // Younium's API host is api.younium.com (global) but the AUTH host is
+  // region-specific (auth.eu.younium.com vs auth.us.younium.com). We
+  // capture which region the user is in so the bridge can call the
+  // right refresh endpoint.
+  // No token is captured here — the bridge mints one on demand from
+  // the HttpOnly refresh cookie when it needs to call api.younium.com.
+  // ──────────────────────────────────────────────────────────────────────────
+  if (/(?:^|\.)younium\.com$/i.test(location.hostname)) {
+    try {
+      // eu.younium.com → "eu", us.younium.com → "us", app.younium.com → unknown
+      const m = location.hostname.match(/^(eu|us)\.younium\.com$/i);
+      if (m) {
+        const region = m[1].toLowerCase();
+        if (region !== GM_getValue("ynRegion", "")) {
+          GM_setValue("ynRegion", region);
+          GM_setValue("ynRegionCapturedAt", Date.now());
+        }
+      }
+    } catch (_) {}
+    return; // don't run the bridge side here
+  }
+
+  if (location.hostname === "app.hubspot.com" || location.hostname === "app-eu1.hubspot.com") {
+    function captureHubSpotState() {
+      try {
+        // Hublet host (us vs eu) is just the page's origin.
+        const host = location.origin; // e.g. "https://app-eu1.hubspot.com"
+        if (host !== GM_getValue("hsHost", "")) GM_setValue("hsHost", host);
+
+        // Portal ID: scrape any /<digits>/ segment from the URL path.
+        // Examples: /global-home/8805657, /contacts/8805657/objects/0-1/...
+        const portalMatch = location.pathname.match(/\/(\d{6,10})(?:\/|$)/);
+        if (portalMatch) {
+          const portalId = portalMatch[1];
+          if (portalId !== GM_getValue("hsPortalId", "")) GM_setValue("hsPortalId", portalId);
+        }
+
+        // CSRF cookie — NOT HttpOnly, readable via document.cookie.
+        const raw = document.cookie || "";
+        const entry = raw.split(";").map((s) => s.trim()).find((s) => s.startsWith("hubspotapi-csrf="));
+        if (entry) {
+          const value = decodeURIComponent(entry.slice("hubspotapi-csrf=".length));
+          if (value && value !== GM_getValue("hsCsrfToken", "")) {
+            GM_setValue("hsCsrfToken", value);
+            GM_setValue("hsCsrfCapturedAt", Date.now());
+          }
+        }
+      } catch (_) {}
+    }
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", captureHubSpotState);
+    } else {
+      captureHubSpotState();
+    }
+    setInterval(captureHubSpotState, 60 * 1000);
+    return; // don't run the bridge side here
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -155,6 +332,606 @@
       }
       GM_xmlhttpRequest(init);
     });
+  }
+
+  /**
+   * Single-shot Zendesk API call. Does NOT auto-retry on 401; the
+   * caller (gmZendeskRequest) handles the retry policy so we can layer
+   * a renew-session warm-up before the second attempt.
+   *
+   * @param {string} method
+   * @param {string} url      Fully-resolved URL.
+   * @param {object|string|null} [body]
+   * @param {Record<string,string>} [extraHeaders]
+   * @returns {Promise<{status:number, json:any, text:string}>}
+   */
+  function gmZendeskSendRaw(method, url, body, extraHeaders) {
+    return new Promise((resolve, reject) => {
+      const headers = Object.assign({ accept: "application/json" }, extraHeaders || {});
+      const init = {
+        method,
+        url,
+        headers,
+        timeout: 20000,
+        // anonymous: false → include cookies for the target origin.
+        anonymous: false,
+        onload: (res) => {
+          const status = res.status;
+          const text = res.responseText || "";
+          let json = null;
+          if (text) { try { json = JSON.parse(text); } catch { /* non-JSON */ } }
+          resolve({ status, json, text });
+        },
+        onerror: () => reject(new Error("Network error reaching Zendesk API")),
+        ontimeout: () => reject(new Error("Zendesk API timed out")),
+      };
+      if (body !== undefined && body !== null) {
+        headers["content-type"] = "application/json";
+        init.data = typeof body === "string" ? body : JSON.stringify(body);
+      }
+      GM_xmlhttpRequest(init);
+    });
+  }
+
+  // Coalesce concurrent renew attempts so a burst of N failed API calls
+  // doesn't trigger N parallel /users/me.json renews.
+  /** @type {Promise<boolean> | null} */
+  let zendeskRenewInFlight = null;
+  let zendeskLastRenewAttempt = 0;
+  const ZENDESK_RENEW_COOLDOWN_MS = 5000; // don't renew more than once per 5s
+
+  /**
+   * Force-refresh the Zendesk session cookie by hitting /users/me.json
+   * with the documented X-Zendesk-Renew-Session: true header. Zendesk
+   * responds with refreshed session/CSRF cookies if the underlying
+   * authentication is still valid (e.g. SAML session still active even
+   * though the cookie expired). Resolves with `true` if renew worked,
+   * `false` otherwise.
+   */
+  function zendeskRenewSession() {
+    if (zendeskRenewInFlight) return zendeskRenewInFlight;
+    const now = Date.now();
+    if (now - zendeskLastRenewAttempt < ZENDESK_RENEW_COOLDOWN_MS) {
+      // Recent renew failed; don't hammer.
+      return Promise.resolve(false);
+    }
+    zendeskLastRenewAttempt = now;
+    zendeskRenewInFlight = (async () => {
+      try {
+        const res = await gmZendeskSendRaw(
+          "GET",
+          ZENDESK_API + "/users/me.json",
+          null,
+          { "X-Zendesk-Renew-Session": "true" },
+        );
+        return res.status >= 200 && res.status < 300;
+      } catch (_) {
+        return false;
+      } finally {
+        // Allow another renew attempt later (after cooldown).
+        setTimeout(() => { zendeskRenewInFlight = null; }, 0);
+      }
+    })();
+    return zendeskRenewInFlight;
+  }
+
+  /**
+   * Generic CORS-bypassing HTTP call to the Zendesk API with automatic
+   * session renewal on 401. Uses the SAME session cookie the user
+   * already has from being logged in at https://iwmac.zendesk.com.
+   * No tokens captured, no storage.
+   *
+   * Retry policy:
+   *  1. First attempt — plain request, cookies attached.
+   *  2. If response is 401 (and this isn't already a retry), fire a
+   *     renew-session warm-up request, then retry the original call
+   *     once with `X-Zendesk-Renew-Session: true` on the actual call
+   *     as well. This handles SAML / SSO sessions where the underlying
+   *     identity is valid but the session cookie expired.
+   *  3. If still 401 after retry, surface a clear "open Zendesk while
+   *     logged in" error message.
+   *
+   *   await ZendeskBridge.apiRequest("GET", "/tickets/196389.json");
+   *   await ZendeskBridge.apiRequest("PUT", "/tickets/196389.json", { ticket: { status: "solved" } });
+   *
+   * @param {string} method
+   * @param {string} path   Relative to /api/v2, OR an absolute URL.
+   * @param {object} [body] JSON body for non-GET requests.
+   * @returns {Promise<any>}
+   */
+  async function gmZendeskRequest(method, path, body) {
+    const url = /^https?:/i.test(path) ? path : (ZENDESK_API + path);
+    // For state-changing requests, Zendesk requires the CSRF token. We
+    // get it from GM storage where the Zendesk-side capture wrote it.
+    // GET requests don't need CSRF — only the session cookie.
+    const upper = String(method ?? "GET").toUpperCase();
+    const extraHeaders = {};
+    if (upper !== "GET" && upper !== "HEAD") {
+      const csrf = GM_getValue("zdCsrfToken", "");
+      if (csrf) {
+        extraHeaders["X-CSRF-Token"] = csrf;
+      } else {
+        throw new Error(
+          "Zendesk CSRF token not captured yet. Open https://iwmac.zendesk.com once while logged in (any page), then retry."
+        );
+      }
+    }
+    // First attempt
+    let res = await gmZendeskSendRaw(method, url, body, extraHeaders);
+    if (res.status === 401) {
+      // Try to renew; this hits /users/me.json with renew-session header.
+      const renewed = await zendeskRenewSession();
+      if (renewed) {
+        // Retry the original call with renew-session header for good
+        // measure (Zendesk sometimes ignores fresh cookies on the very
+        // next call without the explicit header). CSRF token is included
+        // again — if the renew rotated it, the next non-GET will fail
+        // and the user re-loads the Zendesk tab once.
+        res = await gmZendeskSendRaw(method, url, body, {
+          ...extraHeaders,
+          "X-Zendesk-Renew-Session": "true",
+        });
+      }
+    }
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(
+        "HTTP " + res.status +
+        ": Zendesk session expired or missing. Open https://iwmac.zendesk.com once while logged in to refresh, then try again.",
+      );
+    }
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error("HTTP " + res.status + ": " + (res.text || "").slice(0, 300));
+    }
+    return res.json; // may be null for empty bodies
+  }
+
+  /**
+   * Single-shot Oneflow call. Lets the caller decide retry policy.
+   * Resolves with the raw {status, text, json} envelope (does NOT throw
+   * on 4xx) so gmOneflowRequest can branch on status.
+   */
+  function gmOneflowSendRaw(method, url, body, extraHeaders) {
+    return new Promise((resolve, reject) => {
+      const headers = Object.assign({ accept: "application/json" }, extraHeaders || {});
+      const init = {
+        method: String(method ?? "GET").toUpperCase(),
+        url,
+        headers,
+        timeout: 20000,
+        anonymous: false,
+        onload: (res) => {
+          const status = res.status;
+          const text = res.responseText || "";
+          let json = null;
+          if (text) { try { json = JSON.parse(text); } catch { /* non-JSON */ } }
+          resolve({ status, json, text });
+        },
+        onerror: () => reject(new Error("Network error reaching Oneflow API")),
+        ontimeout: () => reject(new Error("Oneflow API timed out")),
+      };
+      if (body !== undefined && body !== null) {
+        headers["content-type"] = "application/json";
+        init.data = typeof body === "string" ? body : JSON.stringify(body);
+      }
+      GM_xmlhttpRequest(init);
+    });
+  }
+
+  // Coalesce concurrent renew attempts so a burst of N failed Oneflow
+  // calls doesn't fan out N parallel warmups.
+  /** @type {Promise<boolean> | null} */
+  let oneflowRenewInFlight = null;
+  let oneflowLastRenewAttempt = 0;
+  const ONEFLOW_RENEW_COOLDOWN_MS = 5000;
+
+  /**
+   * Try to nudge Oneflow into refreshing the session + CSRF cookies.
+   * Oneflow doesn't expose a dedicated renew header (unlike Zendesk),
+   * but its SPA pings /positions/me on most page loads, and that
+   * response sets a fresh xsrf-token cookie when the current one is
+   * about to rotate. The browser cookie jar (which GM_xmlhttpRequest
+   * uses) picks the new value up automatically.
+   *
+   * If the user has an app.oneflow.com tab open in the same browser,
+   * the on-site capture script picks the rotated cookie up within 60s
+   * and writes it back to GM storage. We wait briefly for that as a
+   * best-effort, but if no Oneflow tab is open we still gain the cookie
+   * refresh inside this script's GM_xmlhttpRequest cookie jar.
+   *
+   * Resolves with `true` if the warmup returned 2xx (session is alive),
+   * `false` otherwise.
+   */
+  function oneflowRenewSession() {
+    if (oneflowRenewInFlight) return oneflowRenewInFlight;
+    const now = Date.now();
+    if (now - oneflowLastRenewAttempt < ONEFLOW_RENEW_COOLDOWN_MS) {
+      // Recent attempt; don't hammer Oneflow.
+      return Promise.resolve(false);
+    }
+    oneflowLastRenewAttempt = now;
+    oneflowRenewInFlight = (async () => {
+      try {
+        const res = await gmOneflowSendRaw("GET", ONEFLOW_API + "/positions/me", null, null);
+        const ok = res.status >= 200 && res.status < 300;
+        if (ok) {
+          // Give the on-site capture script a brief chance to re-read
+          // the rotated xsrf-token cookie. 800ms is plenty for the
+          // captureOneflowXsrf interval (which runs every 60s but also
+          // synchronously on cookie-read).
+          await new Promise((r) => setTimeout(r, 800));
+        }
+        return ok;
+      } catch (_) {
+        return false;
+      } finally {
+        setTimeout(() => { oneflowRenewInFlight = null; }, 0);
+      }
+    })();
+    return oneflowRenewInFlight;
+  }
+
+  /**
+   * Generic CORS-bypassing HTTP call to the Oneflow API with automatic
+   * session renewal on 401.
+   *
+   * Auth mechanics:
+   *   • Session cookie (HttpOnly) — browser auto-attaches via GM_xmlhttpRequest.
+   *   • For non-GET methods, X-XSRF-Token header is required. We pull the
+   *     value from GM storage (set by the Oneflow-side capture above).
+   *
+   * Retry policy:
+   *   1. First attempt — plain request with whatever CSRF we have cached.
+   *   2. On 401, fire a warmup GET to /positions/me; if it succeeds,
+   *      re-read xsrf-token from GM storage (it may have rotated) and
+   *      retry the original call once.
+   *   3. If still 401/403, surface a clear "open Oneflow while logged in"
+   *      error.
+   *
+   *   await OneflowBridge.apiRequest("GET", "/positions/me");
+   *   await OneflowBridge.apiRequest("GET", "/collections/?limit=10");
+   *
+   * @param {string} method
+   * @param {string} path   Relative to /api, OR an absolute URL.
+   * @param {object} [body] JSON body for non-GET requests.
+   */
+  async function gmOneflowRequest(method, path, body) {
+    const url = /^https?:/i.test(path) ? path : (ONEFLOW_API + path);
+    const upper = String(method ?? "GET").toUpperCase();
+    const buildHeaders = () => {
+      const headers = {};
+      if (upper !== "GET" && upper !== "HEAD") {
+        const xsrf = GM_getValue("ofXsrfToken", "");
+        if (xsrf) {
+          // Oneflow accepts both X-XSRF-Token (Spring-style) and xsrf-token
+          // header names. X-XSRF-Token is the more common convention.
+          headers["X-XSRF-Token"] = xsrf;
+        }
+      }
+      return headers;
+    };
+
+    // First attempt
+    let res = await gmOneflowSendRaw(upper, url, body, buildHeaders());
+    if (res.status === 401 || res.status === 403) {
+      const renewed = await oneflowRenewSession();
+      if (renewed) {
+        // Re-read CSRF in case the on-site capture script just rotated it.
+        res = await gmOneflowSendRaw(upper, url, body, buildHeaders());
+      }
+    }
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(
+        "HTTP " + res.status +
+        ": Oneflow session expired or missing. Open https://app.oneflow.com once while logged in, then try again.",
+      );
+    }
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error("HTTP " + res.status + ": " + (res.text || "").slice(0, 300));
+    }
+    return res.json;
+  }
+
+  /**
+   * Single-shot HubSpot call. Lets the caller decide retry policy.
+   * Resolves with the raw {status, text, json} envelope (does NOT throw
+   * on 4xx) so gmHubSpotRequest can branch on status.
+   */
+  function gmHubSpotSendRaw(method, url, body, extraHeaders) {
+    return new Promise((resolve, reject) => {
+      const headers = Object.assign({ accept: "application/json" }, extraHeaders || {});
+      const init = {
+        method: String(method ?? "GET").toUpperCase(),
+        url,
+        headers,
+        timeout: 20000,
+        anonymous: false,
+        onload: (res) => {
+          const status = res.status;
+          const text = res.responseText || "";
+          let json = null;
+          if (text) { try { json = JSON.parse(text); } catch { /* non-JSON */ } }
+          resolve({ status, json, text });
+        },
+        onerror: () => reject(new Error("Network error reaching HubSpot API")),
+        ontimeout: () => reject(new Error("HubSpot API timed out")),
+      };
+      if (body !== undefined && body !== null) {
+        headers["content-type"] = "application/json";
+        init.data = typeof body === "string" ? body : JSON.stringify(body);
+      }
+      GM_xmlhttpRequest(init);
+    });
+  }
+
+  // Coalesce concurrent HubSpot renew attempts.
+  /** @type {Promise<boolean> | null} */
+  let hubspotRenewInFlight = null;
+  let hubspotLastRenewAttempt = 0;
+  const HUBSPOT_RENEW_COOLDOWN_MS = 5000;
+
+  /**
+   * Try to refresh the HubSpot session + CSRF cookie by pinging the
+   * lightweight login-information endpoint. The response sets fresh
+   * Set-Cookie headers if the underlying session is still valid (e.g.
+   * SSO-backed session). The on-site capture script then picks the
+   * rotated hubspotapi-csrf cookie up within 60s and writes it back to
+   * GM storage; we wait briefly to give it a chance.
+   *
+   * Resolves with `true` if the warmup returned 2xx (session is alive),
+   * `false` otherwise.
+   */
+  function hubspotRenewSession() {
+    if (hubspotRenewInFlight) return hubspotRenewInFlight;
+    const now = Date.now();
+    if (now - hubspotLastRenewAttempt < HUBSPOT_RENEW_COOLDOWN_MS) {
+      return Promise.resolve(false);
+    }
+    hubspotLastRenewAttempt = now;
+    hubspotRenewInFlight = (async () => {
+      try {
+        const host = GM_getValue("hsHost", "");
+        const portalId = GM_getValue("hsPortalId", "");
+        if (!host || !portalId) return false;
+        // login-information is cheap, always available, and doesn't
+        // require CSRF (it's a GET). HubSpot's SPA hits it on every page
+        // load, so it's a safe warmup target.
+        const url = host + "/api/login-verify/v1/info?portalId=" + encodeURIComponent(portalId);
+        const res = await gmHubSpotSendRaw("GET", url, null, null);
+        const ok = res.status >= 200 && res.status < 300;
+        if (ok) {
+          // Give the on-site capture a moment to re-read rotated CSRF.
+          await new Promise((r) => setTimeout(r, 800));
+        }
+        return ok;
+      } catch (_) {
+        return false;
+      } finally {
+        setTimeout(() => { hubspotRenewInFlight = null; }, 0);
+      }
+    })();
+    return hubspotRenewInFlight;
+  }
+
+  /**
+   * Generic CORS-bypassing HTTP call to the HubSpot internal API with
+   * automatic session renewal on 401.
+   *
+   * Auth mechanics:
+   *   • Session cookie (HttpOnly) — browser auto-attaches via GM_xmlhttpRequest.
+   *   • Per-call CSRF: X-HubSpot-CSRF-hubspotapi header echoes the
+   *     `hubspotapi-csrf` cookie value.
+   *   • Every call needs portalId in the query string. The bridge auto-
+   *     injects it if not already present.
+   *
+   * Retry policy:
+   *   1. First attempt with cached host/portalId/csrf.
+   *   2. On 401/403, fire a warmup GET to /api/login-verify/v1/info; if
+   *      it succeeds, re-read CSRF from GM storage (may have rotated)
+   *      and retry once.
+   *   3. If still 401/403, surface a clear error pointing at the right
+   *      regional hublet.
+   *
+   *   await HubSpotBridge.apiRequest("GET", "/properties/v4/groups/0-1/properties");
+   *
+   * @param {string} method
+   * @param {string} path   Relative to /api, OR an absolute URL.
+   * @param {object} [body] JSON body for non-GET requests.
+   */
+  async function gmHubSpotRequest(method, path, body) {
+    const host = GM_getValue("hsHost", "");
+    const portalId = GM_getValue("hsPortalId", "");
+    if (!host || !portalId) {
+      throw new Error(
+        "HubSpot state not captured yet. Open https://app.hubspot.com (or app-eu1.hubspot.com) once while logged in, then retry.",
+      );
+    }
+    // Build the full URL. Inject portalId as query param if missing.
+    let url;
+    if (/^https?:/i.test(path)) {
+      url = path;
+    } else {
+      const prefix = path.startsWith("/api") ? "" : "/api";
+      url = host + prefix + path;
+    }
+    if (!/[?&]portalId=/i.test(url)) {
+      url += (url.includes("?") ? "&" : "?") + "portalId=" + encodeURIComponent(portalId);
+    }
+
+    const upper = String(method ?? "GET").toUpperCase();
+    const buildHeaders = () => {
+      const headers = {};
+      if (upper !== "GET" && upper !== "HEAD") {
+        const csrf = GM_getValue("hsCsrfToken", "");
+        if (csrf) headers["X-HubSpot-CSRF-hubspotapi"] = csrf;
+      }
+      return headers;
+    };
+
+    // First attempt
+    let res = await gmHubSpotSendRaw(upper, url, body, buildHeaders());
+    if (res.status === 401 || res.status === 403) {
+      const renewed = await hubspotRenewSession();
+      if (renewed) {
+        res = await gmHubSpotSendRaw(upper, url, body, buildHeaders());
+      }
+    }
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(
+        "HTTP " + res.status +
+        ": HubSpot session expired or missing. Open https://app" +
+        (host.includes("eu1") ? "-eu1" : "") +
+        ".hubspot.com once while logged in, then try again.",
+      );
+    }
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error("HTTP " + res.status + ": " + (res.text || "").slice(0, 300));
+    }
+    return res.json;
+  }
+
+  /**
+   * Mint a fresh Younium access token by calling the Frontegg refresh
+   * endpoint with the HttpOnly refresh cookie. Returns the access token
+   * string and caches it (+ expiry) in GM storage.
+   *
+   * Cooldown: passive refreshes (token "expiring soon" pre-flight check)
+   * skip if a recent refresh happened, to avoid stampeding the API.
+   * Active refreshes (forceRefresh=true after a 401) ALWAYS run — the
+   * cached token was just rejected, so handing it back would loop.
+   */
+  let ynRefreshInFlight = null;
+  let ynLastRefreshAttempt = 0;
+  function gmYouniumRefreshToken(forceRefresh) {
+    if (ynRefreshInFlight) return ynRefreshInFlight;
+    const now = Date.now();
+    if (!forceRefresh && now - ynLastRefreshAttempt < 30 * 1000) {
+      // Recent passive refresh — reuse the cached token rather than
+      // hammering Frontegg. (forceRefresh callers from 401 retry skip
+      // this branch so a stale cache can't trap us in a loop.)
+      const cached = GM_getValue("ynAccessToken", "");
+      if (cached) return Promise.resolve(cached);
+    }
+    ynLastRefreshAttempt = now;
+    const region = GM_getValue("ynRegion", "eu"); // default to EU
+    const authHost = "https://auth." + region + ".younium.com";
+    ynRefreshInFlight = new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: "POST",
+        url: authHost + "/frontegg/identity/resources/auth/v1/user/token/refresh",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        data: "{}",
+        timeout: 20000,
+        anonymous: false,
+        onload: (res) => {
+          if (res.status < 200 || res.status >= 300) {
+            reject(new Error(
+              "HTTP " + res.status +
+              ": Younium session expired or missing. Open https://" + region +
+              ".younium.com once while logged in, then try again.",
+            ));
+            return;
+          }
+          try {
+            const j = JSON.parse(res.responseText || "{}");
+            const token = String(j?.accessToken ?? "").trim();
+            if (!token) {
+              reject(new Error("Younium refresh returned no accessToken."));
+              return;
+            }
+            // Cache + record expiry. expiresIn is in seconds.
+            const ttlMs = Math.max(60_000, Number(j.expiresIn || 0) * 1000);
+            const expiresAt = Date.now() + ttlMs;
+            GM_setValue("ynAccessToken", token);
+            GM_setValue("ynAccessTokenExpiresAt", expiresAt);
+            GM_setValue("ynAccessTokenCapturedAt", Date.now());
+            resolve(token);
+          } catch (e) {
+            reject(new Error("Younium refresh parse failed: " + (e?.message ?? e)));
+          }
+        },
+        onerror: () => reject(new Error("Network error reaching Younium auth")),
+        ontimeout: () => reject(new Error("Younium auth timed out")),
+      });
+    }).finally(() => {
+      // Allow another refresh attempt later
+      setTimeout(() => { ynRefreshInFlight = null; }, 0);
+    });
+    return ynRefreshInFlight;
+  }
+
+  /**
+   * Generic CORS-bypassing HTTP call to the Younium API.
+   *
+   * Auth: ensures a fresh access token (refreshes if absent or within
+   * 60s of expiry), then sends `Authorization: Bearer <token>` against
+   * api.younium.com. On 401, refreshes once and retries.
+   *
+   *   await YouniumBridge.apiRequest("GET", "/api/user/profile");
+   *
+   * @param {string} method
+   * @param {string} path   Relative to https://api.younium.com, OR absolute.
+   * @param {object} [body] JSON body for non-GET requests.
+   */
+  async function gmYouniumRequest(method, path, body) {
+    const url = /^https?:/i.test(path) ? path : (YOUNIUM_API + (path.startsWith("/") ? path : "/" + path));
+
+    // Use cached token if it's not about to expire; otherwise refresh.
+    let token = GM_getValue("ynAccessToken", "");
+    const expiresAt = Number(GM_getValue("ynAccessTokenExpiresAt", 0));
+    const expiringSoon = !expiresAt || (Date.now() > expiresAt - 60_000);
+    if (!token || expiringSoon) {
+      token = await gmYouniumRefreshToken();
+    }
+
+    const send = (t) => new Promise((resolve, reject) => {
+      // `X-Younium-Origin: frontend` is required by some endpoints
+      // (notably /api/data/query/order). Cheap to send on every call;
+      // adding it unconditionally avoids per-endpoint header juggling.
+      const headers = {
+        accept: "application/json",
+        Authorization: "Bearer " + t,
+        "X-Younium-Origin": "frontend",
+      };
+      const init = {
+        method: String(method ?? "GET").toUpperCase(),
+        url,
+        headers,
+        timeout: 20000,
+        anonymous: false,
+        onload: (res) => resolve({ status: res.status, text: res.responseText || "" }),
+        onerror: () => reject(new Error("Network error reaching Younium API")),
+        ontimeout: () => reject(new Error("Younium API timed out")),
+      };
+      if (body !== undefined && body !== null) {
+        headers["content-type"] = "application/json";
+        init.data = typeof body === "string" ? body : JSON.stringify(body);
+      }
+      GM_xmlhttpRequest(init);
+    });
+
+    let res = await send(token);
+    if (res.status === 401) {
+      // Token rejected — force a fresh refresh (bypassing the 30s
+      // cooldown) and retry once. The cooldown is meant to prevent
+      // stampedes on passive expiry-soon refreshes; a 401 means the
+      // cached token is actually dead, so we must mint a new one.
+      try {
+        token = await gmYouniumRefreshToken(true);
+        res = await send(token);
+      } catch (_) {/* fall through to error below */}
+    }
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(
+        "HTTP " + res.status +
+        ": Younium session expired. Open https://" + GM_getValue("ynRegion", "eu") +
+        ".younium.com once while logged in to refresh, then try again.",
+      );
+    }
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error("HTTP " + res.status + ": " + (res.text || "").slice(0, 300));
+    }
+    if (!res.text) return null;
+    try { return JSON.parse(res.text); } catch { return null; }
   }
 
   function gmFetch(url) {
@@ -643,9 +1420,407 @@
     },
   };
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // ZendeskBridge — separate object, separate API surface. Lives next to
+  // RocketlaneBridge so existing tracker code doesn't see breaking changes.
+  //
+  // No token storage: GM_xmlhttpRequest re-uses the user's existing
+  // iwmac.zendesk.com session cookie. If the user is logged out, calls
+  // fail with HTTP 401 and the bridge surfaces a clear error message.
+  // ──────────────────────────────────────────────────────────────────────────
+  target.ZendeskBridge = {
+    isAvailable: true,
+    version: "1.0.0-tampermonkey",
+    /**
+     * Generic CORS-bypassing Zendesk API call.
+     * @param {string} method
+     * @param {string} path   Relative to /api/v2, or an absolute URL.
+     * @param {object} [body] JSON body for non-GET requests.
+     */
+    async apiRequest(method, path, body) {
+      return await gmZendeskRequest(method, path, body);
+    },
+    /**
+     * Convenience: fetch one ticket by ID. Returns the parsed ticket
+     * object, or null on 404.
+     * @param {number|string} ticketId
+     */
+    async getTicket(ticketId) {
+      const id = String(ticketId ?? "").trim();
+      if (!id) throw new Error("getTicket requires a ticketId");
+      try {
+        const json = await gmZendeskRequest("GET", "/tickets/" + encodeURIComponent(id) + ".json");
+        return json?.ticket ?? null;
+      } catch (e) {
+        if (String(e?.message ?? "").includes("HTTP 404")) return null;
+        throw e;
+      }
+    },
+    /**
+     * Convenience: return the currently-logged-in Zendesk user.
+     * Useful for the tracker to confirm session is valid before
+     * showing Zendesk-dependent UI.
+     */
+    async getCurrentUser() {
+      const json = await gmZendeskRequest("GET", "/users/me.json");
+      return json?.user ?? null;
+    },
+    /**
+     * Get all comments for a ticket with author user data sideloaded.
+     * Returns { comments: [...], users: [...] } so the tracker can show
+     * author names without an extra round-trip per comment.
+     */
+    async getTicketComments(ticketId) {
+      const id = String(ticketId ?? "").trim();
+      if (!id) throw new Error("getTicketComments requires a ticketId");
+      return await gmZendeskRequest(
+        "GET",
+        "/tickets/" + encodeURIComponent(id) + "/comments.json?include=users&sort_order=asc",
+      );
+    },
+    /**
+     * Post a reply to a ticket. `body` is plain text. `isPublic=true`
+     * → customer-visible; false → internal note (agents only).
+     * Requires CSRF token captured from an iwmac.zendesk.com session.
+     * Returns the updated ticket object.
+     */
+    async postTicketReply(ticketId, body, isPublic) {
+      const id = String(ticketId ?? "").trim();
+      if (!id) throw new Error("postTicketReply requires a ticketId");
+      const trimmed = String(body ?? "").trim();
+      if (!trimmed) throw new Error("Reply body cannot be empty");
+      const json = await gmZendeskRequest(
+        "PUT",
+        "/tickets/" + encodeURIComponent(id) + ".json",
+        { ticket: { comment: { body: trimmed, public: !!isPublic } } },
+      );
+      return json?.ticket ?? null;
+    },
+    /** Diagnostic: returns whether a CSRF token has been captured + age. */
+    async getCsrfStatus() {
+      const token = GM_getValue("zdCsrfToken", "");
+      const capturedAt = GM_getValue("zdCsrfCapturedAt", 0);
+      return {
+        hasToken: !!token,
+        capturedAt: capturedAt || null,
+        ageMs: capturedAt ? (Date.now() - capturedAt) : null,
+      };
+    },
+  };
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // OneflowBridge — parallel to RocketlaneBridge / ZendeskBridge.
+  // Session-cookie auth + xsrf-token CSRF; no API key captured here, just
+  // routes calls through GM_xmlhttpRequest so the user's existing Oneflow
+  // session works from the tracker's github.io / file:// origin.
+  // ──────────────────────────────────────────────────────────────────────────
+  target.OneflowBridge = {
+    isAvailable: true,
+    version: "1.0.0-tampermonkey",
+    /**
+     * Generic CORS-bypassing Oneflow API call.
+     * @param {string} method
+     * @param {string} path   Relative to /api, or an absolute URL.
+     * @param {object} [body] JSON body for non-GET requests.
+     */
+    async apiRequest(method, path, body) {
+      return await gmOneflowRequest(method, path, body);
+    },
+    /**
+     * Currently logged-in Oneflow user — useful for confirming session
+     * is valid before showing Oneflow-dependent UI in the tracker.
+     */
+    async getCurrentUser() {
+      return await gmOneflowRequest("GET", "/positions/me");
+    },
+    /** Diagnostic: whether an xsrf-token was captured + how old it is. */
+    async getCsrfStatus() {
+      const token = GM_getValue("ofXsrfToken", "");
+      const capturedAt = GM_getValue("ofXsrfCapturedAt", 0);
+      return {
+        hasToken: !!token,
+        capturedAt: capturedAt || null,
+        ageMs: capturedAt ? (Date.now() - capturedAt) : null,
+      };
+    },
+  };
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // HubSpotBridge — session-cookie + per-call CSRF. Portal ID + hublet
+  // host are captured separately because HubSpot has US and EU regions
+  // and every API call needs them in the URL.
+  // ──────────────────────────────────────────────────────────────────────────
+  target.HubSpotBridge = {
+    isAvailable: true,
+    version: "1.0.0-tampermonkey",
+    /**
+     * Generic CORS-bypassing HubSpot API call.
+     * @param {string} method
+     * @param {string} path   Relative to /api, or an absolute URL.
+     * @param {object} [body] JSON body for non-GET requests.
+     */
+    async apiRequest(method, path, body) {
+      return await gmHubSpotRequest(method, path, body);
+    },
+    /**
+     * Currently logged-in HubSpot user context. The Login UI's
+     * /api/login-requirements endpoint works without portal scope so
+     * we use it here as a session-validity probe.
+     */
+    async getCurrentUser() {
+      const portalId = GM_getValue("hsPortalId", "");
+      const host = GM_getValue("hsHost", "");
+      if (!host || !portalId) {
+        throw new Error("HubSpot state not captured. Open a HubSpot page once.");
+      }
+      // The login-requirements endpoint takes user/portal in the path.
+      // We don't know the userId from outside, so fall back to a generic
+      // hub-user-info call that the web app uses on bootstrap.
+      return await gmHubSpotRequest("GET", "/login-verify/hub-user-info?early=true");
+    },
+    /**
+     * Search HubSpot CRM for objects of a given type.
+     *
+     * objectTypeId conventions: "0-1" = Contacts, "0-2" = Companies,
+     * "0-3" = Deals, "0-5" = Tickets.
+     *
+     *   await HubSpotBridge.searchCrm("0-3", "3299", { properties: ["dealname"] });
+     *
+     * @param {string} objectTypeId
+     * @param {string} query
+     * @param {{ count?: number, offset?: number, properties?: string[] }} [opts]
+     */
+    async searchCrm(objectTypeId, query, opts) {
+      const count = opts?.count ?? 10;
+      const offset = opts?.offset ?? 0;
+      const props = opts?.properties || [];
+      return await gmHubSpotRequest("POST", "/crm-search/search", {
+        objectTypeId,
+        query: String(query ?? ""),
+        count,
+        offset,
+        requestOptions: {
+          properties: props,
+          includeAllProperties: false,
+        },
+      });
+    },
+    /**
+     * Convenience: search deals by free text. Returns the standard
+     * { results, total, hasMore, offset } shape. `requestProperties`
+     * lets the caller customize which properties come back (default:
+     * the common set used for matching + display).
+     */
+    async searchDeals(query, opts) {
+      return await this.searchCrm("0-3", query, {
+        count: opts?.count ?? 10,
+        properties: opts?.properties ?? [
+          "dealname", "dealstage", "amount", "closedate",
+          "hs_lastmodifieddate", "pipeline",
+        ],
+      });
+    },
+    /** Diagnostic: state-capture status. */
+    async getCsrfStatus() {
+      const token = GM_getValue("hsCsrfToken", "");
+      const capturedAt = GM_getValue("hsCsrfCapturedAt", 0);
+      return {
+        hasToken: !!token,
+        host: GM_getValue("hsHost", "") || null,
+        portalId: GM_getValue("hsPortalId", "") || null,
+        capturedAt: capturedAt || null,
+        ageMs: capturedAt ? (Date.now() - capturedAt) : null,
+      };
+    },
+  };
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // YouniumBridge — Frontegg JWT auth. Bridge mints fresh access
+  // tokens via /frontegg/.../token/refresh using the HttpOnly refresh
+  // cookie (no token stored on the page side; bridge holds the
+  // 24h-lived access token in GM storage with an expiry timestamp).
+  // ──────────────────────────────────────────────────────────────────────────
+  target.YouniumBridge = {
+    isAvailable: true,
+    version: "1.0.0-tampermonkey",
+    /**
+     * Generic CORS-bypassing Younium API call.
+     * @param {string} method
+     * @param {string} path   Relative to https://api.younium.com, or absolute.
+     * @param {object} [body] JSON body for non-GET requests.
+     */
+    async apiRequest(method, path, body) {
+      return await gmYouniumRequest(method, path, body);
+    },
+    /** Force a token refresh (on-demand). Returns the new access token string. */
+    async refreshToken() {
+      return await gmYouniumRefreshToken();
+    },
+    /** Currently logged-in Younium user — proof session is valid. */
+    async getCurrentUser() {
+      return await gmYouniumRequest("GET", "/api/user/profile");
+    },
+    /**
+     * Search Younium orders by free text. Mirrors the body shape the
+     * Younium UI sends (verified via Playwright):
+     *
+     *   POST /api/data/query/order
+     *   { entity, filter, pageNumber, pageSize, sortField, sortDirection,
+     *     displayFields, conditions, conditionLogic }
+     *
+     * Response: { totalCount, result: [...] } with flat fields incl.
+     * plant_id (native field — exact-match friendly), plant_name,
+     * orderNumber, accountname, status, effectiveStartDate, id.
+     */
+    async searchOrders(query, opts) {
+      const body = {
+        entity: "order",
+        filter: String(query ?? ""),
+        pageNumber: 0,
+        pageSize: opts?.pageSize ?? 20,
+        sortField: opts?.sortField ?? "effectiveStartDate",
+        sortDirection: opts?.sortDirection ?? "desc",
+        displayFields: opts?.displayFields ?? [
+          "orderNumber", "plant_id", "plant_name",
+          "accountname", "status", "orderType",
+          "effectiveStartDate", "id",
+        ],
+        conditions: opts?.conditions ?? [
+          { fieldName: "isLastVersion", value: true, operator: 0 },
+        ],
+        conditionLogic: opts?.conditionLogic ?? "",
+      };
+      return await gmYouniumRequest("POST", "/api/data/query/order", body);
+    },
+    /**
+     * Free-text search Younium quotes. Mirrors searchOrders but hits
+     * /api/data/query/quote with entity: "quote". Verified via
+     * Playwright — the response carries flat fields including
+     * plant_id (often empty for unfinished quotes), plant_name,
+     * accountName, description, number ("Draft" until published, then
+     * "Q-NNNNNN"), status (numeric), currencyCode, ownerUserDisplayName,
+     * remarks, and the UUID `id` used in the /quotes/<id> URL.
+     *
+     * The user spec showed a plant 11102 quote that searchOrders
+     * missed entirely because it was a quote not promoted to an order.
+     */
+    async searchQuotes(query, opts) {
+      const body = {
+        entity: "quote",
+        filter: String(query ?? ""),
+        pageNumber: 0,
+        pageSize: opts?.pageSize ?? 20,
+        sortField: opts?.sortField ?? "number",
+        sortDirection: opts?.sortDirection ?? "desc",
+        // Pull every field useful for matching — same set the Younium
+        // UI itself requests, plus a few extras (orderType analog).
+        displayFields: opts?.displayFields ?? [
+          "number", "accountName", "description", "status",
+          "currencyCode", "remarks", "ownerUserDisplayName",
+          "plant_name", "plant_id",
+          "accountid", "changeOrderid", "convertedToOrderid", "id",
+          "ownerid", "currencyid",
+        ],
+        conditions: opts?.conditions ?? [],
+        conditionLogic: opts?.conditionLogic ?? "",
+      };
+      return await gmYouniumRequest("POST", "/api/data/query/quote", body);
+    },
+    /**
+     * Fetch a single order's full payload by UUID.
+     *   GET https://api.younium.com/api/order/{id}
+     * Used by the Younium status chip to inspect lifecycle dates,
+     * cancellation, bookings, and the order's enum status field.
+     */
+    async getOrderById(id) {
+      const safe = encodeURIComponent(String(id || "").trim());
+      if (!safe) throw new Error("getOrderById: id is required");
+      return await gmYouniumRequest("GET", "/api/order/" + safe, null);
+    },
+    /**
+     * Fetch invoice history for an order by its public order number
+     * (e.g. "O-011102"). The Younium UI uses this exact endpoint when
+     * rendering the "Invoices" panel on the order detail page.
+     *   POST /api/order/invoicesForHistory  { orderNumber }
+     * Each invoice entry has `status` (3 = posted/paid in our samples),
+     * `invoiceNumber`, `posted`, `paymentDate`, `dueDate`, `totalAmount`.
+     */
+    async getInvoicesForOrder(orderNumber) {
+      const n = String(orderNumber || "").trim();
+      if (!n) return [];
+      const result = await gmYouniumRequest(
+        "POST", "/api/order/invoicesForHistory", { orderNumber: n },
+      );
+      return Array.isArray(result) ? result : (result?.result ?? []);
+    },
+    /**
+     * Fetch a single quote's row from /api/data/query/quote filtered
+     * by id. Younium doesn't expose a GET /api/quote/{id} endpoint
+     * (verified — the orders detail endpoint pattern doesn't apply to
+     * quotes), so we use the query-filter shape with conditions.
+     */
+    async getQuoteById(id) {
+      const safe = String(id || "").trim();
+      if (!safe) return null;
+      const body = {
+        entity: "quote",
+        filter: "",
+        pageNumber: 0,
+        pageSize: 1,
+        sortField: "number",
+        sortDirection: "desc",
+        displayFields: [
+          "number", "accountName", "description", "status", "currencyCode",
+          "remarks", "ownerUserDisplayName", "plant_name", "plant_id",
+          "accountid", "changeOrderid", "convertedToOrderid", "id",
+        ],
+        conditions: [{ fieldName: "id", value: safe, operator: 0 }],
+        conditionLogic: "",
+      };
+      const j = await gmYouniumRequest("POST", "/api/data/query/quote", body);
+      return j?.result?.[0] || null;
+    },
+    /**
+     * Fetch the audit/timeline event log for an order. Verified via
+     * Chrome devtools-MCP: Younium's UI calls
+     *   GET https://api.younium.com/api/eventlog/order/id/{id}
+     * when the user clicks the clock-icon "Order timeline" button.
+     *
+     * Response: array of event entries (or { result: [...] } depending
+     * on tenant). Each entry typically has timestamp + user email /
+     * display name + a description of what changed. We return the
+     * raw array so the caller can extract the latest event.
+     */
+    async getOrderEventLog(id) {
+      const safe = encodeURIComponent(String(id || "").trim());
+      if (!safe) throw new Error("getOrderEventLog: id is required");
+      const result = await gmYouniumRequest(
+        "GET", "/api/eventlog/order/id/" + safe, null,
+      );
+      return Array.isArray(result) ? result : (result?.result ?? []);
+    },
+    /** Diagnostic: token cache status + region. */
+    async getTokenStatus() {
+      const token = GM_getValue("ynAccessToken", "");
+      const expiresAt = GM_getValue("ynAccessTokenExpiresAt", 0);
+      const capturedAt = GM_getValue("ynAccessTokenCapturedAt", 0);
+      return {
+        hasToken: !!token,
+        region: GM_getValue("ynRegion", "") || null,
+        capturedAt: capturedAt || null,
+        expiresAt: expiresAt || null,
+        msUntilExpiry: expiresAt ? (expiresAt - Date.now()) : null,
+      };
+    },
+  };
+
   // Notify the tracker page in case it's listening
   try {
     target.dispatchEvent(new CustomEvent("rocketlane-bridge-ready"));
+    target.dispatchEvent(new CustomEvent("zendesk-bridge-ready"));
+    target.dispatchEvent(new CustomEvent("oneflow-bridge-ready"));
+    target.dispatchEvent(new CustomEvent("hubspot-bridge-ready"));
+    target.dispatchEvent(new CustomEvent("younium-bridge-ready"));
   } catch (_) {}
 
   // Verify the assignment actually landed on the page's real window
@@ -733,6 +1908,226 @@
         target.dispatchEvent(new CustomEvent(respEvt, { detail: { id, value } }));
       } catch (err) {
         target.dispatchEvent(new CustomEvent(respEvt, { detail: { id, error: String(err?.message ?? err) } }));
+      }
+    });
+
+    // Parallel forwarder for ZendeskBridge — same isolated-world fallback.
+    const zReqEvt  = "zendeskBridgeReq";
+    const zRespEvt = "zendeskBridgeResp";
+    const zShim = document.createElement("script");
+    const zMethodList = Object.keys(target.ZendeskBridge || {}).filter(
+      (k) => typeof target.ZendeskBridge[k] === "function",
+    );
+    const zProps = {
+      version: target.ZendeskBridge?.version,
+      isAvailable: !!target.ZendeskBridge?.isAvailable,
+    };
+    zShim.textContent = `
+      (function () {
+        if (window.ZendeskBridge) return;
+        const methods = ${JSON.stringify(zMethodList)};
+        const props   = ${JSON.stringify(zProps)};
+        const reqEvt  = ${JSON.stringify(zReqEvt)};
+        const respEvt = ${JSON.stringify(zRespEvt)};
+        const pending = new Map();
+        let seq = 0;
+        window.addEventListener(respEvt, (e) => {
+          const d = e.detail || {};
+          const p = pending.get(d.id);
+          if (!p) return;
+          pending.delete(d.id);
+          if (d.error) p.reject(new Error(d.error));
+          else p.resolve(d.value);
+        });
+        const bridge = { ...props };
+        for (const m of methods) {
+          bridge[m] = function (...args) {
+            return new Promise((resolve, reject) => {
+              const id = ++seq;
+              pending.set(id, { resolve, reject });
+              window.dispatchEvent(new CustomEvent(reqEvt, { detail: { id, method: m, args } }));
+            });
+          };
+        }
+        window.ZendeskBridge = bridge;
+      })();
+    `;
+    (document.head || document.documentElement).appendChild(zShim);
+    zShim.remove();
+
+    target.addEventListener(zReqEvt, async (e) => {
+      const { id, method, args } = e.detail || {};
+      try {
+        const fn = target.ZendeskBridge[method];
+        const value = typeof fn === "function" ? await fn.apply(target.ZendeskBridge, args || []) : null;
+        target.dispatchEvent(new CustomEvent(zRespEvt, { detail: { id, value } }));
+      } catch (err) {
+        target.dispatchEvent(new CustomEvent(zRespEvt, { detail: { id, error: String(err?.message ?? err) } }));
+      }
+    });
+
+    // Parallel forwarder for OneflowBridge — same isolated-world fallback.
+    const oReqEvt  = "oneflowBridgeReq";
+    const oRespEvt = "oneflowBridgeResp";
+    const oShim = document.createElement("script");
+    const oMethodList = Object.keys(target.OneflowBridge || {}).filter(
+      (k) => typeof target.OneflowBridge[k] === "function",
+    );
+    const oProps = {
+      version: target.OneflowBridge?.version,
+      isAvailable: !!target.OneflowBridge?.isAvailable,
+    };
+    oShim.textContent = `
+      (function () {
+        if (window.OneflowBridge) return;
+        const methods = ${JSON.stringify(oMethodList)};
+        const props   = ${JSON.stringify(oProps)};
+        const reqEvt  = ${JSON.stringify(oReqEvt)};
+        const respEvt = ${JSON.stringify(oRespEvt)};
+        const pending = new Map();
+        let seq = 0;
+        window.addEventListener(respEvt, (e) => {
+          const d = e.detail || {};
+          const p = pending.get(d.id);
+          if (!p) return;
+          pending.delete(d.id);
+          if (d.error) p.reject(new Error(d.error));
+          else p.resolve(d.value);
+        });
+        const bridge = { ...props };
+        for (const m of methods) {
+          bridge[m] = function (...args) {
+            return new Promise((resolve, reject) => {
+              const id = ++seq;
+              pending.set(id, { resolve, reject });
+              window.dispatchEvent(new CustomEvent(reqEvt, { detail: { id, method: m, args } }));
+            });
+          };
+        }
+        window.OneflowBridge = bridge;
+      })();
+    `;
+    (document.head || document.documentElement).appendChild(oShim);
+    oShim.remove();
+
+    target.addEventListener(oReqEvt, async (e) => {
+      const { id, method, args } = e.detail || {};
+      try {
+        const fn = target.OneflowBridge[method];
+        const value = typeof fn === "function" ? await fn.apply(target.OneflowBridge, args || []) : null;
+        target.dispatchEvent(new CustomEvent(oRespEvt, { detail: { id, value } }));
+      } catch (err) {
+        target.dispatchEvent(new CustomEvent(oRespEvt, { detail: { id, error: String(err?.message ?? err) } }));
+      }
+    });
+
+    // Parallel forwarder for HubSpotBridge — same isolated-world fallback.
+    const hReqEvt  = "hubspotBridgeReq";
+    const hRespEvt = "hubspotBridgeResp";
+    const hShim = document.createElement("script");
+    const hMethodList = Object.keys(target.HubSpotBridge || {}).filter(
+      (k) => typeof target.HubSpotBridge[k] === "function",
+    );
+    const hProps = {
+      version: target.HubSpotBridge?.version,
+      isAvailable: !!target.HubSpotBridge?.isAvailable,
+    };
+    hShim.textContent = `
+      (function () {
+        if (window.HubSpotBridge) return;
+        const methods = ${JSON.stringify(hMethodList)};
+        const props   = ${JSON.stringify(hProps)};
+        const reqEvt  = ${JSON.stringify(hReqEvt)};
+        const respEvt = ${JSON.stringify(hRespEvt)};
+        const pending = new Map();
+        let seq = 0;
+        window.addEventListener(respEvt, (e) => {
+          const d = e.detail || {};
+          const p = pending.get(d.id);
+          if (!p) return;
+          pending.delete(d.id);
+          if (d.error) p.reject(new Error(d.error));
+          else p.resolve(d.value);
+        });
+        const bridge = { ...props };
+        for (const m of methods) {
+          bridge[m] = function (...args) {
+            return new Promise((resolve, reject) => {
+              const id = ++seq;
+              pending.set(id, { resolve, reject });
+              window.dispatchEvent(new CustomEvent(reqEvt, { detail: { id, method: m, args } }));
+            });
+          };
+        }
+        window.HubSpotBridge = bridge;
+      })();
+    `;
+    (document.head || document.documentElement).appendChild(hShim);
+    hShim.remove();
+
+    target.addEventListener(hReqEvt, async (e) => {
+      const { id, method, args } = e.detail || {};
+      try {
+        const fn = target.HubSpotBridge[method];
+        const value = typeof fn === "function" ? await fn.apply(target.HubSpotBridge, args || []) : null;
+        target.dispatchEvent(new CustomEvent(hRespEvt, { detail: { id, value } }));
+      } catch (err) {
+        target.dispatchEvent(new CustomEvent(hRespEvt, { detail: { id, error: String(err?.message ?? err) } }));
+      }
+    });
+
+    // Parallel forwarder for YouniumBridge.
+    const yReqEvt  = "youniumBridgeReq";
+    const yRespEvt = "youniumBridgeResp";
+    const yShim = document.createElement("script");
+    const yMethodList = Object.keys(target.YouniumBridge || {}).filter(
+      (k) => typeof target.YouniumBridge[k] === "function",
+    );
+    const yProps = {
+      version: target.YouniumBridge?.version,
+      isAvailable: !!target.YouniumBridge?.isAvailable,
+    };
+    yShim.textContent = `
+      (function () {
+        if (window.YouniumBridge) return;
+        const methods = ${JSON.stringify(yMethodList)};
+        const props   = ${JSON.stringify(yProps)};
+        const reqEvt  = ${JSON.stringify(yReqEvt)};
+        const respEvt = ${JSON.stringify(yRespEvt)};
+        const pending = new Map();
+        let seq = 0;
+        window.addEventListener(respEvt, (e) => {
+          const d = e.detail || {};
+          const p = pending.get(d.id);
+          if (!p) return;
+          pending.delete(d.id);
+          if (d.error) p.reject(new Error(d.error));
+          else p.resolve(d.value);
+        });
+        const bridge = { ...props };
+        for (const m of methods) {
+          bridge[m] = function (...args) {
+            return new Promise((resolve, reject) => {
+              const id = ++seq;
+              pending.set(id, { resolve, reject });
+              window.dispatchEvent(new CustomEvent(reqEvt, { detail: { id, method: m, args } }));
+            });
+          };
+        }
+        window.YouniumBridge = bridge;
+      })();
+    `;
+    (document.head || document.documentElement).appendChild(yShim);
+    yShim.remove();
+
+    target.addEventListener(yReqEvt, async (e) => {
+      const { id, method, args } = e.detail || {};
+      try {
+        const fn = target.YouniumBridge[method];
+        const value = typeof fn === "function" ? await fn.apply(target.YouniumBridge, args || []) : null;
+        target.dispatchEvent(new CustomEvent(yRespEvt, { detail: { id, value } }));
+      } catch (err) {
+        target.dispatchEvent(new CustomEvent(yRespEvt, { detail: { id, error: String(err?.message ?? err) } }));
       }
     });
   });
