@@ -27186,18 +27186,9 @@
         } else {
           summaryText = "Missing: No Younium link saved on this project, or no reliable record was found.";
         }
-
-        const projectKV = [
-          ["Project name",                p.name],
-          ["Partner",                     p.client],
-          ["Owner",                       p.owner],
-          ["Rocketlane status",           p.status],
-          ["Last RL update (local)",      fmtDate(p.updatedAt)],
-          ["Rocketlane project ID",       p.rocketlaneProjectId],
-        ];
-        // NB: Younium link is no longer shown in the Project section
-        // because it now lives in the Order / offer section below
-        // (per user feedback). Keeping it in both would be a duplicate.
+        // Project section removed from modal — title bar already shows
+        // the project name, and partner/owner/RL status / project ID
+        // weren't actionable from inside the Younium status view.
 
         const orderTotal = order
           ? (order.tcv?.amount || order.acv?.amount || order.fmrr?.amount || "—")
@@ -27316,10 +27307,9 @@
             ? '<div class="youniumWarnings"><strong>Warnings</strong><ul>' +
               allWarnings.map((w) => '<li>' + escHtml(w) + '</li>').join("") + '</ul></div>'
             : "") +
-          '<div class="youniumSection">' +
-            '<div class="youniumSectionTitle">Project</div>' +
-            renderKV(projectKV) +
-          '</div>' +
+          // Project section removed — the modal title already shows the
+          // project name, and partner/owner/RL status aren't relevant to
+          // the Younium verdict.
           '<div class="youniumSection">' +
             '<div class="youniumSectionTitle">Order / offer' +
               ' <span class="youniumSubBadge ' + orderBadgeClass + '">' + escHtml(verdict.orderStatus) + '</span>' +
