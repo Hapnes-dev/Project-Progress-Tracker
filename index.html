@@ -27061,6 +27061,38 @@
       //
       // Also listen to mousedown + pointerdown as belt-and-braces in
       // case it's specifically the "click" event that's being blocked.
+      // Nuclear close: try every known way to hide a dialog. The
+      // user's env seems to break .close(), so we fall through to
+      // brute-force methods until the dialog is actually hidden.
+      function forceCloseYouniumDialog(label) {
+        const dlg = document.getElementById("dlgYouniumStatus");
+        if (!dlg) return;
+        try {
+          // eslint-disable-next-line no-console
+          console.log("[Younium status] forceClose called by", label,
+            "— open?", dlg.open, "open attr?", dlg.hasAttribute("open"));
+        } catch (_) {}
+        // 1. Standard API
+        try { dlg.close(); } catch (_) {}
+        // 2. Remove the open attribute
+        try { dlg.removeAttribute("open"); } catch (_) {}
+        // 3. Force hide with inline display:none (overrides
+        //    user-agent stylesheet that sets dialog{display:block} when open)
+        try {
+          dlg.style.display = "none";
+          // Reset on the next tick so the next showModal() still works
+          setTimeout(() => { dlg.style.display = ""; }, 50);
+        } catch (_) {}
+        // 4. Try firing cancel event manually
+        try { dlg.dispatchEvent(new Event("cancel", { cancelable: true })); } catch (_) {}
+        // 5. Try firing close event manually
+        try { dlg.dispatchEvent(new Event("close")); } catch (_) {}
+        try {
+          // eslint-disable-next-line no-console
+          console.log("[Younium status] forceClose finished — open?", dlg.open);
+        } catch (_) {}
+      }
+
       function closeIfTargetIsCloseHint(ev) {
         const t = ev.target;
         if (!t || !t.closest) return;
@@ -27070,14 +27102,7 @@
         // itself). closest() walks up so the ✕-glyph inner text also
         // matches.
         if (t.closest("#closeYouniumHintTop, #closeYouniumHintBottom")) {
-          try {
-            // eslint-disable-next-line no-console
-            console.log("[Younium status] close hint", ev.type, "fired — closing dialog");
-          } catch (_) {}
-          dlg.close();
-          // Belt: also remove the open attr in case .close() fails
-          // silently in this environment.
-          try { dlg.removeAttribute("open"); } catch (_) {}
+          forceCloseYouniumDialog("hint-click[" + ev.type + "]");
         }
       }
       // Three event types × capture phase × document level. If ANY of
@@ -27089,13 +27114,30 @@
       // Backdrop click (target IS the dialog itself) — already works.
       els.dlgYouniumStatus?.addEventListener("click", (ev) => {
         if (ev.target === els.dlgYouniumStatus && els.dlgYouniumStatus.open) {
-          els.dlgYouniumStatus.close();
+          forceCloseYouniumDialog("backdrop");
         }
       });
-      // Esc keydown at capture phase — same reasoning.
+      // Esc keydown at capture phase.
       document.addEventListener("keydown", (ev) => {
         if (ev.key === "Escape" && els.dlgYouniumStatus?.open) {
-          els.dlgYouniumStatus.close();
+          forceCloseYouniumDialog("esc");
+        }
+      }, true);
+
+      // ── Outside-the-dialog click fallback ──
+      // If the user clicks ANYWHERE in the viewport while the modal is
+      // open, and the click is on something not inside the dialog box
+      // (effectively "click outside"), close. This is a second layer
+      // for the backdrop case in case the backdrop click handler ever
+      // misfires. Capture phase so it can't be stopped.
+      document.addEventListener("click", (ev) => {
+        const dlg = document.getElementById("dlgYouniumStatus");
+        if (!dlg || !dlg.open) return;
+        // Does the click target sit inside the dialog box? If not,
+        // treat as backdrop click.
+        if (!dlg.contains(ev.target) && ev.target !== dlg) {
+          // Either backdrop (target === dlg) OR truly outside the dom subtree
+          forceCloseYouniumDialog("outside-click");
         }
       }, true);
 
