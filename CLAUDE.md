@@ -304,9 +304,9 @@ A read-only `.btn` rendered in the top action bar, to the **left of "Import CSV"
 | **Status summary** | Big colored chip at the top: "OK: Order is Invoiced and Subscription is Active." / "Pending: …" / "Warning: …" / "Error: …" / "Missing: …" |
 | **Warnings** (only when problems exist) | Red panel with bullet list — includes computeYouniumStatus problems PLUS `buildYouniumExtraWarnings` (customer-name mismatch between project partner and Younium accountname, existing-link platform mismatch). |
 | **Project** | Name, Partner, Owner, Rocketlane status, last RL update, Younium link (with click-through), Rocketlane project ID. |
-| **Order / offer** | Order ID, Order number, Order name, Order status, Invoice status (posted vs drafted vs none), expected status "Invoiced", customer/account, total amount + currency, created, updated, **Last changed** (with source attribution). |
-| **Subscription** | Subscription ID (currently `order.id` + "derived from order"), name, status, expected status "Active", customer, linked order, start/end dates, created/updated, last changed. |
-| **Raw Younium data** | `<table>` dump of every field we pulled from `/api/order/{id}` (or the quote, when the saved link is a `/quotes/<uuid>`) — for transparency and debugging. |
+| **Order / offer** | **Younium link** (clickable, at top), Order ID, Order number, Order name, Order status, Invoice status (posted vs drafted vs none), expected status "Invoiced", customer/account, total amount + currency, created, updated, **Last changed** (with source attribution). |
+
+Subscription and Raw Younium data sections were intentionally removed (2026-05-26) — they cluttered the view and Subscription was derived from order lifecycle anyway. The verdict still tracks both internally (used by Summary + Warnings), but the order info is the only data block displayed.
 
 **Footer actions:**
 
