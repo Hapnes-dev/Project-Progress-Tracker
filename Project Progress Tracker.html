@@ -27414,7 +27414,6 @@
                 ? escHtml(String(subOrder.orderNumber))
                 : '<strong style="color: var(--bad);">— (no number assigned → Draft)</strong>'],
               ["Subscription status",      '<strong style="color: ' + subStatusBadgeColor + ';">' + escHtml(verdict.subscriptionStatus) + '</strong>'],
-              ["Expected status",          "Active"],
               ["Start date",               fmtDateOnly(subOrder?.effectiveStartDate)],
               ["End date",                 fmtDateOnly(subOrder?.effectiveEndDate)],
               ["Cancellation date",        subOrder?.cancellationDate ? fmtDateOnly(subOrder.cancellationDate) : "—"],
