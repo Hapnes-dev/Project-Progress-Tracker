@@ -27233,7 +27233,7 @@
               '</strong>'
             : '<strong style="color: ' + invoiceStatusColor + ';">No invoices yet</strong>'],
           ["Expected status",             expectedMatchesActual
-            ? '<span style="color: var(--good);">Invoiced</span> <span style="color: var(--muted2); font-size: 11px; font-style: italic;">(matches actual ✓)</span>'
+            ? '<span style="color: var(--good);">Invoiced</span>'
             : '<span style="color: var(--muted);">Invoiced</span> <span style="color: var(--bad); font-size: 11px; font-style: italic;">(actual: ' + escHtml(verdict.orderStatus) + ')</span>'],
           ["Customer / account",          order?.accountname || quote?.accountName || "—"],
           ["Total amount",                orderTotal !== "—" ? orderTotal + " " + orderCurrency : "—"],
@@ -27261,10 +27261,7 @@
         const subscriptionKV = verdict.hasSubscriptionProduct
           ? [
               ["Younium link",             subOrderLink
-                ? '<a href="' + escHtml(subOrderLink) + '" target="_blank" rel="noopener noreferrer">' + escHtml(subOrderLink) + '</a>' +
-                  (verdict.subscriptionOrderIsSeparate
-                    ? ' <span style="color: var(--muted2); font-size: 11px; font-style: italic;">(found via plant_id search — different from saved Younium link)</span>'
-                    : '')
+                ? '<a href="' + escHtml(subOrderLink) + '" target="_blank" rel="noopener noreferrer">' + escHtml(subOrderLink) + '</a>'
                 : '<em style="color: var(--muted);">none</em>'],
               ["Has IWMAC subscription",   '<span style="color: var(--good);">Yes</span>'],
               ["Product name",             verdict.subscriptionProduct?.productName || "—"],
