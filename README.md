@@ -48,7 +48,36 @@ The Edit project dialog has a **🔎 Find** button next to the Oneflow / HubSpot
 
 High-confidence matches fill the URL automatically; multiple candidates show an inline picker.
 
-### Per-platform bridges (Tampermonkey userscript v1.9.8+)
+### Younium status chip (per project)
+
+A status chip in the project header meta row (between the **Updated** and **RL sync** chips) showing the verdict for the project's Younium order + subscription state. Styled identically to the sibling chips — pill shape, 11.5px font, color tint per verdict (green / yellow / red / gray).
+
+| Color / label | When |
+|---|---|
+| 🟢 `Younium: ✓ All good` | Order Invoiced AND IWMAC subscription Active |
+| 🟢 `Younium: ✓ Invoiced (one-time)` | Order Invoiced, no IWMAC subscription product |
+| ⏳ `Younium: ⏳ Awaiting first invoice` | Order present, no posted invoices yet |
+| ⏳ `Younium: ⏳ Subscription starts <date>` | Subscription start date is in the future |
+| ⚠ `Younium: ⚠ Activate order in Younium` | Order is Draft — needs activation |
+| ⚠ `Younium: ⚠ Activate subscription in Younium` | IWMAC subscription is Draft — needs activation |
+| ⚠ `Younium: ⚠ Status uncertain` | Data incomplete |
+| ✗ `Younium: ✗ Cancelled` / `✗ Expired` | Terminal — can't recover |
+| ⏳ `Younium: ⏳ Checking…` | Verdict is being fetched |
+
+**Clicking the chip** opens a fullscreen modal with:
+- **Status summary** — action-oriented one-liner (e.g. "Action needed: Subscription is in Draft state. Activate it in Younium to start invoicing.")
+- **Warnings panel** — only when problems exist
+- **Order / offer** section — Younium link, IDs, name, status (color-coded ✓), invoice status, dates, Created by / Last updated by
+- **Subscription** section — found via plant_id lookup, shows IWMAC product status + dates + Created by / Last updated by
+- **Other orders for this plant** section — compact rows for sibling orders (Younium versions orders, so a single plant can have multiple records)
+
+**Subscription detection**: a Younium order is treated as an IWMAC subscription when (a) any product on the order has a name matching `/\bIWMAC\s*(?:Abonnement|Subscription)\b/i`, OR (b) we find such an order via the `plant_id` custom field. The chip falls back to plant_id search when the saved Younium URL points to a non-subscription order.
+
+**Audit attribution** (bridge v1.9.11+): `Created by` and `Last updated by` rows come from the Younium event log endpoint (`GET /api/eventlog/order/id/{id}`). First/latest events sorted by timestamp.
+
+**Read-only**: the modal never writes to Younium. No invoicing, no activation, no link overwrites.
+
+### Per-platform bridges (Tampermonkey userscript v1.9.11+)
 
 All four cookie/JWT bridges share the same auto-retry contract: on 401, the bridge fires one credential-refresh call (Zendesk's renew-session header, Oneflow's `/positions/me` warmup, HubSpot's `/login-verify/v1/info` warmup, or Younium's Frontegg token mint) and retries the original request exactly once before giving up. You shouldn't see "session expired" errors as long as you have the relevant tab open or — for Younium — a valid Frontegg refresh cookie.
 
@@ -69,7 +98,7 @@ All bridges route through `GM_xmlhttpRequest`, which is exempt from CORS — no 
 | Component | Where it lives |
 |---|---|
 | App UI + API clients | `Project Progress Tracker.html` (single file, no build) |
-| Cross-origin bridge | `rocketlane-chat-bridge/rocketlane-chat-bridge.user.js` (Tampermonkey userscript v1.9.8+) |
+| Cross-origin bridge | `rocketlane-chat-bridge/rocketlane-chat-bridge.user.js` (Tampermonkey userscript v1.9.11+) |
 | State storage | Browser `localStorage` (per-browser, never leaves the device) |
 | Per-platform secrets | Tampermonkey GM storage (never embedded in HTML) |
 

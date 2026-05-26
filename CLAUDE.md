@@ -6,7 +6,7 @@ This file is read by Claude Code on every session start. It documents the archit
 
 - **Vanilla HTML + CSS + JS** in a single file: `Project Progress Tracker.html` (~25k lines).
 - No build step, no framework, no bundler. All state in `localStorage`.
-- **Tampermonkey userscript** bridge (`rocketlane-chat-bridge/`) handles cross-origin API calls to FIVE platforms: Rocketlane, Zendesk, Oneflow, HubSpot, Younium. Bridge version is v1.9.10+ as of this writing (v1.9.10 added `YouniumBridge.getOrderById` / `getInvoicesForOrder` / `getQuoteById` for the Younium status chip).
+- **Tampermonkey userscript** bridge (`rocketlane-chat-bridge/`) handles cross-origin API calls to FIVE platforms: Rocketlane, Zendesk, Oneflow, HubSpot, Younium. Bridge version is v1.9.11+ as of this writing (v1.9.11 added `YouniumBridge.getOrderEventLog` for the Younium status modal's "Last updated by" / "Created by" rows; v1.9.10 added `getOrderById` / `getInvoicesForOrder` / `getQuoteById`).
 - Designed to run from either `file://` on the user's desktop or `https://hapnes-dev.github.io/Project-Progress-Tracker/`.
 
 ## File layout inside `Project Progress Tracker.html`
@@ -276,66 +276,102 @@ Each platform has a `xToMatchCandidate(rawApiResult)` function returning the com
 
 The legacy `oneflowMatchScore` / `hubspotMatchScore` functions still exist as **thin shims** over the shared scorer so `window.__of.score` / `window.__hs.score` DevTools diagnostics keep working.
 
-#### Younium status button (top action bar)
+#### Younium status chip (project header meta row)
 
-A read-only `.btn` rendered in the top action bar, to the **left of "Import CSV"**. Computes a Younium order + subscription verdict for the **currently-selected project** from its saved Younium link. The button face updates on every `renderDetail()` so it always reflects the selected project.
+A clickable chip rendered in the **project detail header meta row, between the Updated and RL sync chips** (the chip element starts in the top action bar at startup so the els cache can resolve `#btnYouniumStatus`, then `renderDetail` moves it into the meta row via `appendChild` on every project select). Visually matches the sibling `.tag` chips via `.btn.youniumStatusBtn { padding: 5px 12px; font-size: 11.5px; border-radius: 999px; ... }` — selector specificity `.btn.youniumStatusBtn` (0,2,0) beats plain `.btn` (0,1,0) regardless of source order.
 
-**Color rules:**
+**Verdict labels** (icon vocabulary: ✓ good, ⏳ waiting, ⚠ action needed, ✗ terminal):
 
-| Color | When |
-|---|---|
-| 🟢 Green — "Younium: OK" | Order has posted invoices AND subscription is Active (within term, not cancelled). |
-| 🟡 Yellow — "Younium: Pending" / "Not invoiced" / "Uncertain" | Order is in good shape but invoices haven't been posted yet OR subscription start date is in the future OR data is incomplete. |
-| 🔴 Red — "Younium: Quote" / "Draft" / "Cancelled" / "Expired" / "Bad link" / "Not found" | Saved URL is a Quote (not promoted), Order is draft, Order was cancelled, end date in past, or link can't be parsed. |
-| ⚪ Gray — "Younium: Missing" / "Younium: …" | No Younium link saved on the project. |
+| Color | Label | When |
+|---|---|---|
+| 🟢 Green | `Younium: ✓ All good` | Order Invoiced AND IWMAC subscription Active |
+| 🟢 Green | `Younium: ✓ Invoiced (one-time)` | Order Invoiced, no IWMAC subscription product on it (one-time sale) |
+| 🟡 Yellow | `Younium: ⏳ Awaiting first invoice` | Order present, isLastVersion=true, no posted invoices yet |
+| 🟡 Yellow | `Younium: ⏳ Subscription starts <YYYY-MM-DD>` | Subscription start date is in the future |
+| 🟡 Yellow | `Younium: ⚠ Status uncertain` | Data incomplete or unexpected state |
+| 🔴 Red | `Younium: ⚠ Activate order in Younium` | Order is Draft — needs to be activated and invoiced |
+| 🔴 Red | `Younium: ⚠ Finalize order in Younium` | Order raw status 1 (Created but not finalized) + no orderNumber |
+| 🔴 Red | `Younium: ⚠ Activate subscription in Younium` | IWMAC subscription order is Draft — needs activation |
+| 🔴 Red | `Younium: ⚠ Finalize subscription in Younium` | IWMAC subscription Created but not finalized |
+| 🔴 Red | `Younium: ⚠ Subscription <status>` | IWMAC subscription found but in some other non-Active state |
+| 🔴 Red | `Younium: ✗ Cancelled` | Order has a past cancellationDate |
+| 🔴 Red | `Younium: ✗ Expired` | Order's effectiveEndDate is in the past AND not auto-renewing |
+| ⚪ Gray | `Younium: ⏳ Checking…` | Verdict is being fetched (modal open, refresh, or background fetch) |
+| ⚪ Gray | `Younium: Missing` | No Younium link saved on the project |
 
-**Click behavior:** opens `<dialog id="dlgYouniumStatus">` — a fullscreen-centered native modal (max-width 900px, max-height 88vh, responsive). The native `<dialog>` element handles **Escape-to-close**, **backdrop scroll-lock**, and **Top Layer rendering** automatically — we just style the backdrop and add an explicit backdrop-click handler.
+The chip's **hover tooltip** is a multi-line dump: label on line 1, each problem from `verdict.problems[]` as a bullet line, "Click for details." footer.
 
-**Close paths** (all wired + Playwright-verified):
-1. **X button** in the title bar (`#btnCloseYouniumStatus`)
-2. **Footer Close button** (`#btnCloseYouniumStatus2`)
-3. **Escape key** — native to `<dialog>`
-4. **Backdrop click** — explicit handler on the `<dialog>` element when `ev.target === dialog`
+**Click behavior:** opens `<dialog id="dlgYouniumStatus">` — a fullscreen-centered native modal. **CSS gotcha:** the dialog's styles are scoped to `dialog.dlgYouniumStatus[open]` (NOT plain `.dlgYouniumStatus`) so they only apply when the dialog is actually open; without the `[open]` qualifier our `display:flex` would override the user-agent's `dialog:not([open]) { display: none }` and leave an empty dialog stuck at the bottom of the page.
 
-**Sections rendered in the modal body** (in this order):
+**Close paths:**
+1. **Backdrop click** — explicit handler on the dialog when `ev.target === dialog`
+2. **Click the `[ ✕ Close ]` span pill in the header** (`#closeYouniumHintTop`)
+3. **Click the `[ ✕ Close (or click outside) ]` span pill in the footer** (`#closeYouniumHintBottom`) — *removed in some revisions; the X-in-header is the primary close affordance*
+4. **Escape key** — native to `<dialog>` (some environments block it; we install an explicit document-level capture-phase keydown handler as fallback)
+5. **Capture-phase click listener on document** — catches close-hint clicks regardless of what's intercepting them (closest selector matches `#closeYouniumHintTop, #closeYouniumHintBottom`)
+6. **Emergency**: `closeYouniumModal()` in DevTools console
+
+The close hints are `<span role="button">` elements — NOT `<button>` elements — because the user reported their browser's tampermonkey-bridge environment was intercepting clicks on native `<button>` elements inside the dialog, preventing them from firing handlers. Spans aren't subject to the same interception.
+
+**Sections rendered in the modal body** (in order, `null` values get filtered out by `renderKV`):
 
 | Section | Content |
 |---|---|
-| **Status summary** | Big colored chip at the top: "OK: Order is Invoiced and Subscription is Active." / "Pending: …" / "Warning: …" / "Error: …" / "Missing: …" |
-| **Warnings** (only when problems exist) | Red panel with bullet list — includes computeYouniumStatus problems PLUS `buildYouniumExtraWarnings` (customer-name mismatch between project partner and Younium accountname, existing-link platform mismatch). |
-| **Project** | Name, Partner, Owner, Rocketlane status, last RL update, Younium link (with click-through), Rocketlane project ID. |
-| **Order / offer** | **Younium link** (clickable, at top), Order ID, Order number, Order name, Order status, Invoice status (posted vs drafted vs none), expected status "Invoiced", customer/account, total amount + currency, created, updated, **Last changed** (with source attribution). |
+| **Status summary** | Action-oriented one-liner: "All good — Order is Invoiced and Subscription is Active." / "Action needed: Subscription is in Draft state. Activate it in Younium to start invoicing." / "Cancelled — Order was cancelled on <date>." etc. Each verdict state has its own tailored copy (NOT a generic "Error:" prefix). |
+| **Warnings** (only when `verdict.problems.length > 0`) | Red panel with bullet list — `computeYouniumStatus` problems + `buildYouniumExtraWarnings` (customer-name mismatch, link platform mismatch). |
+| **Order / offer** | Section title carries colored badge `[INVOICED]` / `[DRAFT]` / etc. Rows: Younium link, Order ID, Order number, Order name, Order status (✓ Invoiced in green, red for Draft/Cancelled), Invoice status (hidden when order is Draft/Cancelled/Expired since invoices belong to a prior order version), Total amount, Currency, Created date, Updated date, **Created by** (from eventlog earliest event), **Last updated by** (from eventlog latest event). |
+| **Subscription** | Section title carries `[ACTIVE]` / `[DRAFT (NOT ACTIVATED)]` / `[NONE]` badge. Rows: Younium link (subscription order URL), Order ID, Order number (`Draft` shown in red when no number assigned), Subscription status (color-coded), Start/End/Cancellation dates, Auto-renew/Renewed/Latest version/Term, Created/Updated dates, Created by + Last updated by from subscription order's eventlog. |
+| **Other orders for this plant** | Compact one-line-per-order rows for sibling orders (filtered: drops the primary order id, the subscription order id, AND any order whose `orderNumber` matches either — catches Younium's versioning where the same `O-NNNNNN` can have multiple records). Each row: status badge, order number link to Younium, description, start/end dates. |
 
-Subscription and Raw Younium data sections were intentionally removed (2026-05-26) — they cluttered the view and Subscription was derived from order lifecycle anyway. The verdict still tracks both internally (used by Summary + Warnings), but the order info is the only data block displayed.
+The original "Project" section + "Subscription (raw)" + "Raw Younium data" debug table were all removed — the modal now focuses on actionable Younium state only.
 
 **Footer actions:**
 
-- **Refresh status** — clears `youniumStatusFetchedThisSession` for the project and re-runs `computeYouniumStatus()`, updating modal body + toolbar button face.
-- **Copy summary** — writes a plain-text summary (project name, verdict, order/subscription status, last change, URL, issues) to the clipboard via `navigator.clipboard.writeText()`. Falls back to `alert(text)` on permission denial.
-- **Open Younium order ↗** — direct link, only shown when a Younium URL is saved.
-- **Open subscription ↗** — direct link, only shown when an Oneflow subscription URL is saved (Younium itself doesn't have a distinct subscription URL).
-- **Close** — closes the dialog.
+- **Refresh status** — clears `youniumStatusFetchedThisSession` for the project, flips the toolbar chip to ⏳ Checking, re-runs `computeYouniumStatus()`, updates modal body + chip face.
+- **Copy summary** — writes a plain-text summary to clipboard.
+- **Open Younium order ↗** — direct link to saved primary order, only shown when a Younium URL is saved.
+- **Open Younium subscription ↗** — direct link to the IWMAC subscription order, only shown when `verdict.subscriptionOrderIsSeparate` (the subscription was found via plant_id and is a different order than the saved primary).
+- **Open Oneflow subscription ↗** — direct link to the Oneflow subscription agreement (renamed from "Open subscription" for disambiguation), only shown when `p.oneflowSubscriptionUrl` is set.
 
-**Read-only safety:** no API writes, no project-field mutations (except cached verdict storage), no link overwrites, no subscription activation. The modal observes; it never modifies.
+**Read-only safety:** no API writes, no project-field mutations (except cached verdict storage), no link overwrites, no subscription activation.
 
-**Caching:** verdict is persisted on `project.youniumStatus = { color, label, orderStatus, subscriptionStatus, orderNumber, kind, problems, lastCheckedAt }` so the chip shows immediately on revisits. Background refresh runs once per project per session via the `youniumStatusFetchInFlight` / `youniumStatusFetchedThisSession` Sets (same pattern as the auto-link-fetch).
+**Caching:** verdict is persisted on `project.youniumStatus = { color, label, orderStatus, subscriptionStatus, orderNumber, kind, problems, lastCheckedAt }` so the chip shows immediately on revisits. Background refresh runs once per project per session via `youniumStatusFetchInFlight` / `youniumStatusFetchedThisSession` Sets. During in-flight fetches the chip flips to `Younium: ⏳ Checking…` (gray) so the user knows what's happening.
+
+**IWMAC subscription detection** — two layers:
+
+1. **On the saved order**: `findIwmacSubscriptionItem(order)` walks every plausible array on the order payload (`bookings`, `products`, `charges`, `orderProducts`, `subscriptions`, `subscriptionProducts`, `lineItems`, `items`) and checks each entry's name fields (`productName`, `name`, `subscriptionName`, `product.name`, etc.) against `/\bIWMAC\s*(?:Abonnement|Subscription)\b/i`.
+2. **Plant_id lookup** (fallback when the saved order has no IWMAC product): `youniumFindSubscriptionByPlantId(plantId)` calls `searchOrders` with `{ fieldName: "plant_id", value: pid, operator: 0 }` + `isLastVersion=true`, hydrates each candidate via `getOrderById`, returns the first one whose products array contains IWMAC.
+
+`plantId` is extracted from the project name via `extractPlantIdFromProjectName(name)` — pattern `^(\d{2,7})\s*[-–]\s+` (e.g. "4729 - Storcash Rudshøgda" → "4729").
+
+**Subscription Draft detection** — three signals, any one triggers Draft:
+
+- `subOrder.status === 5` (documented Younium Draft enum)
+- `subOrder.status === 0` (observed in this tenant on un-activated subscriptions; not in any published enum)
+- `subOrder.orderNumber` missing / null / "Draft" / starts with "draft" (Younium UI shows "Draft" when an order has no published order number, regardless of `status`)
+
+The `subIsRawCreated` check (status === 1) is conservatively gated — it only triggers "Created (not finalized)" when ALSO combined with a draft-looking orderNumber, because status 1 can also appear on versioned ACTIVE orders.
 
 **API fields used:**
 
 | Source | Field(s) |
 |---|---|
-| `GET /api/order/{id}` | `orderNumber`, `status`, `effectiveStartDate`, `effectiveEndDate`, `cancellationDate`, `isLastVersion`, `isAutoRenewed`, `isRenewed`, `term`, `bookings[]` |
-| `POST /api/order/invoicesForHistory` `{ orderNumber }` | Array of `{ invoiceNumber, status, posted, paymentDate, dueDate, totalAmount }` — order is "Invoiced" when at least one entry has `status >= 2` OR a non-null `posted` timestamp |
-| `POST /api/data/query/quote` filtered by `id` | When the saved link is a `/quotes/<uuid>` (immediate "Quote" verdict — never Active) |
+| `GET /api/order/{id}` | `orderNumber`, `description`, `status`, `effectiveStartDate`, `effectiveEndDate`, `cancellationDate`, `isLastVersion`, `isAutoRenewed`, `isRenewed`, `term`, `bookings[]`, plus any `products`/`charges`/`orderProducts`/etc. arrays the tenant returns |
+| `POST /api/order/invoicesForHistory` `{ orderNumber }` | Array of `{ invoiceNumber, status, posted, paymentDate, dueDate, totalAmount }` — order is "Invoiced" when at least one entry has `status >= 2` OR a non-null `posted` timestamp. Invoices for Draft orders are hidden in the modal since they belong to a prior order version. |
+| `POST /api/data/query/order` (via `searchOrders`) | Plant_id-filtered search for the subscription lookup + the "Other orders for this plant" list. Richer `displayFields` requested so we can render compact rows without a per-order `getOrderById`. |
+| `POST /api/data/query/quote` filtered by `id` | When the saved link is a `/quotes/<uuid>` (immediate "Quote" verdict). |
+| `GET /api/eventlog/order/id/{id}` (bridge v1.9.11+) | Audit timeline. Returns array of events with `timestamp` + user identity. We extract the latest event for "Last updated by" and the earliest for "Created by" via `extractLatestEvent` / `extractFirstEvent`. Field-name detection is defensive across multiple candidate keys (`userEmail`, `email`, `userDisplayName`, `userName`, `modifiedByUserDisplayName`, etc.) since we never directly inspected the JSON shape — a `currentColor` stroke also lets the spinner pick up the chip's color tint. |
 
-**Subscription derivation:** Younium's order `bookings[]` array is empty on most orders we've sampled, so subscription state is derived from the order's lifecycle dates:
+**Subscription derivation:** the subscription order's lifecycle dates drive the subscription status. Order checks:
 
-- `cancellationDate <= now` → Cancelled
-- `effectiveEndDate <= now && !isAutoRenewed && !isRenewed` → Inactive
+- `cancellationDate <= now` → "Cancelled"
+- `effectiveEndDate <= now && !isAutoRenewed && !isRenewed` → "Inactive"
+- `subOrder.status === 5` OR orderNumber looks-like-draft → "Draft (not activated)"
+- `subOrder.status === 1` AND no real orderNumber → "Created (not finalized)"
 - `effectiveStartDate > now` → "Order — not active yet"
-- `isLastVersion && effectiveStartDate <= now` → Active
+- `isLastVersion && effectiveStartDate <= now` → "Active"
 
-**Debug logging:** every check emits `[Younium status] …` lines to console — project context, parsed URL, fetched order, fetched invoices, verdict, and color decision. Disable via `window.__matchDebug = false`.
+**Debug logging:** every check emits `[Younium status] …` lines to console — project context, parsed URL, fetched primary order, subscription order, eventlog data, verdict, color decision. The verbose subscription-order dump includes every candidate user-attribution field name so we can identify which one Younium populates on this tenant. Disable via `window.__matchDebug = false`.
 
 #### Two-slot Oneflow (Order/offer vs Subscription agreement)
 
@@ -594,3 +630,14 @@ When adding new code that calls Rocketlane / Zendesk / Oneflow / HubSpot / Youni
 - **Drag-and-drop removed** from the project list
 - **Hubspot Deal Description writer** — auto-updates the Rocketlane custom field on save with a `Links:` block; falls back to tenant /fields lookup when the field hasn't been written to the project yet
 - **Bridge consolidation**: single userscript now bridges all five platforms
+- **Younium status modal** — full redesign across multiple revisions:
+  - Chip lives in the project header meta row (between Updated and RL sync), styled to match `.tag` chips via `.btn.youniumStatusBtn` specificity (0,2,0)
+  - Action-oriented labels (`Younium: ⚠ Activate subscription in Younium`) instead of generic status names
+  - IWMAC subscription detection via product-name regex + `plant_id` custom-field lookup
+  - Draft detection via raw status enum (0/5) AND orderNumber heuristic (Younium UI calls an order "Draft" when no number assigned)
+  - "Other orders for this plant" section using `searchOrders` with rich displayFields (no per-order hydration)
+  - Audit attribution: `Created by` + `Last updated by` rows from the `/api/eventlog/order/id/{id}` endpoint (bridge v1.9.11)
+  - Invoice status row hidden when order is Draft/Cancelled/Expired (those invoices belong to a prior order version)
+  - Close-via-span pattern: `<span role="button">` for the X icon because some tampermonkey/browser combos intercept `<button>` clicks inside dialogs
+- **RL sync chip redesign** — drop the dimmed-quiet style, use `::before { content: "↻" }` glyph that spins via `rlSyncSpin` keyframe when the `.warn` modifier is applied (during sync)
+- **Bridge v1.9.11** — `getOrderEventLog(id)` calls `GET /api/eventlog/order/id/{id}` for the Younium audit timeline
