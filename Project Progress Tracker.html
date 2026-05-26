@@ -10210,7 +10210,12 @@
           !subOrderNumberStr ||
           subOrderNumberStr.toLowerCase() === "draft" ||
           /^draft\b/i.test(subOrderNumberStr);
-        const subIsRawDraft   = subOrder.status === 5 || subOrderNumberLooksDraft;
+        // Younium subscription Active state is status === 9. We've also
+        // seen status === 0 on un-activated subscriptions in this tenant
+        // (with orderNumber = "Draft"). Anything that isn't 9 on a
+        // subscription order means it hasn't been activated yet —
+        // bundle 0/5 + the "no orderNumber" signal as Draft.
+        const subIsRawDraft   = subOrder.status === 5 || subOrder.status === 0 || subOrderNumberLooksDraft;
         const subIsRawCreated = subOrder.status === 1;
         dbg("subscription order:", {
           id: subOrder.id, orderNumber: subOrder.orderNumber,
@@ -27251,24 +27256,15 @@
         const subActive = verdict.subscriptionStatus === "Active";
         const subStatusBadgeColor = subActive ? "var(--good)" : "var(--bad)";
         const subOrderLink = subOrder?.id ? "https://eu.younium.com/orders/" + subOrder.id : null;
-        // Status enum lookup so we can show e.g. "Draft (5)" / "Active (9)"
-        const subStatusEnum = subOrder?.status;
-        const subStatusEnumLabel =
-          subStatusEnum === 5 ? "Draft" :
-          subStatusEnum === 9 ? "Active" :
-          subStatusEnum === 1 ? "Created" :
-          (subStatusEnum != null ? "status " + subStatusEnum : "—");
         const subscriptionKV = verdict.hasSubscriptionProduct
           ? [
               ["Younium link",             subOrderLink
                 ? '<a href="' + escHtml(subOrderLink) + '" target="_blank" rel="noopener noreferrer">' + escHtml(subOrderLink) + '</a>'
                 : '<em style="color: var(--muted);">none</em>'],
               ["Has IWMAC subscription",   '<span style="color: var(--good);">Yes</span>'],
-              ["Product name",             verdict.subscriptionProduct?.productName || "—"],
               ["Order number",             subOrder?.orderNumber
                 ? escHtml(String(subOrder.orderNumber))
                 : '<strong style="color: var(--bad);">— (no number assigned → Draft)</strong>'],
-              ["Younium raw status",       subStatusEnumLabel + (subStatusEnum != null ? " (" + subStatusEnum + ")" : "")],
               ["Subscription status",      '<strong style="color: ' + subStatusBadgeColor + ';">' + escHtml(verdict.subscriptionStatus) + '</strong>'],
               ["Expected status",          "Active"],
               ["Start date",               fmtDateOnly(subOrder?.effectiveStartDate)],
