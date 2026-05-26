@@ -444,6 +444,32 @@ Same pattern for the bridge — `rocketlane-chat-bridge.user.js` lives in **two*
 - A project's `fields[]` array only contains fields that have a value. Empty/never-written custom fields are OMITTED.
 - To write to such a field, look up its ID via the tenant `/fields` endpoint first. Pattern: `rocketlaneFindDealDescriptionFieldId()`.
 
+### Project-link auto-population source priority
+
+When a project has a `rocketlaneProjectId` set and any of the link slots (`overviewUrl` / `oneflowUrl` / `oneflowSubscriptionUrl` / `youniumUrl` / `hubspotUrl`) is empty, the tracker auto-fetches link values from Rocketlane on every project view (once per session, then cached on the project).
+
+**Source priority** (highest first):
+1. **Internal Quality Control task notes** — `rocketlaneFetchInternalQCTaskNotes(rlPid)` looks for a task whose name matches `/\binternal\s+(?:quality\s+control|qc)\b/i` (covers the canonical "Internal Quality control and notes" plus user-listed variants "Internal Quality Control", "Internal QC"). Parses the task's `taskDescription` HTML.
+2. **HubSpot Deal Description custom field** — `rocketlaneFetchHubspotDealDescription(rlPid)`. Fallback for any slot IQC didn't fill.
+3. **Existing fallback search / matching** — the Find buttons (Oneflow / HubSpot / Younium) remain available for manual lookup.
+
+**Merging behavior** (`mergeProjectLinksByPriority`):
+- IQC has value, Deal Desc empty → IQC wins (source: `iqc`)
+- IQC empty, Deal Desc has value → Deal Desc wins (source: `dealDescription`)
+- Both agree → IQC source attributed
+- Both differ → IQC wins, conflict recorded + logged as `console.warn`
+
+**Never silently overwrite manual values**: the auto-fill only writes into EMPTY fields. Saved (non-empty) links survive every refresh; the user must explicitly clear a field before auto-fill will repopulate it.
+
+**Oneflow Order vs Subscription disambiguation** — `classifyOneflowLinkByNearbyLabel(label)` inspects the surrounding text of an Oneflow URL:
+- `Abonnement` / `Subscription` / `Subscription agreement` → subscription slot
+- `Order` / `Order / offer` / `Offer` / `Tilbud` / `Ordre` → order slot
+- Anything else → first ambiguous Oneflow link defaults to the order slot, subsequent ambiguous ones land in the subscription slot, and a console warning lists every ambiguous case so the user can fix the label in Rocketlane.
+
+**Domain-first classification**: URL structure is the source of truth (`classifyLinkUrl`). A link labeled "Oneflow" that actually points at Zendesk classifies as Zendesk and lands in the Zendesk slot — labels never override URL structure.
+
+**Debug log**: every auto-fetch emits a collapsed `[ProjectLinks] auto-fetch for <project>` group with the IQC task found, Deal Description state, ambiguous Oneflow links (if any), the merged result, and the per-slot source. Disable with `window.__matchDebug = false`.
+
 ### Auto-renew-on-401 pattern (all four cookie/JWT bridges)
 
 All four non-Rocketlane bridges retry a stale-credential failure exactly once before throwing. The mechanism differs per platform but the shape is identical: a single in-flight promise coalesces concurrent renewals, a 5s cooldown prevents stampedes, and a successful renewal triggers exactly one retry of the original call.

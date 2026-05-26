@@ -11390,6 +11390,103 @@
         return { html: "", fieldId: null, links: parseProjectLinksFromHtml("") };
       }
 
+      /**
+       * Locate + fetch the "Internal Quality Control" task on a project,
+       * returning { found, taskId, taskName, descriptionHtml, links }.
+       *
+       * Tenant convention (verified via Playwright on project 1121814):
+       *   - The task is typically named "Internal Quality control and notes"
+       *   - Other Norwegian/English variations are accepted via regex
+       *   - Its taskDescription is HTML with an "Attach links:" <ul>
+       *     listing all platform URLs labeled by platform name +
+       *     "Order / offer" / "Subscription agreement" disambiguator
+       *
+       * Two API hits per project: GET /projects/<id>/tasks (list) then
+       * GET /tasks/<taskId> (detail) because the list response omits
+       * taskDescription. Cached per session via youniumStatusFetchedThisSession-
+       * style sets at the call sites.
+       */
+      async function rocketlaneFetchInternalQCTaskNotes(rlProjectId) {
+        const pid = String(rlProjectId ?? "").trim();
+        if (!pid) throw new Error("Missing Rocketlane projectId.");
+        const tasks = await rocketlaneRequestJson(
+          "GET",
+          "/projects/" + encodeURIComponent(pid) + "/tasks",
+        );
+        const list = Array.isArray(tasks) ? tasks : (tasks?.data || []);
+        // Match the IQC task name variations the user spec listed:
+        //   "Internal Quality Control", "Internal QC", "Internal Quality control",
+        //   "Internal Quality control and notes" (the canonical name in this tenant)
+        const qc = list.find((t) => {
+          const name = String(t?.taskName || t?.name || "").trim();
+          return /\binternal\s+(?:quality\s+control|qc)\b/i.test(name);
+        });
+        if (!qc) {
+          return { found: false, taskId: null, taskName: null, descriptionHtml: "", links: parseProjectLinksFromHtml("") };
+        }
+        const detail = await rocketlaneRequestJson(
+          "GET",
+          "/tasks/" + encodeURIComponent(qc.taskId || qc.id),
+        );
+        const descriptionHtml = String(detail?.taskDescription || detail?.description || "");
+        return {
+          found: true,
+          taskId: qc.taskId || qc.id,
+          taskName: qc.taskName || qc.name,
+          descriptionHtml,
+          links: parseProjectLinksFromHtml(descriptionHtml),
+        };
+      }
+
+      /**
+       * Merge two slot-keyed URL maps with Internal-Quality-Control as
+       * the trusted primary source and HubSpot Deal Description as the
+       * fallback. Returns the merged map PLUS a list of conflicts so
+       * the caller can log warnings.
+       *
+       * Behavior per slot:
+       *   - IQC has a link, Deal Desc doesn't        → use IQC
+       *   - IQC missing, Deal Desc has one           → use Deal Desc
+       *   - Both have the same link                  → use it, no conflict
+       *   - Both have different links                → use IQC, record conflict
+       *   - Both empty                               → empty in result
+       */
+      function mergeProjectLinksByPriority(iqcLinks, dealDescLinks) {
+        const slots = [
+          "zendesk", "oneflowOrder", "oneflowSubscription",
+          "younium", "hubspot", "rocketlane",
+        ];
+        const merged = {};
+        const conflicts = [];
+        const sources = {}; // key → "iqc" | "dealDescription" | "none"
+        for (const k of slots) {
+          const a = String(iqcLinks?.[k] || "").trim();
+          const b = String(dealDescLinks?.[k] || "").trim();
+          if (a && b) {
+            if (a === b) {
+              merged[k] = a;
+              sources[k] = "iqc"; // both agree, attribute to the higher-priority source
+            } else {
+              merged[k] = a;
+              sources[k] = "iqc";
+              conflicts.push({ slot: k, iqc: a, dealDescription: b });
+            }
+          } else if (a) {
+            merged[k] = a;
+            sources[k] = "iqc";
+          } else if (b) {
+            merged[k] = b;
+            sources[k] = "dealDescription";
+          } else {
+            merged[k] = "";
+            sources[k] = "none";
+          }
+        }
+        // Legacy alias for callers that read `.oneflow`
+        merged.oneflow = merged.oneflowOrder;
+        return { merged, conflicts, sources };
+      }
+
       /** Write a new HTML value to the project's Hubspot Deal Description field. */
       async function rocketlaneUpdateHubspotDealDescription(rlProjectId, fieldId, html) {
         const pid = String(rlProjectId ?? "").trim();
@@ -11405,29 +11502,119 @@
       }
 
       /**
-       * Parse the Deal Description HTML back into a {zendesk, oneflow, younium,
-       * hubspot, rocketlane} URL map. Walks every <li>/<p>/<div> that contains
-       * an <a href>, and assigns the link to whichever label keyword appears in
-       * its text (case-insensitive). First match per key wins.
+       * Look at the surrounding text of an Oneflow link and decide
+       * whether it's the "Order / offer" or the "Subscription agreement"
+       * variant. The tenant convention plus user spec covers Norwegian
+       * AND English labels:
+       *   - "Subscription", "Subscription agreement", "Abonnement"
+       *     → subscription
+       *   - "Order", "Order / offer", "Offer", "Tilbud", "Ordre"
+       *     → order
+       *   - anything else → "unknown" (caller decides what to do)
+       */
+      function classifyOneflowLinkByNearbyLabel(label) {
+        const l = String(label || "").toLowerCase();
+        // Subscription wins when both could match — e.g. "Subscription order"
+        // is more likely a subscription agreement than a sales order.
+        if (/\babonnement|\bsubscription/.test(l)) return "subscription";
+        if (/\b(?:order|offer|tilbud|ordre)\b/.test(l)) return "order";
+        return "unknown";
+      }
+
+      /**
+       * Parse a free-text-with-links HTML blob into a slot-keyed URL map:
+       *   { zendesk, oneflowOrder, oneflowSubscription, younium, hubspot, rocketlane }
+       *
+       * Strategy (per user spec):
+       *   1. Walk every <li>/<p>/<div>/<tr> that contains an <a href>.
+       *   2. Classify the URL by DOMAIN first — never trust the label
+       *      text alone (a link labeled "Oneflow" pointing at Zendesk
+       *      is a Zendesk link).
+       *   3. For Oneflow URLs only, additionally inspect the container's
+       *      text to decide order vs subscription via
+       *      classifyOneflowLinkByNearbyLabel.
+       *   4. First match per slot wins.
+       *
+       * Legacy back-compat: the returned object ALSO carries the old
+       * `oneflow` key set to the same value as oneflowOrder, so existing
+       * call sites that read `links.oneflow` continue to work.
        */
       function parseProjectLinksFromHtml(html) {
-        const result = { zendesk: "", oneflow: "", younium: "", hubspot: "", rocketlane: "" };
+        const result = {
+          zendesk: "",
+          oneflowOrder: "",
+          oneflowSubscription: "",
+          younium: "",
+          hubspot: "",
+          rocketlane: "",
+          // Legacy alias — same value as oneflowOrder once classified.
+          oneflow: "",
+        };
         if (!html) return result;
         const doc = new DOMParser().parseFromString(String(html), "text/html");
         const containers = doc.body.querySelectorAll("li, p, div, tr");
+        // Track ambiguous Oneflow links so the caller can warn.
+        const ambiguousOneflow = [];
         for (const c of containers) {
           const a = c.querySelector("a[href]");
           if (!a) continue;
-          const href = a.getAttribute("href") || "";
+          const href = (a.getAttribute("href") || "").trim();
           if (!/^https?:/i.test(href)) continue;
-          const text = (c.textContent || "").toLowerCase();
-          for (const key of Object.keys(result)) {
-            if (!result[key] && text.includes(key)) {
-              result[key] = href;
+          // Classify by URL structure — same classifier used elsewhere
+          // for link validation; never trust the label.
+          const cls = classifyLinkUrl(href);
+          if (!cls) continue;
+          const labelText = (c.textContent || "").replace(/\s+/g, " ").trim();
+          switch (cls.platform) {
+            case "zendesk":
+              if (!result.zendesk) result.zendesk = href;
+              break;
+            case "younium":
+              if (!result.younium) result.younium = href;
+              break;
+            case "hubspot":
+              if (!result.hubspot) result.hubspot = href;
+              break;
+            case "rocketlane":
+              if (!result.rocketlane) result.rocketlane = href;
+              break;
+            case "oneflow": {
+              const kind = classifyOneflowLinkByNearbyLabel(labelText);
+              if (kind === "subscription" && !result.oneflowSubscription) {
+                result.oneflowSubscription = href;
+              } else if (kind === "order" && !result.oneflowOrder) {
+                result.oneflowOrder = href;
+              } else if (kind === "unknown") {
+                // Label didn't clearly say order vs subscription. Fall
+                // back to: first ambiguous link → order slot (the more
+                // common default), subsequent ambiguous links recorded
+                // for warnings.
+                if (!result.oneflowOrder) {
+                  result.oneflowOrder = href;
+                  ambiguousOneflow.push({ href, labelText, slot: "order (defaulted)" });
+                } else if (!result.oneflowSubscription) {
+                  result.oneflowSubscription = href;
+                  ambiguousOneflow.push({ href, labelText, slot: "subscription (defaulted)" });
+                } else {
+                  ambiguousOneflow.push({ href, labelText, slot: "(no free slot)" });
+                }
+              }
               break;
             }
+            default:
+              // unknown platform — ignore
+              break;
           }
         }
+        // Legacy alias
+        result.oneflow = result.oneflowOrder;
+        // Stash ambiguous-Oneflow notes on the result so the caller can
+        // surface a console warning. Non-enumerable so JSON.stringify
+        // doesn't clutter logs.
+        Object.defineProperty(result, "_ambiguousOneflow", {
+          value: ambiguousOneflow,
+          enumerable: false,
+        });
         return result;
       }
 
@@ -18715,10 +18902,11 @@
           // sessions. Within a session, we only attempt once per project.
           const rlPid = String(p.rocketlaneProjectId ?? "").trim();
           const missingAny =
-            !String(p.overviewUrl ?? "").trim() ||
-            !String(p.oneflowUrl  ?? "").trim() ||
-            !String(p.youniumUrl  ?? "").trim() ||
-            !String(p.hubspotUrl  ?? "").trim();
+            !String(p.overviewUrl              ?? "").trim() ||
+            !String(p.oneflowUrl               ?? "").trim() ||
+            !String(p.oneflowSubscriptionUrl   ?? "").trim() ||
+            !String(p.youniumUrl               ?? "").trim() ||
+            !String(p.hubspotUrl               ?? "").trim();
           if (
             rlPid &&
             missingAny &&
@@ -18726,20 +18914,68 @@
             !autoLinkFetchTriedThisSession.has(p.id)
           ) {
             autoLinkFetchInFlight.add(p.id);
-            rocketlaneFetchHubspotDealDescription(rlPid)
-              .then(({ links }) => {
+            // ── Source priority (per user spec) ──
+            // 1. Internal Quality Control task notes (primary, trusted)
+            // 2. HubSpot Deal Description (fallback for missing slots)
+            // Run both fetches in parallel — partial data beats none.
+            Promise.allSettled([
+              rocketlaneFetchInternalQCTaskNotes(rlPid),
+              rocketlaneFetchHubspotDealDescription(rlPid),
+            ])
+              .then(([iqcRes, ddRes]) => {
+                const iqc = iqcRes.status === "fulfilled" ? iqcRes.value : null;
+                const dd  = ddRes.status  === "fulfilled" ? ddRes.value  : null;
+                const iqcLinks = iqc?.links || parseProjectLinksFromHtml("");
+                const ddLinks  = dd?.links  || parseProjectLinksFromHtml("");
+                const { merged, conflicts, sources } = mergeProjectLinksByPriority(iqcLinks, ddLinks);
+
+                // Debug breadcrumb so the user can see exactly what
+                // happened in DevTools when something looks off.
+                try {
+                  if (typeof window !== "undefined" && window.__matchDebug !== false) {
+                    // eslint-disable-next-line no-console
+                    console.groupCollapsed("[ProjectLinks] auto-fetch for " + (p.name || p.id));
+                    console.log("Internal Quality Control task:",
+                      iqc?.found
+                        ? { taskId: iqc.taskId, taskName: iqc.taskName, links: iqcLinks }
+                        : "(not found on this project)");
+                    console.log("HubSpot Deal Description:",
+                      dd?.fieldId
+                        ? { fieldId: dd.fieldId, links: ddLinks }
+                        : "(no Deal Description field on this project)");
+                    if (iqcLinks._ambiguousOneflow?.length) {
+                      console.warn("Ambiguous Oneflow links (label didn't disambiguate order vs subscription):",
+                        iqcLinks._ambiguousOneflow);
+                    }
+                    console.log("Merged result + per-slot source:", { merged, sources });
+                    if (conflicts.length) {
+                      console.warn("Source conflicts (Internal Quality Control was used):", conflicts);
+                    }
+                    console.groupEnd();
+                  }
+                } catch (_) {}
+
                 let changed = false;
-                const fill = (key, value) => {
+                const fill = (key, value, sourceLabel) => {
                   if (!value) return;
-                  if (String(p[key] ?? "").trim()) return; // never overwrite user input
+                  // Never overwrite a manually-saved value silently.
+                  // (The auto-fetch only fills EMPTY slots.)
+                  if (String(p[key] ?? "").trim()) return;
                   p[key] = value;
                   changed = true;
+                  try {
+                    if (typeof window !== "undefined" && window.__matchDebug !== false) {
+                      // eslint-disable-next-line no-console
+                      console.log("[ProjectLinks] filled " + key + " ←", value, "(from " + sourceLabel + ")");
+                    }
+                  } catch (_) {}
                 };
-                fill("overviewUrl", links.zendesk);
-                fill("oneflowUrl",  links.oneflow);
-                fill("youniumUrl",  links.younium);
-                fill("hubspotUrl",  links.hubspot);
-                if (links.rocketlane) fill("rocketlaneUrl", links.rocketlane);
+                fill("overviewUrl",            merged.zendesk,             sources.zendesk);
+                fill("oneflowUrl",             merged.oneflowOrder,        sources.oneflowOrder);
+                fill("oneflowSubscriptionUrl", merged.oneflowSubscription, sources.oneflowSubscription);
+                fill("youniumUrl",             merged.younium,             sources.younium);
+                fill("hubspotUrl",             merged.hubspot,             sources.hubspot);
+                if (merged.rocketlane) fill("rocketlaneUrl", merged.rocketlane, sources.rocketlane);
                 if (changed) {
                   saveState(state);
                   // Re-render so the toolbar icons appear immediately,
@@ -23909,20 +24145,47 @@
           };
           els.dlg.addEventListener("close", cleanup);
 
-          rocketlaneFetchHubspotDealDescription(rlPid).then(({ links }) => {
+          // Source priority: Internal Quality Control task notes >
+          // HubSpot Deal Description fallback. Same logic as the
+          // project-detail auto-fetch (see renderDetail).
+          Promise.allSettled([
+            rocketlaneFetchInternalQCTaskNotes(rlPid),
+            rocketlaneFetchHubspotDealDescription(rlPid),
+          ]).then(([iqcRes, ddRes]) => {
             if (dlgMode !== "edit" || editingProjectId !== p.id) return;
+            const iqc = iqcRes.status === "fulfilled" ? iqcRes.value : null;
+            const dd  = ddRes.status  === "fulfilled" ? ddRes.value  : null;
+            const iqcLinks = iqc?.links || parseProjectLinksFromHtml("");
+            const ddLinks  = dd?.links  || parseProjectLinksFromHtml("");
+            const { merged, conflicts, sources } = mergeProjectLinksByPriority(iqcLinks, ddLinks);
+            try {
+              if (typeof window !== "undefined" && window.__matchDebug !== false) {
+                // eslint-disable-next-line no-console
+                console.groupCollapsed("[EditDialog] auto-populate links for " + (p.name || p.id));
+                console.log("IQC:", iqc?.found
+                  ? { taskId: iqc.taskId, taskName: iqc.taskName, links: iqcLinks }
+                  : "(IQC task not found on this project)");
+                console.log("Deal Description:", { links: ddLinks });
+                console.log("Merged + sources:", { merged, sources });
+                if (conflicts.length) {
+                  console.warn("Source conflicts (Internal Quality Control was used):", conflicts);
+                }
+                console.groupEnd();
+              }
+            } catch (_) {}
             const fillEmpty = (input, value) => {
               if (!input || !value) return;
               if (touched.has(input)) return; // user typed/deleted — respect their intent
               if (!String(input.value || "").trim()) input.value = value;
             };
-            fillEmpty(els.fOverviewUrl,    links.zendesk);
-            fillEmpty(els.fOneflowUrl,     links.oneflow);
-            fillEmpty(els.fYouniumUrl,     links.younium);
-            fillEmpty(els.fHubspotUrl,     links.hubspot);
-            fillEmpty(els.fRocketlaneUrl,  links.rocketlane);
+            fillEmpty(els.fOverviewUrl,             merged.zendesk);
+            fillEmpty(els.fOneflowUrl,              merged.oneflowOrder);
+            fillEmpty(els.fOneflowSubscriptionUrl,  merged.oneflowSubscription);
+            fillEmpty(els.fYouniumUrl,              merged.younium);
+            fillEmpty(els.fHubspotUrl,              merged.hubspot);
+            fillEmpty(els.fRocketlaneUrl,           merged.rocketlane);
           }).catch((err) => {
-            console.warn("[DealDescription] fetch failed:", err);
+            console.warn("[EditDialog] link fetch failed:", err);
           });
         }
       }
