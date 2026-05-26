@@ -27044,7 +27044,18 @@
         }
       }
 
-      els.btnYouniumStatus.addEventListener("click", openYouniumStatusModal);
+      // Toggle: clicking the toolbar button while the modal is open
+      // CLOSES it. This guarantees the user has a working close path
+      // — the toolbar Younium Status button is OUTSIDE the dialog, so
+      // whatever interception prevents in-dialog clicks doesn't apply
+      // there.
+      els.btnYouniumStatus.addEventListener("click", () => {
+        if (els.dlgYouniumStatus?.open) {
+          forceCloseYouniumDialog("toolbar-toggle");
+        } else {
+          openYouniumStatusModal();
+        }
+      });
 
       // ── Close handlers ──
       // The user's environment blocks pretty much everything: <button>
