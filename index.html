@@ -1298,24 +1298,14 @@
       .tag {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
         font-size: 11px;
-        border: 1px solid var(--hairline);
-        padding: 4px 10px 4px 9px;
+        border: 1px solid transparent;
+        padding: 4px 10px;
         border-radius: 999px;
         color: var(--muted);
         background: var(--surface-2);
         line-height: 1.2;
-        --tag-dot: var(--muted2);
-      }
-
-      .tag:not(.rlSyncQuiet)::before {
-        content: "";
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: var(--tag-dot);
-        flex-shrink: 0;
+        font-weight: 500;
       }
 
       @keyframes assistPulse {
@@ -1327,13 +1317,16 @@
         }
       }
 
-      .tag.good           { --tag-dot: var(--good); }
-      .tag.warn           { --tag-dot: var(--warn); }
-      .tag.bad            { --tag-dot: var(--bad);  }
-      .tag.normal         { --tag-dot: var(--accent); }
-      .tag.waitingPartner { --tag-dot: var(--info); }
-      .tag.hold           { --tag-dot: var(--muted2); }
-      .tag.assist         { --tag-dot: var(--warn); font-weight: 600; }
+      /* Color variants — soft tinted background + colored text, no saturated
+         border (that's where the old "neon" look came from). State is still
+         scannable at a glance but reads as a label, not a glow. */
+      .tag.good           { color: var(--good);   background: rgba(52, 211, 153, 0.12); }
+      .tag.warn           { color: var(--warn);   background: rgba(251, 191, 36, 0.12); }
+      .tag.bad            { color: var(--bad);    background: rgba(251, 113, 133, 0.12); }
+      .tag.normal         { color: var(--accent); background: rgba(110, 231, 255, 0.12); }
+      .tag.waitingPartner { color: var(--info);   background: rgba(96, 165, 250, 0.12); }
+      .tag.hold           { color: var(--muted);  background: var(--surface-3); }
+      .tag.assist         { color: var(--warn);   background: rgba(251, 191, 36, 0.16); font-weight: 600; }
 
       .tag.attentionBlink {
         animation: assistPulse 1.2s ease-in-out 6;
@@ -3058,8 +3051,9 @@
         padding: 4px 10px;
         line-height: 1.3;
       }
-      /* Color variants live above as `.tag.good { --tag-dot: var(--good); }` etc.
-         — the colored dot is the only signal; pill body stays neutral. */
+      /* Color variants (.tag.good / .warn / .bad / .normal / .waitingPartner /
+         .hold / .assist) are defined once at the top of this file — soft
+         tinted background + colored text, no border. */
 
       /* ── Younium status chip ──
          Lives in the project header meta row between the Updated chip
