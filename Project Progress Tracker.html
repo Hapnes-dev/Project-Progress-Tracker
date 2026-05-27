@@ -7344,8 +7344,16 @@
             }
             project.status = nextStatus;
             touchProject(project.id);
+            // Also push the new status to Rocketlane (if this project is
+            // linked). Fire-and-forget — local change isn't undone on a
+            // network/API failure; rocketlanePushProjectStatusBestEffort
+            // surfaces errors via rocketlaneShowMessage + console.warn.
+            const _rlPidForStatus = String(project?.rocketlaneProjectId ?? "").trim();
+            if (_rlPidForStatus) {
+              void rocketlanePushProjectStatusBestEffort(_rlPidForStatus, nextStatus);
+            }
             closeProjectStatusMenu();
-            
+
             // Save immediately for status changes (don't wait for debounce timer)
             if (dataFileHandle && typeof dataFileHandle.createWritable === "function") {
               try {
@@ -11887,6 +11895,102 @@
           body,
         );
         return { html, fieldId };
+      }
+
+      // ──────────────────────────────────────────────────────────────────
+      // Project Status push (tracker → Rocketlane)
+      // ──────────────────────────────────────────────────────────────────
+      // Map the tracker's 5 local statuses to one of the 8 labels the
+      // Rocketlane project Status field accepts (Proposed / In Planning /
+      // To be Staffed / In progress / On Hold / Blocked / Completed /
+      // Cancelled). Adjust here if your tenant uses different labels.
+      const ROCKETLANE_PROJECT_STATUS_MAP = {
+        open:            "Proposed",
+        in_progress:     "In progress",
+        waiting_partner: "On Hold",
+        finished:        "Completed",
+        closed:          "Cancelled",
+      };
+
+      function rocketlaneProjectLocalStatusToLabel(localStatus) {
+        return ROCKETLANE_PROJECT_STATUS_MAP[normalizeStatus(localStatus)] || "";
+      }
+
+      // Cached tenant fieldId for the project "Status" SELECT field.
+      // Tenant-level field IDs are stable, so we only walk /fields once
+      // per session — same caching pattern as the Hubspot Deal Description
+      // and Internal QC notes lookups.
+      let _rocketlaneProjectStatusFieldId = null;
+
+      async function rocketlaneFindProjectStatusFieldId() {
+        if (_rocketlaneProjectStatusFieldId) return _rocketlaneProjectStatusFieldId;
+        try {
+          const json = await rocketlaneRequestJson("GET", "/fields");
+          const fields = Array.isArray(json) ? json : (json?.data ?? []);
+          const match = fields.find((f) => {
+            if (String(f?.objectType ?? "").toUpperCase() !== "PROJECT") return false;
+            const name = String(f?.fieldName ?? "").trim().toLowerCase();
+            const label = String(f?.fieldLabel ?? "").trim().toLowerCase();
+            return name === "status" || label === "status" || label === "project status";
+          });
+          if (match) {
+            _rocketlaneProjectStatusFieldId = match.fieldId;
+            return match.fieldId;
+          }
+        } catch (e) {
+          console.warn("[ProjectStatusPush] /fields lookup failed:", e?.message ?? e);
+        }
+        return null;
+      }
+
+      /** PUT a new Status-field value onto the Rocketlane project. */
+      async function rocketlaneUpdateProjectStatus(rlProjectId, fieldId, statusLabel) {
+        const pid = String(rlProjectId ?? "").trim();
+        if (!pid) throw new Error("Missing Rocketlane projectId.");
+        if (!fieldId) throw new Error("Missing Rocketlane Status fieldId.");
+        if (!statusLabel) throw new Error("Missing Rocketlane status label.");
+        // SELECT custom fields accept the option label as a plain string in
+        // fieldValue (same shape used by rocketlaneUpdateProjectNotes for the
+        // notes TEXT field).
+        const body = { fields: [{ fieldId, fieldValue: statusLabel }] };
+        await rocketlaneRequestJson(
+          "PUT",
+          "/projects/" + encodeURIComponent(pid),
+          undefined,
+          body,
+        );
+      }
+
+      /**
+       * Best-effort fire-and-forget push. Doesn't undo the local change on
+       * failure — surfaces a toast via rocketlaneShowMessage and a console
+       * warning so the user can still see the local status update apply.
+       */
+      async function rocketlanePushProjectStatusBestEffort(rlProjectId, localStatus) {
+        try {
+          const label = rocketlaneProjectLocalStatusToLabel(localStatus);
+          if (!label) {
+            console.warn("[ProjectStatusPush] No Rocketlane label mapped for local status:", localStatus);
+            return;
+          }
+          const fieldId = await rocketlaneFindProjectStatusFieldId();
+          if (!fieldId) {
+            console.warn("[ProjectStatusPush] No 'Status' PROJECT field in tenant schema; nothing to push.");
+            return;
+          }
+          await rocketlaneUpdateProjectStatus(rlProjectId, fieldId, label);
+          if (typeof rocketlaneShowMessage === "function") {
+            rocketlaneShowMessage("Rocketlane status set to '" + label + "'.", "info");
+          }
+        } catch (e) {
+          console.warn("[ProjectStatusPush] Push failed:", e);
+          if (typeof rocketlaneShowMessage === "function") {
+            rocketlaneShowMessage(
+              "Could not update Rocketlane status: " + (e?.message ?? e),
+              "error",
+            );
+          }
+        }
       }
 
       /**
