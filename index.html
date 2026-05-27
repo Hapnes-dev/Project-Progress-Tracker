@@ -6442,11 +6442,14 @@
         </select>
         <select class="select" id="filter">
           <option value="all">Filter: All</option>
-          <option value="open">Open</option>
+          <option value="proposed">Proposed</option>
+          <option value="in_planning">In Planning</option>
+          <option value="to_be_staffed">To be Staffed</option>
           <option value="in_progress">In progress</option>
-          <option value="waiting_partner">Waiting on Partner</option>
-          <option value="finished">Finished</option>
-          <option value="closed">Closed</option>
+          <option value="on_hold">On Hold</option>
+          <option value="blocked">Blocked</option>
+          <option value="completed">Completed</option>
+          <option value="cancelled">Cancelled</option>
         </select>
       </div>
 
@@ -6618,11 +6621,14 @@
             <div>
               <label class="small" for="fStatus">Status</label>
               <select class="select" id="fStatus">
-                <option value="open">Open</option>
+                <option value="proposed">Proposed</option>
+                <option value="in_planning">In Planning</option>
+                <option value="to_be_staffed">To be Staffed</option>
                 <option value="in_progress">In progress</option>
-                <option value="waiting_partner">Waiting on Partner</option>
-                <option value="finished">Finished</option>
-                <option value="closed">Closed</option>
+                <option value="on_hold">On Hold</option>
+                <option value="blocked">Blocked</option>
+                <option value="completed">Completed</option>
+                <option value="cancelled">Cancelled</option>
               </select>
             </div>
           </div>
@@ -7312,12 +7318,19 @@
         closeOwnerLoadMenu();
       });
 
+      // 8 project statuses matching the Rocketlane Status field options 1:1
+      // (so picking a status in the tracker pushes that exact same option to
+      // Rocketlane via the numeric ROCKETLANE_PROJECT_STATUS_MAP). Order
+      // mirrors the natural project pipeline: proposal → active → terminal.
       const PROJECT_STATUS_OPTIONS = [
-        { value: "open", label: "Open" },
-        { value: "in_progress", label: "In progress" },
-        { value: "waiting_partner", label: "Waiting on Partner" },
-        { value: "finished", label: "Finished" },
-        { value: "closed", label: "Closed" },
+        { value: "proposed",       label: "Proposed" },
+        { value: "in_planning",    label: "In Planning" },
+        { value: "to_be_staffed",  label: "To be Staffed" },
+        { value: "in_progress",    label: "In progress" },
+        { value: "on_hold",        label: "On Hold" },
+        { value: "blocked",        label: "Blocked" },
+        { value: "completed",      label: "Completed" },
+        { value: "cancelled",      label: "Cancelled" },
       ];
       function openProjectStatusPicker(project, anchorEl) {
         closeProjectStatusMenu();
@@ -11917,11 +11930,14 @@
         9: "On Hold",
       };
       const ROCKETLANE_PROJECT_STATUS_MAP = {
-        open:            5,  // Proposed
-        in_progress:     2,  // In progress
-        waiting_partner: 9,  // On Hold
-        finished:        3,  // Completed
-        closed:          8,  // Cancelled
+        proposed:      5,
+        in_planning:   6,
+        to_be_staffed: 7,
+        in_progress:   2,
+        on_hold:       9,
+        blocked:       4,
+        completed:     3,
+        cancelled:     8,
       };
 
       function rocketlaneProjectLocalStatusToValue(localStatus) {
@@ -15931,7 +15947,7 @@
                 name: rlName,
                 client: customerName || "",
                 owner: trackerOwnerName,
-                status: "open",
+                status: "proposed",
                 due: due || "",
                 notes: [
                   "Imported from Rocketlane API on " + new Date(importedAt).toLocaleString(UI_LOCALE),
@@ -16721,13 +16737,18 @@
       }
 
       function statusTag(status, progress) {
-        if (status === "finished") return { cls: "good", text: "Finished" };
-        if (status === "closed") return { cls: "good", text: "Closed" };
-        if (status === "waiting_partner") return { cls: "waitingPartner", text: "Waiting on Partner" };
-        if (status === "in_progress") return { cls: "warn", text: "In progress" };
-        // open
-        if (progress >= 80) return { cls: "warn", text: "In progress | Almost" };
-        return { cls: "warn", text: "In progress" };
+        if (status === "completed")     return { cls: "good",   text: "Completed" };
+        if (status === "cancelled")     return { cls: "bad",    text: "Cancelled" };
+        if (status === "blocked")       return { cls: "bad",    text: "Blocked" };
+        if (status === "on_hold")       return { cls: "hold",   text: "On Hold" };
+        if (status === "in_progress") {
+          if (progress >= 80)            return { cls: "warn",   text: "In progress | Almost" };
+          return { cls: "warn",   text: "In progress" };
+        }
+        if (status === "to_be_staffed") return { cls: "normal", text: "To be Staffed" };
+        if (status === "in_planning")   return { cls: "normal", text: "In Planning" };
+        // proposed (default)
+        return { cls: "normal", text: "Proposed" };
       }
 
       const ANLEGG_BASE = "\\\\192.168.119.24\\ioc\\Anlegg";
@@ -16910,7 +16931,7 @@
        *  name: string,
        *  client?: string,
        *  owner?: string,
-       *  status: "open" | "in_progress" | "waiting_partner" | "finished" | "closed",
+       *  status: "proposed" | "in_planning" | "to_be_staffed" | "in_progress" | "on_hold" | "blocked" | "completed" | "cancelled",
        *  due?: string,
        *  notes?: string,
        *  overviewUrl?: string,
@@ -16945,7 +16966,7 @@
               name: "Example: Gamle Kirkeplass 7",
               client: "Demo",
               owner: "",
-              status: "open",
+              status: "proposed",
               due: "",
               notes: "Replace this with your real projects. Use the checklists to track progress per category.",
               overviewUrl: "",
@@ -17150,7 +17171,7 @@
 
           pruneEmptyCategories(p);
 
-          p.status = normalizeStatus(p.status ?? "open");
+          p.status = normalizeStatus(p.status ?? "proposed");
           p.createdAt = p.createdAt ?? nowISO();
           p.updatedAt = p.updatedAt ?? nowISO();
         }
@@ -18497,22 +18518,30 @@
       }
 
       function normalizeStatus(status) {
-        // New statuses
+        // New 8-state enum — matches Rocketlane's Status field options 1:1
+        // so pushing via ROCKETLANE_PROJECT_STATUS_MAP is a direct lookup.
         if (
-          status === "open" ||
+          status === "proposed" ||
+          status === "in_planning" ||
+          status === "to_be_staffed" ||
           status === "in_progress" ||
-          status === "waiting_partner" ||
-          status === "finished" ||
-          status === "closed"
-        )
-          return status;
+          status === "on_hold" ||
+          status === "blocked" ||
+          status === "completed" ||
+          status === "cancelled"
+        ) return status;
 
-        // Migrate from old statuses
-        if (status === "active") return "open";
-        if (status === "blocked") return "waiting_partner";
-        if (status === "done") return "finished";
+        // Migrate from the previous 5-state enum (in-place upgrade)
+        if (status === "open")            return "proposed";
+        if (status === "waiting_partner") return "on_hold";
+        if (status === "finished")        return "completed";
+        if (status === "closed")          return "cancelled";
 
-        return "open";
+        // Migrate from even older statuses
+        if (status === "active") return "in_progress";
+        if (status === "done")   return "completed";
+
+        return "proposed";
       }
 
       function fmtDate(dateStr) {
@@ -18770,26 +18799,25 @@
           const row = byOwner[ownerKey];
           row.projectCount += 1;
           const pStatus = normalizeStatus(p.status);
-          if (pStatus !== "finished" && pStatus !== "closed") row.activeCount += 1;
+          if (pStatus !== "completed" && pStatus !== "cancelled") row.activeCount += 1;
 
           // Project-level status counts — match the status pills shown on
-          // project cards. `statusTag()` displays "In progress" for both
-          // `in_progress` and `open` (anything that isn't finished/closed/
-          // waiting_partner), so we count both here too. Otherwise the
-          // overview number disagrees with the visible pill count.
+          // project cards. With the 8-state enum: in_progress maps to the
+          // active "in progress" bucket; on_hold maps to the existing
+          // "waiting on partner" bucket (which now doubles for both task
+          // and project hold states); blocked maps to the blocked bucket.
+          // proposed / in_planning / to_be_staffed / completed / cancelled
+          // are not counted as workload — they're pre-active or terminal.
           const projectRef = { projectId: String(p.id), areaKey: null, taskId: null };
-          if (pStatus === "in_progress" || pStatus === "open") {
+          if (pStatus === "in_progress") {
             row.taskInProgressCount += 1;
             row.taskInProgressRefs.push(projectRef);
-          } else if (pStatus === "waiting_partner") {
+          } else if (pStatus === "on_hold") {
             row.taskWaitingPartnerCount += 1;
             row.taskWaitingPartnerRefs.push(projectRef);
           } else if (pStatus === "blocked") {
             row.taskBlockedCount += 1;
             row.taskBlockedRefs.push(projectRef);
-          } else if (pStatus === "need_assistance") {
-            row.needAssistanceCount += 1;
-            row.needAssistanceRefs.push(projectRef);
           }
         }
 
@@ -19491,16 +19519,10 @@
 
         const k2 = document.createElement("div");
         k2.className = "kpi";
-        const statusLabel =
-          p.status === "open"
-            ? "In progress"
-            : p.status === "in_progress"
-              ? "In progress"
-              : p.status === "waiting_partner"
-                ? "Waiting on Partner"
-                : p.status === "finished"
-                  ? "Finished"
-                  : "Closed";
+        // Use the same label that statusTag() renders on the project card so
+        // the KPI block stays in sync with the inline pill. Falls back to a
+        // sensible default for any unrecognised legacy value.
+        const statusLabel = tag.text || "Proposed";
 
         const k2Label = document.createElement("div");
         k2Label.className = "label";
@@ -24795,7 +24817,7 @@
         els.fName.value = "";
         els.fClient.value = "";
         els.fOwner.value = "";
-        els.fStatus.value = "open";
+        els.fStatus.value = "proposed";
         els.fDue.value = "";
         els.fOverviewUrl.value = "";
         if (els.fOneflowUrl) els.fOneflowUrl.value = "";
@@ -25193,10 +25215,10 @@
       }
 
       function projectStatusFromCsvTaskStatuses({ totalTasks, doneTasks, anyAtRisk, anyInProgress }) {
-        if (totalTasks > 0 && doneTasks === totalTasks) return "finished";
-        if (anyAtRisk) return "waiting_partner";
+        if (totalTasks > 0 && doneTasks === totalTasks) return "completed";
+        if (anyAtRisk) return "blocked";
         if (anyInProgress) return "in_progress";
-        return "open";
+        return "proposed";
       }
 
       /**
