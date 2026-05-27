@@ -11900,20 +11900,33 @@
       // ──────────────────────────────────────────────────────────────────
       // Project Status push (tracker → Rocketlane)
       // ──────────────────────────────────────────────────────────────────
-      // Map the tracker's 5 local statuses to one of the 8 labels the
-      // Rocketlane project Status field accepts (Proposed / In Planning /
-      // To be Staffed / In progress / On Hold / Blocked / Completed /
-      // Cancelled). Adjust here if your tenant uses different labels.
+      // The tenant Status field (fieldId 230410) is a SINGLE_SELECT and the
+      // API rejects label strings — fieldValue must be the numeric option
+      // value. The mapping below was captured via Playwright from
+      //   GET /api/v1/fields/230410
+      // on this Kiona tenant. If a future tenant renumbers options, regrab
+      // it from that endpoint's .metaData.options[] array.
+      const ROCKETLANE_PROJECT_STATUS_LABEL_BY_VALUE = {
+        2: "In progress",
+        3: "Completed",
+        4: "Blocked",
+        5: "Proposed",
+        6: "In Planning",
+        7: "To be Staffed",
+        8: "Cancelled",
+        9: "On Hold",
+      };
       const ROCKETLANE_PROJECT_STATUS_MAP = {
-        open:            "Proposed",
-        in_progress:     "In progress",
-        waiting_partner: "On Hold",
-        finished:        "Completed",
-        closed:          "Cancelled",
+        open:            5,  // Proposed
+        in_progress:     2,  // In progress
+        waiting_partner: 9,  // On Hold
+        finished:        3,  // Completed
+        closed:          8,  // Cancelled
       };
 
-      function rocketlaneProjectLocalStatusToLabel(localStatus) {
-        return ROCKETLANE_PROJECT_STATUS_MAP[normalizeStatus(localStatus)] || "";
+      function rocketlaneProjectLocalStatusToValue(localStatus) {
+        const v = ROCKETLANE_PROJECT_STATUS_MAP[normalizeStatus(localStatus)];
+        return (typeof v === "number") ? v : null;
       }
 
       // Cached tenant fieldId for the project "Status" SELECT field.
@@ -11943,16 +11956,18 @@
         return null;
       }
 
-      /** PUT a new Status-field value onto the Rocketlane project. */
-      async function rocketlaneUpdateProjectStatus(rlProjectId, fieldId, statusLabel) {
+      /** PUT a new Status-field option value onto the Rocketlane project. */
+      async function rocketlaneUpdateProjectStatus(rlProjectId, fieldId, statusValue) {
         const pid = String(rlProjectId ?? "").trim();
         if (!pid) throw new Error("Missing Rocketlane projectId.");
         if (!fieldId) throw new Error("Missing Rocketlane Status fieldId.");
-        if (!statusLabel) throw new Error("Missing Rocketlane status label.");
-        // SELECT custom fields accept the option label as a plain string in
-        // fieldValue (same shape used by rocketlaneUpdateProjectNotes for the
-        // notes TEXT field).
-        const body = { fields: [{ fieldId, fieldValue: statusLabel }] };
+        if (typeof statusValue !== "number") {
+          throw new Error("Rocketlane Status fieldValue must be numeric, got: " + typeof statusValue);
+        }
+        // SINGLE_SELECT fields take the option's numeric `value` in fieldValue
+        // (verified via /fields/230410's metaData.options[]). The API returns
+        // HTTP 400 "Expected a numeric value" if a label string is sent here.
+        const body = { fields: [{ fieldId, fieldValue: statusValue }] };
         await rocketlaneRequestJson(
           "PUT",
           "/projects/" + encodeURIComponent(pid),
@@ -11968,9 +11983,9 @@
        */
       async function rocketlanePushProjectStatusBestEffort(rlProjectId, localStatus) {
         try {
-          const label = rocketlaneProjectLocalStatusToLabel(localStatus);
-          if (!label) {
-            console.warn("[ProjectStatusPush] No Rocketlane label mapped for local status:", localStatus);
+          const value = rocketlaneProjectLocalStatusToValue(localStatus);
+          if (value == null) {
+            console.warn("[ProjectStatusPush] No Rocketlane option mapped for local status:", localStatus);
             return;
           }
           const fieldId = await rocketlaneFindProjectStatusFieldId();
@@ -11978,7 +11993,8 @@
             console.warn("[ProjectStatusPush] No 'Status' PROJECT field in tenant schema; nothing to push.");
             return;
           }
-          await rocketlaneUpdateProjectStatus(rlProjectId, fieldId, label);
+          await rocketlaneUpdateProjectStatus(rlProjectId, fieldId, value);
+          const label = ROCKETLANE_PROJECT_STATUS_LABEL_BY_VALUE[value] || ("value " + value);
           if (typeof rocketlaneShowMessage === "function") {
             rocketlaneShowMessage("Rocketlane status set to '" + label + "'.", "info");
           }
