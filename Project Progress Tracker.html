@@ -13734,6 +13734,25 @@
         }
         return "";
       }
+
+      /**
+       * Reverse mapping: Rocketlane Status label → tracker-local status key.
+       * Used during sync to copy Rocketlane's authoritative project status
+       * back into the local project so the two stay aligned. Returns null
+       * for unrecognised labels so the caller can fall back to a default.
+       */
+      function rocketlaneStatusLabelToLocal(label) {
+        const n = String(label || "").trim().toLowerCase().replace(/\s+/g, "");
+        if (n === "proposed")     return "proposed";
+        if (n === "inplanning")   return "in_planning";
+        if (n === "tobestaffed")  return "to_be_staffed";
+        if (n === "inprogress")   return "in_progress";
+        if (n === "onhold")       return "on_hold";
+        if (n === "blocked")      return "blocked";
+        if (n === "completed")    return "completed";
+        if (n === "cancelled" || n === "canceled") return "cancelled";
+        return null;
+      }
       // Terminal statuses excluded from team-workload counts.
       // The user's request was "never include completed" — we extend to
       // Cancelled because cancelled is also non-active (no one is
@@ -16480,7 +16499,16 @@
               pruneEmptyCategories(local);
             }
 
-            if (isNew) {
+            // Status: Rocketlane is the source of truth. Always overwrite
+            // local.status from the remote project's Status field — this is
+            // what fixes the "many projects show wrong status" drift caused
+            // by previously only setting local.status on first import. Falls
+            // back to the task-derived heuristic only when Rocketlane returns
+            // no recognisable status label (rare — usually pre-launch tenants).
+            const remoteStatusLocal = rocketlaneStatusLabelToLocal(rocketlaneProjectStatusLabel(pr));
+            if (remoteStatusLocal) {
+              local.status = remoteStatusLocal;
+            } else if (isNew) {
               const computed = projectStatusFromCsvTaskStatuses({
                 totalTasks: totalTasks,
                 doneTasks: doneTasks,
