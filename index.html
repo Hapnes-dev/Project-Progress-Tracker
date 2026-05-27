@@ -10066,7 +10066,15 @@
       // "IWMAC Subscription". Walk every possible array on the order
       // payload (bookings, products, charges, …) and look for that
       // product name. Returns the matching item or null.
-      const IWMAC_SUBSCRIPTION_NAME_PATTERN = /\bIWMAC\s*(?:Abonnement|Subscription)\b/i;
+      // Any product line whose name carries the "IWMAC" brand counts as
+      // evidence that this order is the IWMAC subscription/license order
+      // for the plant — including "IWMAC Modul: Refrigeration", "IWMAC
+      // Product: Drivers", etc., not just the legacy "IWMAC Subscription"
+      // / "IWMAC Abonnement" wording. Verified via Playwright against
+      // real tenants on plants 4899 (legacy "Subscription: Basic") and
+      // 10228 ("Modul: Refrigeration" + "Modul: Basic" + "Product: Drivers"
+      // — all on the same Draft order with plant_id=10228).
+      const IWMAC_SUBSCRIPTION_NAME_PATTERN = /\bIWMAC\b/i;
       function findIwmacSubscriptionItem(order) {
         if (!order || typeof order !== "object") return null;
         // The order response shape varies across Younium environments —
@@ -10320,7 +10328,97 @@
         const savedUrl = String(project?.youniumUrl || "").trim();
         if (!savedUrl) {
           out.problems.push("No Younium link saved on this project");
-          dbg("no link, returning gray");
+          dbg("no saved link — trying plant_id lookup for subscription only");
+
+          // Even without a saved Younium URL, a subscription order for this
+          // plant may exist in Younium with the plant_id custom field set.
+          // Run the same plant_id lookup the order/quote branches use and
+          // populate the Subscription section if a match is found. Was:
+          // returned early here, leaving the modal completely empty.
+          const plantId = extractPlantIdFromProjectName(project?.name);
+          if (plantId) {
+            try {
+              const found = await youniumFindSubscriptionByPlantId(plantId);
+              if (found) {
+                const subOrder = found.order;
+                out.subscriptionProduct = { productName: found.productName, item: null };
+                out.hasSubscriptionProduct = true;
+                out.subscriptionOrder = subOrder;
+                out.subscriptionOrderIsSeparate = true;
+                out.raw = { subscriptionOrder: subOrder };
+
+                // Mirror the order-flow's subscription status derivation.
+                const now = Date.now();
+                const subOrderNumberStr = String(subOrder.orderNumber || "").trim();
+                const subOrderNumberLooksDraft =
+                  !subOrderNumberStr ||
+                  subOrderNumberStr.toLowerCase() === "draft" ||
+                  /^draft\b/i.test(subOrderNumberStr);
+                const subIsRawDraft   = subOrder.status === 5 || subOrderNumberLooksDraft;
+                const subIsRawCreated = subOrder.status === 1 && subOrderNumberLooksDraft;
+                const subTsStart      = subOrder.effectiveStartDate ? Date.parse(subOrder.effectiveStartDate) : NaN;
+                const subTsEnd        = subOrder.effectiveEndDate   ? Date.parse(subOrder.effectiveEndDate)   : NaN;
+                const subTsCancelled  = subOrder.cancellationDate   ? Date.parse(subOrder.cancellationDate)   : NaN;
+                const subIsCancelled    = Number.isFinite(subTsCancelled) && subTsCancelled <= now;
+                const subIsExpired      = Number.isFinite(subTsEnd) && subTsEnd <= now && !subOrder.isAutoRenewed && !subOrder.isRenewed;
+                const subStartsInFuture = Number.isFinite(subTsStart) && subTsStart > now;
+
+                if (subIsCancelled)              out.subscriptionStatus = "Cancelled";
+                else if (subIsRawDraft)          out.subscriptionStatus = "Draft (not activated)";
+                else if (subIsRawCreated)        out.subscriptionStatus = "Created (not finalized)";
+                else if (subIsExpired)           out.subscriptionStatus = "Inactive";
+                else if (subStartsInFuture)      out.subscriptionStatus = "Order — not active yet";
+                else if (subOrder.isLastVersion && Number.isFinite(subTsStart))
+                                                 out.subscriptionStatus = "Active";
+                else if (subOrder.isLastVersion) out.subscriptionStatus = "Order";
+                else                              out.subscriptionStatus = "Unknown";
+
+                // Promote the modal verdict — we found something real,
+                // so don't leave it on "Missing" / gray.
+                if (subIsRawDraft) {
+                  out.color = "red";
+                  out.label = "Younium: ⚠ Activate subscription in Younium";
+                } else if (out.subscriptionStatus === "Active") {
+                  out.color = "yellow";
+                  out.label = "Younium: ⏳ Active sub, no saved link";
+                } else {
+                  out.color = "yellow";
+                  out.label = "Younium: ⏳ Subscription found (no saved link)";
+                }
+                out.problems.push("Found subscription order via plant_id — consider saving its Younium link on the project");
+
+                dbg("no-link path: found subscription order via plant_id", {
+                  id: subOrder.id, number: subOrder.orderNumber,
+                  status: subOrder.status, derivedStatus: out.subscriptionStatus,
+                  productName: found.productName,
+                });
+
+                // Eventlog for subscription order — non-fatal.
+                try {
+                  const events = await youniumFetchOrderEventLog(subOrder.id);
+                  out.raw.subscriptionEventLog = events;
+                  out.subscriptionLatestEvent  = extractLatestEvent(events);
+                  out.subscriptionCreatedEvent = extractFirstEvent(events);
+                } catch (e) {
+                  dbg("no-link path: subscription eventlog fetch failed", e);
+                }
+              } else {
+                dbg("no-link path: no IWMAC subscription order for plant_id", plantId);
+              }
+
+              // Also surface every order on this plant (the modal's
+              // "Other orders for this plant" section).
+              try {
+                const allOrders = await youniumFindAllOrdersByPlantId(plantId);
+                out.relatedOrders = allOrders;
+              } catch (e) {
+                dbg("no-link path: relatedOrders fetch failed", e);
+                out.relatedOrders = [];
+              }
+            } catch (e) {
+              dbg("no-link path: plant_id lookup failed", e);
+            }
+          }
           return out;
         }
         const classified = classifyLinkUrl(savedUrl);
