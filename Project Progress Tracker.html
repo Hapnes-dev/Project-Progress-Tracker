@@ -4601,6 +4601,34 @@
       .orderInfoEmpty { color: var(--muted2); font-style: italic; }
       .orderInfoError { color: var(--bad); font-size: 12px; }
 
+      /* Project Files popover: "Download all" button next to the close X.
+         Wrapper is needed because .orderInfoHead uses justify-content:
+         space-between — without it, a third child would land in the middle. */
+      .filesPopoverActions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .filesDownloadAllBtn {
+        font-size: 11px;
+        padding: 4px 10px;
+        background: var(--surface-3);
+        border: 1px solid var(--hairline);
+        color: var(--muted);
+        border-radius: 6px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .filesDownloadAllBtn:hover:not(:disabled) {
+        background: var(--surface-2);
+        color: var(--text);
+        border-color: var(--hairline-strong);
+      }
+      .filesDownloadAllBtn:disabled {
+        opacity: 0.7;
+        cursor: wait;
+      }
+
       /* Notes textarea fullscreen mode (toggled via right-click).
          Side padding scales with viewport width so the content stays
          centered up to ~1000px wide on any screen size. */
@@ -26588,6 +26616,68 @@
               body.appendChild(empty);
               return;
             }
+
+            // ── Add a "Download all" button to the popover header now that
+            // we know there's at least one file. Uses the same per-file
+            // download path (bridge.downloadAttachmentBlob → blob → <a download>)
+            // as a single click on a row, just iterated. Chrome will prompt
+            // the user once to allow multiple downloads from this origin.
+            const downloadAllBtn = document.createElement("button");
+            downloadAllBtn.type = "button";
+            downloadAllBtn.className = "filesDownloadAllBtn";
+            downloadAllBtn.title = "Download every file in this list to your computer";
+            const downloadAllBtnIdleText = "⬇ Download all (" + atts.length + ")";
+            downloadAllBtn.textContent = downloadAllBtnIdleText;
+            downloadAllBtn.addEventListener("click", async (ev) => {
+              ev.preventDefault();
+              ev.stopPropagation();
+              if (typeof bridge.downloadAttachmentBlob !== "function") {
+                alert("Update the Tampermonkey userscript — it needs downloadAttachmentBlob() to fetch files.");
+                return;
+              }
+              if (!attsRef || !attsRef.length) return;
+              downloadAllBtn.disabled = true;
+              let current = 0;
+              let failed = 0;
+              for (const att of attsRef) {
+                const attId = att?.attachmentId;
+                const fileName = String(att?.name ?? "Attachment").trim();
+                current++;
+                downloadAllBtn.textContent = "Downloading " + current + "/" + attsRef.length + "…";
+                if (!attId) { failed++; continue; }
+                try {
+                  const { blob } = await bridge.downloadAttachmentBlob(attId);
+                  const objUrl = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = objUrl;
+                  a.download = fileName;
+                  document.body.appendChild(a);
+                  a.click();
+                  a.remove();
+                  setTimeout(() => URL.revokeObjectURL(objUrl), 1000);
+                } catch (e) {
+                  console.warn("[FilesPopover] Download failed for " + fileName + ":", e);
+                  failed++;
+                }
+                // Brief pause between downloads — lets the browser register
+                // each save and gives our progress label a frame to update.
+                await new Promise((r) => setTimeout(r, 250));
+              }
+              downloadAllBtn.textContent = failed ? "Done — " + failed + " failed" : "Done ✓";
+              setTimeout(() => {
+                downloadAllBtn.textContent = downloadAllBtnIdleText;
+                downloadAllBtn.disabled = false;
+              }, 2500);
+            });
+            // Re-parent close X into a sub-div alongside the new button —
+            // .orderInfoHead's justify-content: space-between would otherwise
+            // push the new button into the middle of the header.
+            const filesActions = document.createElement("div");
+            filesActions.className = "filesPopoverActions";
+            if (closeBtn.parentNode === head) head.removeChild(closeBtn);
+            filesActions.appendChild(downloadAllBtn);
+            filesActions.appendChild(closeBtn);
+            head.appendChild(filesActions);
 
             // Initial sort (newest-first) is handled by renderRows() below
             // via sortState.key="date" / dir="desc".
