@@ -28534,6 +28534,11 @@
         if (dlgMode === "edit" && editingProjectId) {
           const p = state.projects.find((x) => x.id === editingProjectId);
           if (!p) return;
+          // Capture the OLD status before the form overwrites it so we
+          // only push to Rocketlane when the user actually changed it
+          // (avoids re-PUTing on every save when only links/owner/notes
+          // changed).
+          const previousStatus = normalizeStatus(p.status);
           p.name = name;
           p.client = client || "";
           p.owner = owner || "";
@@ -28559,6 +28564,14 @@
           saveState(state);
           els.dlg.close();
           render();
+
+          // Push the new status to Rocketlane — fires only when the user
+          // actually changed it in this dialog (compared to previousStatus
+          // captured before the field overwrites above). Same best-effort
+          // wrapper as the inline status picker uses.
+          if (p.rocketlaneProjectId && previousStatus !== status) {
+            void rocketlanePushProjectStatusBestEffort(p.rocketlaneProjectId, status);
+          }
 
           // Push links to Rocketlane's "Hubspot Deal Description" field.
           // Local save has already committed, so any failure here is
