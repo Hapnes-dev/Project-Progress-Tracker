@@ -178,6 +178,26 @@
       .btn.btnRocketlaneSyncQuiet:disabled {
         opacity: 0.32;
       }
+      /* While a sync is in flight: button stays disabled (so we don't fire a
+         second sync), but we override the 0.32 disabled opacity so the user
+         can still read the "Syncing" label, and animate three trailing dots
+         via a width-stepped ::after. */
+      .btn.btnRocketlaneSyncQuiet.syncing,
+      .btn.btnRocketlaneSyncQuiet.syncing:disabled {
+        opacity: 0.85;
+        cursor: wait;
+      }
+      .btn.btnRocketlaneSyncQuiet.syncing::after {
+        content: "...";
+        display: inline-block;
+        overflow: hidden;
+        vertical-align: baseline;
+        width: 0;
+        animation: syncDots 1.5s steps(4) infinite;
+      }
+      @keyframes syncDots {
+        to { width: 1.2em; }
+      }
       .btn.btnYouniumImport {
         padding: 8px 10px;
         font-size: 12px;
@@ -13337,6 +13357,7 @@
         const disabled = isJsonRequired() || rocketlaneLiveSyncInFlight || linkedCount === 0;
         btn.disabled = disabled;
         btn.textContent = rocketlaneLiveSyncInFlight ? "Syncing" : "Sync";
+        btn.classList.toggle("syncing", rocketlaneLiveSyncInFlight);
         btn.setAttribute("aria-label", rocketlaneLiveSyncInFlight ? "Rocketlane sync running" : "Sync Rocketlane projects");
         if (rocketlaneLiveSyncInFlight) {
           btn.title = "Rocketlane sync is running";
