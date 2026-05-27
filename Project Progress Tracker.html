@@ -10066,15 +10066,14 @@
       // "IWMAC Subscription". Walk every possible array on the order
       // payload (bookings, products, charges, …) and look for that
       // product name. Returns the matching item or null.
-      // Any product line whose name carries the "IWMAC" brand counts as
-      // evidence that this order is the IWMAC subscription/license order
-      // for the plant — including "IWMAC Modul: Refrigeration", "IWMAC
-      // Product: Drivers", etc., not just the legacy "IWMAC Subscription"
-      // / "IWMAC Abonnement" wording. Verified via Playwright against
-      // real tenants on plants 4899 (legacy "Subscription: Basic") and
-      // 10228 ("Modul: Refrigeration" + "Modul: Basic" + "Product: Drivers"
-      // — all on the same Draft order with plant_id=10228).
-      const IWMAC_SUBSCRIPTION_NAME_PATTERN = /\bIWMAC\b/i;
+      // ONLY products literally named "IWMAC Subscription" or "IWMAC
+      // Abonnement" qualify an order as the IWMAC subscription. Other
+      // IWMAC-branded products (Modul, Product, etc.) are licenses /
+      // one-time items that ride on an Order/Offer, not a subscription.
+      // Tested via Playwright: plant 4899's order has "IWMAC Subscription:
+      // Basic" (match) while plant 10228's Draft order has "IWMAC Modul:
+      // Refrigeration" + "IWMAC Product: Drivers" (correctly rejected).
+      const IWMAC_SUBSCRIPTION_NAME_PATTERN = /\bIWMAC\s*(?:Abonnement|Subscription)\b/i;
       function findIwmacSubscriptionItem(order) {
         if (!order || typeof order !== "object") return null;
         // The order response shape varies across Younium environments —
