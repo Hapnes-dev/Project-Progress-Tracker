@@ -180,23 +180,16 @@
       }
       /* While a sync is in flight: button stays disabled (so we don't fire a
          second sync), but we override the 0.32 disabled opacity so the user
-         can still read the "Syncing" label, and animate three trailing dots
-         via a width-stepped ::after. */
+         can still see the spinning icon + read the label. The ↻ refresh
+         glyph rendered by `.iconSync::before` rotates using the existing
+         rlSyncSpin keyframes (already defined below for .tag.rlSyncQuiet). */
       .btn.btnRocketlaneSyncQuiet.syncing,
       .btn.btnRocketlaneSyncQuiet.syncing:disabled {
         opacity: 0.85;
         cursor: wait;
       }
-      .btn.btnRocketlaneSyncQuiet.syncing::after {
-        content: "...";
-        display: inline-block;
-        overflow: hidden;
-        vertical-align: baseline;
-        width: 0;
-        animation: syncDots 1.5s steps(4) infinite;
-      }
-      @keyframes syncDots {
-        to { width: 1.2em; }
+      .btn.btnRocketlaneSyncQuiet.syncing::before {
+        animation: rlSyncSpin 1s linear infinite;
       }
       .btn.btnYouniumImport {
         padding: 8px 10px;
