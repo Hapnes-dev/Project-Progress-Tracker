@@ -89,6 +89,37 @@ The single userscript handles all five platforms:
 - **Custom fields without a value are OMITTED from project responses**. When fetching a field, if it isn't on `project.fields[]`, fall back to the tenant-wide `/fields` endpoint to find its ID — `rocketlaneFindDealDescriptionFieldId()` is the reference implementation.
 - **S3 attachment URLs** expire after ~5 minutes (X-Amz-Expires=299). Always re-fetch via `fetchAttachment(id)` right before opening a link.
 
+### Project status (5-state → 8-state enum, bidirectional with Rocketlane)
+
+Local project status now uses the **same 8-state enum as Rocketlane's "Status" SELECT custom field** (fieldId varies per tenant, on Kiona it's `230410`):
+
+| Local key | Rocketlane label | Numeric option value |
+|---|---|---|
+| `proposed` | Proposed | 5 |
+| `in_planning` | In Planning | 6 |
+| `to_be_staffed` | To be Staffed | 7 |
+| `in_progress` | In progress | 2 |
+| `on_hold` | On Hold | 9 |
+| `blocked` | Blocked | 4 |
+| `completed` | Completed | 3 |
+| `cancelled` | Cancelled | 8 |
+
+Numeric values captured via Playwright from `GET /api/v1/fields/230410` (`metaData.options[].value`). The mapping lives in `ROCKETLANE_PROJECT_STATUS_MAP`; if a new tenant re-numbers the options, regrab from that endpoint and edit the constant.
+
+**Push** (tracker → Rocketlane):
+- `openProjectStatusPicker` click handler + `els.projectForm` submit handler both call `rocketlanePushProjectStatusBestEffort(rlProjectId, localStatus)` fire-and-forget.
+- Body shape verified working: `PUT /projects/{id}` with `{ fields: [{ fieldId, fieldValue: <number> }] }`. **Important**: `fieldValue` MUST be the numeric option value, not the label string — the API rejects `fieldValue: "Completed"` with `HTTP 400 Expected a numeric value`.
+- The fieldId is looked up once per session via `rocketlaneFindProjectStatusFieldId()` (walks `/fields` for a PROJECT-type field named `Status`), cached in `_rocketlaneProjectStatusFieldId`.
+- Failures surface as a `rocketlaneShowMessage(..., "error")` toast + `console.warn`; local change is never undone on push failure.
+- Edit-dialog push fires only when `previousStatus !== status` (captured before the field overwrite) to avoid re-PUTing on every save where only links/owner/notes changed.
+
+**Pull** (Rocketlane → tracker, every sync):
+- `rocketlaneImportProjectsIntoTracker` now reads `rocketlaneProjectStatusLabel(remoteProject)` from `remoteProject.fields[]["Status"].metaFieldValue.label` on every linked project — not just on first import — and overwrites `local.status` via `rocketlaneStatusLabelToLocal(label)`.
+- Falls back to the legacy task-derived heuristic (`projectStatusFromCsvTaskStatuses`) only when Rocketlane returns no recognisable label AND the project is brand-new.
+- Result: the projects list always matches what the Rocketlane UI shows. The task-derived fallback only fires for greenfield tenants without a Status field.
+
+**Migration**: `normalizeStatus()` transparently upgrades the previous 5-state enum (`open` → `proposed`, `waiting_partner` → `on_hold`, `finished` → `completed`, `closed` → `cancelled`, plus the older `active`/`done` shims) so existing localStorage data doesn't break.
+
 ### Rocketlane API field-name gotchas
 
 The tenant and public APIs use DIFFERENT field names. The tracker must accept BOTH on read but emit the TENANT shape on write.
@@ -337,12 +368,25 @@ The original "Project" section + "Subscription (raw)" + "Raw Younium data" debug
 
 **Caching:** verdict is persisted on `project.youniumStatus = { color, label, orderStatus, subscriptionStatus, orderNumber, kind, problems, lastCheckedAt }` so the chip shows immediately on revisits. Background refresh runs once per project per session via `youniumStatusFetchInFlight` / `youniumStatusFetchedThisSession` Sets. During in-flight fetches the chip flips to `Younium: ⏳ Checking…` (gray) so the user knows what's happening.
 
-**IWMAC subscription detection** — two layers:
+**IWMAC subscription detection** — strict regex + multiple entry paths:
 
-1. **On the saved order**: `findIwmacSubscriptionItem(order)` walks every plausible array on the order payload (`bookings`, `products`, `charges`, `orderProducts`, `subscriptions`, `subscriptionProducts`, `lineItems`, `items`) and checks each entry's name fields (`productName`, `name`, `subscriptionName`, `product.name`, etc.) against `/\bIWMAC\s*(?:Abonnement|Subscription)\b/i`.
-2. **Plant_id lookup** (fallback when the saved order has no IWMAC product): `youniumFindSubscriptionByPlantId(plantId)` calls `searchOrders` with `{ fieldName: "plant_id", value: pid, operator: 0 }` + `isLastVersion=true`, hydrates each candidate via `getOrderById`, returns the first one whose products array contains IWMAC.
+1. **The regex stays strict**: `/\bIWMAC\s*(?:Abonnement|Subscription)\b/i`. ONLY products literally named `IWMAC Subscription` or `IWMAC Abonnement` qualify an order as the subscription. `IWMAC Modul: Refrigeration` / `IWMAC Product: Drivers` / etc. are line items that belong to an Order/Offer, not subscription evidence. (Briefly broadened to `/\bIWMAC\b/i` in commit `97ea279` and reverted in `09a7039` — keep strict.)
+2. **`findIwmacSubscriptionItem(order)`** walks every plausible array on the order payload (`bookings`, `products`, `charges`, `orderProducts`, `subscriptions`, `subscriptionProducts`, `lineItems`, `items`) and checks each entry's name fields (`productName`, `name`, `subscriptionName`, `product.name`, etc.) against the strict pattern.
+3. **`youniumFindSubscriptionByPlantId(plantId)`** is the fallback: `searchOrders("", { conditions: [{ fieldName: "plant_id", value: pid, operator: 0 }, { fieldName: "isLastVersion", value: true, operator: 0 }] })`, hydrates each candidate via `getOrderById`, returns the first one whose products contain a strict-matching name.
+
+**Three entry paths into `computeYouniumStatus()`** all reach the plant_id fallback now:
+
+| Saved URL state | Order/Offer source | Subscription source |
+|---|---|---|
+| Order URL | the saved order (hydrated) | `findIwmacSubscriptionItem(savedOrder)` → fallback `youniumFindSubscriptionByPlantId(plantId)` |
+| Quote URL | the saved quote (verdict `Younium: Quote`) | `youniumFindSubscriptionByPlantId(plantId)` — saved link is a Quote so it can't carry products |
+| **No saved URL** | **promote the plant's most recently modified `isLastVersion=true` order** into Order/Offer (full status derivation, invoices, eventlog, synthetic `out.links.saved = .../orders/<id>`) → fallback `youniumFindSubscriptionByPlantId(plantId)` if no IWMAC product on the primary |
+
+The no-saved-URL branch additionally sets a verdict label like `Younium: ⏳ Order found (no saved link)` or `Younium: ⚠ Activate order in Younium` depending on derived status, and pushes a `"Found order via plant_id — consider saving its Younium link on the project"` problem.
 
 `plantId` is extracted from the project name via `extractPlantIdFromProjectName(name)` — pattern `^(\d{2,7})\s*[-–]\s+` (e.g. "4729 - Storcash Rudshøgda" → "4729").
+
+**Bridge call shape gotcha**: `searchOrders(query, opts)` takes a **free-text string** as the first arg and the structured filter as `opts.conditions`. Calling `searchOrders({ fieldName: "plant_id", value: pid })` (object first arg) stringifies to `"[object Object]"` and returns 0 results — verified via Playwright. Always pass `""` as query and put the filter in `opts.conditions`. Response shape is `{ result, totalCount }` (singular `result`, not `results` or `data`).
 
 **Subscription Draft detection** — three signals, any one triggers Draft:
 
@@ -427,26 +471,25 @@ Note the three money values differ (RL labor 31238, signed contract 16377, deal 
 
 ## Gotchas
 
-### Tracker HTML lives in THREE places — sync all three on every change
+### Tracker HTML lives in TWO files within ONE repo — keep them in sync
 
-When editing the tracker, the working copy is `C:\Users\Thomas\Desktop\Project Progress Tracker.html` but the live deploy needs both:
+The tracker repo at `C:\Users\ThomasKvalvåg\Documents\Project-Progress-Tracker\` holds two identical HTML files:
 
-1. `C:\Users\Thomas\Desktop\project-progress-tracker\Project Progress Tracker.html` (download copy in the repo)
-2. `C:\Users\Thomas\Desktop\project-progress-tracker\index.html` (the file GitHub Pages serves at `https://hapnes-dev.github.io/Project-Progress-Tracker/`)
+1. `Project Progress Tracker.html` (the "download me" copy users grab for `file://` use)
+2. `index.html` (the file GitHub Pages serves at `https://hapnes-dev.github.io/Project-Progress-Tracker/`)
 
-If you commit only CLAUDE.md / README.md, the live site stays on the previous code. Pattern after editing:
+If you commit only one, the other drifts. Pattern after editing:
 
-```bash
-cp "C:/Users/Thomas/Desktop/Project Progress Tracker.html" \
-   "C:/Users/Thomas/Desktop/project-progress-tracker/Project Progress Tracker.html"
-cp "C:/Users/Thomas/Desktop/Project Progress Tracker.html" \
-   "C:/Users/Thomas/Desktop/project-progress-tracker/index.html"
-cd "C:/Users/Thomas/Desktop/project-progress-tracker"
+```powershell
+cd "C:\Users\ThomasKvalvåg\Documents\Project-Progress-Tracker"
+Copy-Item "Project Progress Tracker.html" "index.html" -Force
 git add "Project Progress Tracker.html" index.html CLAUDE.md README.md
-git commit -m "..." && git push
+git commit -m "..." ; git push
 ```
 
-Same pattern for the bridge — `rocketlane-chat-bridge.user.js` lives in **two** repos (the working dir at `Desktop\rocketlane-chat-bridge\` and the clone at `Desktop\tampermonkey-scripts-clone\rocketlane-chat-bridge\`); only the clone is what `@updateURL` pulls from, so the userscript MUST be copied to the clone before `git push`.
+**GitHub Pages CDN cache**: after `git push`, the deployed page can take 1–2 minutes to refresh, AND your browser caches it. After deploy, hard-refresh with **`Ctrl + Shift + R`** or **`Ctrl + F5`** to actually see the new code.
+
+**Bridge userscript** lives in a separate repo: `Hapnes-dev/tampermonkey-scripts → rocketlane-chat-bridge/rocketlane-chat-bridge.user.js`. The local snapshot under `rocketlane-chat-bridge/` in this repo is a reference copy only — Tampermonkey's `@updateURL` pulls from the `tampermonkey-scripts` repo, so any bridge change must be committed there.
 
 
 ### Bridge body-shape ordering (Rocketlane)
@@ -621,6 +664,27 @@ When adding new code that calls Rocketlane / Zendesk / Oneflow / HubSpot / Youni
 
 ## Recent significant changes (chronological)
 
+- **Project status: 5-state → 8-state enum (matches Rocketlane 1:1) with bidirectional sync**
+  - Local enum now: `proposed` / `in_planning` / `to_be_staffed` / `in_progress` / `on_hold` / `blocked` / `completed` / `cancelled` (was 5 lossy keys)
+  - Numeric `ROCKETLANE_PROJECT_STATUS_MAP` captured via Playwright from `/api/v1/fields/230410`
+  - Push on every status change (inline picker + Edit dialog) via `PUT /projects/{id}` with numeric `fieldValue`
+  - Pull `local.status` from `remoteProject.fields[]["Status"].metaFieldValue.label` on every sync (was only on first import) via `rocketlaneStatusLabelToLocal()`
+  - `normalizeStatus()` transparently migrates the old 5-state values
+- **Younium status modal — robust subscription detection**
+  - All three entry paths (saved Order / saved Quote / no saved URL) now reach the `youniumFindSubscriptionByPlantId(plantId)` fallback
+  - No-saved-URL branch promotes the plant's most-recently-modified `isLastVersion=true` order into the Order/Offer section (was: returned early, modal sat empty)
+  - Strict IWMAC regex `/\bIWMAC\s*(?:Abonnement|Subscription)\b/i` preserved — `IWMAC Modul / Product` line items are NOT subscription evidence (briefly broadened in `97ea279`, reverted in `09a7039`)
+  - Verified bridge call shape: `searchOrders("", { conditions: [...] })` — first arg is free-text query, second is opts; response is `{ result, totalCount }` (singular)
+- **Files popover: "Download all (N)" button**
+  - Uses `showDirectoryPicker` (File System Access API) on Chromium — user picks a folder once, every project attachment written into it via `FileSystemWritableFileStream`
+  - Filename collisions auto-resolve as `name (1).ext`, `name (2).ext`
+  - Cancel handled (`AbortError` bails without falling to legacy per-file flow)
+  - Fallback to per-file `<a download>` on browsers without the API
+- **Status pill / Younium modal visual polish**
+  - Status pills: soft tinted bg + colored text + transparent border (was: saturated borders + colored bg, looked neon)
+  - Younium modal: neutral surface + 3px colored left stripe for summary + warnings; `.youniumSubBadge` is a small pill with a 6px colored dot + neutral text (was: full-color flood with saturated border)
+  - Sync button: SVG mask refresh icon spins via `rlSyncSpin` keyframe on `.syncing` class (replaces earlier `In progress | Almost` suffix + width-stepped dots experiment)
+  - RL sync chip uses the same SVG mask icon as the toolbar button (was: text `↻` glyph)
 - **Zendesk Tasks section** (per-project, sorted by last public reply, with inline preview + fullscreen reply)
 - **Auto-find buttons** for Oneflow / HubSpot / Younium in the Edit dialog
 - **Owner Workload Overview** team groups (Team kulde + Others), collapsible

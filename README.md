@@ -16,6 +16,13 @@ Prefer a local copy? Download `Project Progress Tracker.html` and open it from y
 - **Project list with status pills**, team-group workload sections (Team kulde + Others), sorting & filtering, plant ID quick-link to PANG.
 - **Per-project detail view**: notes, status, due dates, custom links (Oneflow / Younium / HubSpot), task categories with sub-tasks, expandable task notes & descriptions, in-progress / blocked / waiting-on-partner / need-assistance status.
 - **Per-project toolbar shortcuts**: 🚀 Rocketlane, 📁 Files, 📦 Order info, ☄️ PANG (plant control), 👥 BAF (user database), Edit, Remove.
+- **📁 Files popover** has a **⬇ Download all (N)** button — picks a destination folder once via the File System Access API (`showDirectoryPicker`) and writes every project attachment straight into it. Filename collisions auto-resolve as `name (1).ext`, `name (2).ext`. Falls back to per-file `<a download>` on browsers without the API.
+
+### Project status (8-state, bidirectional with Rocketlane)
+- Local status enum matches **Rocketlane's project Status field 1:1**: `Proposed` · `In Planning` · `To be Staffed` · `In progress` · `On Hold` · `Blocked` · `Completed` · `Cancelled`.
+- **Push** (instant): change the status pill or save the Edit dialog → `PUT /projects/<id>` with the numeric option value (e.g. 3 = `Completed`). No more manually re-clicking the status on Rocketlane's settings page.
+- **Pull** (every sync, not just on first import): each Rocketlane sync now overwrites `local.status` from `remoteProject.fields[]["Status"].metaFieldValue.label`. Rocketlane stays the source of truth — change the status on either side and the other catches up.
+- Existing tracker installs with old `open` / `in_progress` / `waiting_partner` / `finished` / `closed` statuses migrate transparently on next load via `normalizeStatus()`.
 
 ### Owner Workload Overview (collapsible)
 - **Team groups**: Team kulde lists a fixed roster (configured at `OWNER_TEAM_GROUPS`); everyone else falls into Others.
@@ -71,7 +78,7 @@ A status chip in the project header meta row (between the **Updated** and **RL s
 - **Subscription** section — found via plant_id lookup, shows IWMAC product status + dates + Created by / Last updated by
 - **Other orders for this plant** section — compact rows for sibling orders (Younium versions orders, so a single plant can have multiple records)
 
-**Subscription detection**: a Younium order is treated as an IWMAC subscription when (a) any product on the order has a name matching `/\bIWMAC\s*(?:Abonnement|Subscription)\b/i`, OR (b) we find such an order via the `plant_id` custom field. The chip falls back to plant_id search when the saved Younium URL points to a non-subscription order.
+**Subscription detection**: a Younium order is treated as an IWMAC subscription when (a) any product on the order has a name matching the strict pattern `/\bIWMAC\s*(?:Abonnement|Subscription)\b/i` — i.e. literally `IWMAC Subscription` or `IWMAC Abonnement`, NOT `IWMAC Modul / Product` (those are Order/Offer line items, not subscription evidence) — OR (b) we find such an order via the `plant_id` custom field. **All three entry paths now run the plant_id fallback**: when the saved URL points to an Order, a Quote, OR is empty entirely. For projects with no saved Younium link, the plant's most-recently-modified `isLastVersion=true` order is automatically promoted into the Order/Offer section so the modal is never blank.
 
 **Audit attribution** (bridge v1.9.11+): `Created by` and `Last updated by` rows come from the Younium event log endpoint (`GET /api/eventlog/order/id/{id}`). First/latest events sorted by timestamp.
 
