@@ -10346,6 +10346,90 @@
           out.orderNumber = q?.number || "Draft";
           out.problems.push("Saved link is a Quote — not yet converted to an Order");
           dbg("quote verdict", { number: out.orderNumber });
+
+          // The saved URL is a Quote, but a subscription order for this
+          // plant may already exist independently — either the plant was
+          // activated via an earlier order, or this quote was promoted
+          // into an order whose link the user hasn't saved yet. Run the
+          // plant_id lookup so the modal's Subscription + Other-orders
+          // sections still surface real Younium data (was: this branch
+          // returned early and never looked, leaving Subscription: NONE
+          // on active plants).
+          const plantId = extractPlantIdFromProjectName(project?.name);
+          if (plantId) {
+            try {
+              const found = await youniumFindSubscriptionByPlantId(plantId);
+              if (found) {
+                const subOrder = found.order;
+                out.subscriptionProduct = { productName: found.productName, item: null };
+                out.hasSubscriptionProduct = true;
+                out.subscriptionOrder = subOrder;
+                out.subscriptionOrderIsSeparate = true;
+                out.raw.subscriptionOrder = subOrder;
+
+                // Derive subscription status — mirrors the order-flow
+                // logic below. Kept inline so this fix doesn't restructure
+                // the function. Younium order.status enum: 1=Created,
+                // 5=Draft, 9=Active; UI also calls anything with no real
+                // orderNumber "Draft" regardless of status.
+                const now = Date.now();
+                const subOrderNumberStr = String(subOrder.orderNumber || "").trim();
+                const subOrderNumberLooksDraft =
+                  !subOrderNumberStr ||
+                  subOrderNumberStr.toLowerCase() === "draft" ||
+                  /^draft\b/i.test(subOrderNumberStr);
+                const subIsRawDraft   = subOrder.status === 5 || subOrderNumberLooksDraft;
+                const subIsRawCreated = subOrder.status === 1 && subOrderNumberLooksDraft;
+                const subTsStart      = subOrder.effectiveStartDate ? Date.parse(subOrder.effectiveStartDate) : NaN;
+                const subTsEnd        = subOrder.effectiveEndDate   ? Date.parse(subOrder.effectiveEndDate)   : NaN;
+                const subTsCancelled  = subOrder.cancellationDate   ? Date.parse(subOrder.cancellationDate)   : NaN;
+                const subIsCancelled    = Number.isFinite(subTsCancelled) && subTsCancelled <= now;
+                const subIsExpired      = Number.isFinite(subTsEnd) && subTsEnd <= now && !subOrder.isAutoRenewed && !subOrder.isRenewed;
+                const subStartsInFuture = Number.isFinite(subTsStart) && subTsStart > now;
+
+                if (subIsCancelled)              out.subscriptionStatus = "Cancelled";
+                else if (subIsRawDraft)          out.subscriptionStatus = "Draft (not activated)";
+                else if (subIsRawCreated)        out.subscriptionStatus = "Created (not finalized)";
+                else if (subIsExpired)           out.subscriptionStatus = "Inactive";
+                else if (subStartsInFuture)      out.subscriptionStatus = "Order — not active yet";
+                else if (subOrder.isLastVersion && Number.isFinite(subTsStart))
+                                                 out.subscriptionStatus = "Active";
+                else if (subOrder.isLastVersion) out.subscriptionStatus = "Order";
+                else                              out.subscriptionStatus = "Unknown";
+
+                dbg("quote path: found subscription order via plant_id", {
+                  id: subOrder.id, number: subOrder.orderNumber,
+                  status: subOrder.status, derivedStatus: out.subscriptionStatus,
+                  productName: found.productName,
+                });
+
+                // Eventlog for the subscription order — populates Created
+                // by / Last updated by rows. Non-fatal if bridge older.
+                try {
+                  const events = await youniumFetchOrderEventLog(subOrder.id);
+                  out.raw.subscriptionEventLog = events;
+                  out.subscriptionLatestEvent  = extractLatestEvent(events);
+                  out.subscriptionCreatedEvent = extractFirstEvent(events);
+                } catch (e) {
+                  dbg("quote path: subscription eventlog fetch failed", e);
+                }
+              } else {
+                dbg("quote path: no IWMAC subscription order found for plant_id", plantId);
+              }
+
+              // Always try to fill the "Other orders for this plant"
+              // section — useful even when no IWMAC subscription matched.
+              try {
+                const allOrders = await youniumFindAllOrdersByPlantId(plantId);
+                out.relatedOrders = allOrders;
+              } catch (e) {
+                dbg("quote path: relatedOrders fetch failed", e);
+                out.relatedOrders = [];
+              }
+            } catch (e) {
+              dbg("quote path: plant_id lookup failed", e);
+            }
+          }
           return out;
         }
 
