@@ -26636,9 +26636,50 @@
                 return;
               }
               if (!attsRef || !attsRef.length) return;
+
+              // Try the modern File System Access API first so all files land
+              // in one user-picked folder (single dialog, no per-file save
+              // prompts, no Chrome "allow multiple downloads" warning).
+              // Falls back to the legacy per-file download flow when the API
+              // is missing (Firefox / Safari / older Chrome / file:// origin).
+              let dirHandle = null;
+              if (typeof window.showDirectoryPicker === "function") {
+                try {
+                  dirHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+                } catch (e) {
+                  // User dismissed the picker → bail out without falling
+                  // through to the legacy per-file flow (that would feel
+                  // like we ignored their cancel).
+                  if (e?.name === "AbortError") return;
+                  console.warn("[FilesPopover] showDirectoryPicker failed:", e);
+                }
+              }
+
               downloadAllBtn.disabled = true;
               let current = 0;
               let failed = 0;
+              const usedNames = new Set();
+
+              // Build a unique filename within the destination folder so we
+              // don't overwrite siblings (e.g. multiple "image.png" pastes).
+              // Splits on the LAST dot so multi-dot names like
+              // "Plantegning - Heimdal-Model.pdf" still keep their extension.
+              const uniqueName = (fileName) => {
+                let candidate = fileName;
+                let n = 1;
+                while (usedNames.has(candidate)) {
+                  const dot = fileName.lastIndexOf(".");
+                  if (dot > 0) {
+                    candidate = fileName.slice(0, dot) + " (" + n + ")" + fileName.slice(dot);
+                  } else {
+                    candidate = fileName + " (" + n + ")";
+                  }
+                  n++;
+                }
+                usedNames.add(candidate);
+                return candidate;
+              };
+
               for (const att of attsRef) {
                 const attId = att?.attachmentId;
                 const fileName = String(att?.name ?? "Attachment").trim();
@@ -26647,21 +26688,31 @@
                 if (!attId) { failed++; continue; }
                 try {
                   const { blob } = await bridge.downloadAttachmentBlob(attId);
-                  const objUrl = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = objUrl;
-                  a.download = fileName;
-                  document.body.appendChild(a);
-                  a.click();
-                  a.remove();
-                  setTimeout(() => URL.revokeObjectURL(objUrl), 1000);
+                  if (dirHandle) {
+                    // Modern path: write directly into the picked folder.
+                    const safeName = uniqueName(fileName);
+                    const fileHandle = await dirHandle.getFileHandle(safeName, { create: true });
+                    const writable = await fileHandle.createWritable();
+                    await writable.write(blob);
+                    await writable.close();
+                  } else {
+                    // Legacy path: trigger an individual <a download> save.
+                    const objUrl = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = objUrl;
+                    a.download = fileName;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    setTimeout(() => URL.revokeObjectURL(objUrl), 1000);
+                    // Brief pause between saves so the browser can register
+                    // each one and the progress label can update.
+                    await new Promise((r) => setTimeout(r, 250));
+                  }
                 } catch (e) {
                   console.warn("[FilesPopover] Download failed for " + fileName + ":", e);
                   failed++;
                 }
-                // Brief pause between downloads — lets the browser register
-                // each save and gives our progress label a frame to update.
-                await new Promise((r) => setTimeout(r, 250));
               }
               downloadAllBtn.textContent = failed ? "Done — " + failed + " failed" : "Done ✓";
               setTimeout(() => {
