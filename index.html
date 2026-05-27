@@ -16741,10 +16741,7 @@
         if (status === "cancelled")     return { cls: "bad",    text: "Cancelled" };
         if (status === "blocked")       return { cls: "bad",    text: "Blocked" };
         if (status === "on_hold")       return { cls: "hold",   text: "On Hold" };
-        if (status === "in_progress") {
-          if (progress >= 80)            return { cls: "warn",   text: "In progress | Almost" };
-          return { cls: "warn",   text: "In progress" };
-        }
+        if (status === "in_progress")  return { cls: "warn",   text: "In progress" };
         if (status === "to_be_staffed") return { cls: "normal", text: "To be Staffed" };
         if (status === "in_planning")   return { cls: "normal", text: "In Planning" };
         // proposed (default)
