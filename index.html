@@ -10327,96 +10327,167 @@
         const savedUrl = String(project?.youniumUrl || "").trim();
         if (!savedUrl) {
           out.problems.push("No Younium link saved on this project");
-          dbg("no saved link — trying plant_id lookup for subscription only");
+          dbg("no saved link — promoting plant's primary order into Order/Offer");
 
-          // Even without a saved Younium URL, a subscription order for this
-          // plant may exist in Younium with the plant_id custom field set.
-          // Run the same plant_id lookup the order/quote branches use and
-          // populate the Subscription section if a match is found. Was:
-          // returned early here, leaving the modal completely empty.
           const plantId = extractPlantIdFromProjectName(project?.name);
-          if (plantId) {
-            try {
+          if (!plantId) {
+            dbg("no plant_id either — returning empty verdict");
+            return out;
+          }
+
+          try {
+            // Fetch every isLastVersion order for this plant; the most
+            // recently modified one becomes the project's Order/Offer.
+            const allOrders = await youniumFindAllOrdersByPlantId(plantId);
+            out.relatedOrders = allOrders;
+            if (!allOrders.length) {
+              dbg("no orders found for plant_id", plantId);
+              return out;
+            }
+
+            // Pick the most-recent order (sort by modified, then created).
+            const sorted = allOrders.slice().sort((a, b) => {
+              const ta = Date.parse(a?.modified || a?.created || 0) || 0;
+              const tb = Date.parse(b?.modified || b?.created || 0) || 0;
+              return tb - ta;
+            });
+            const primarySummary = sorted[0];
+            let order;
+            try { order = await youniumFetchOrderDetails(primarySummary.id); }
+            catch (e) {
+              dbg("primary order hydrate failed", e);
+              return out;
+            }
+            if (!order) {
+              dbg("primary order fetch returned null", primarySummary.id);
+              return out;
+            }
+
+            // Treat the discovered order as the project's Order/Offer.
+            // Synthesize the saved link so the modal's "Younium link" row
+            // shows where it lives even though the user hasn't saved it
+            // on the project yet.
+            out.raw = { order };
+            out.orderNumber = order.orderNumber || primarySummary.id;
+            out.links.saved = "https://eu.younium.com/orders/" + order.id;
+
+            // ── Subscription detection on the discovered primary, then
+            // fall back to plant_id-wide search for a separate sub order.
+            let subMatch = findIwmacSubscriptionItem(order);
+            let subscriptionOrder = subMatch ? order : null;
+            let subscriptionOrderIsSeparate = false;
+            if (!subMatch) {
               const found = await youniumFindSubscriptionByPlantId(plantId);
               if (found) {
-                const subOrder = found.order;
-                out.subscriptionProduct = { productName: found.productName, item: null };
-                out.hasSubscriptionProduct = true;
-                out.subscriptionOrder = subOrder;
-                out.subscriptionOrderIsSeparate = true;
-                out.raw = { subscriptionOrder: subOrder };
-
-                // Mirror the order-flow's subscription status derivation.
-                const now = Date.now();
-                const subOrderNumberStr = String(subOrder.orderNumber || "").trim();
-                const subOrderNumberLooksDraft =
-                  !subOrderNumberStr ||
-                  subOrderNumberStr.toLowerCase() === "draft" ||
-                  /^draft\b/i.test(subOrderNumberStr);
-                const subIsRawDraft   = subOrder.status === 5 || subOrderNumberLooksDraft;
-                const subIsRawCreated = subOrder.status === 1 && subOrderNumberLooksDraft;
-                const subTsStart      = subOrder.effectiveStartDate ? Date.parse(subOrder.effectiveStartDate) : NaN;
-                const subTsEnd        = subOrder.effectiveEndDate   ? Date.parse(subOrder.effectiveEndDate)   : NaN;
-                const subTsCancelled  = subOrder.cancellationDate   ? Date.parse(subOrder.cancellationDate)   : NaN;
-                const subIsCancelled    = Number.isFinite(subTsCancelled) && subTsCancelled <= now;
-                const subIsExpired      = Number.isFinite(subTsEnd) && subTsEnd <= now && !subOrder.isAutoRenewed && !subOrder.isRenewed;
-                const subStartsInFuture = Number.isFinite(subTsStart) && subTsStart > now;
-
-                if (subIsCancelled)              out.subscriptionStatus = "Cancelled";
-                else if (subIsRawDraft)          out.subscriptionStatus = "Draft (not activated)";
-                else if (subIsRawCreated)        out.subscriptionStatus = "Created (not finalized)";
-                else if (subIsExpired)           out.subscriptionStatus = "Inactive";
-                else if (subStartsInFuture)      out.subscriptionStatus = "Order — not active yet";
-                else if (subOrder.isLastVersion && Number.isFinite(subTsStart))
-                                                 out.subscriptionStatus = "Active";
-                else if (subOrder.isLastVersion) out.subscriptionStatus = "Order";
-                else                              out.subscriptionStatus = "Unknown";
-
-                // Promote the modal verdict — we found something real,
-                // so don't leave it on "Missing" / gray.
-                if (subIsRawDraft) {
-                  out.color = "red";
-                  out.label = "Younium: ⚠ Activate subscription in Younium";
-                } else if (out.subscriptionStatus === "Active") {
-                  out.color = "yellow";
-                  out.label = "Younium: ⏳ Active sub, no saved link";
-                } else {
-                  out.color = "yellow";
-                  out.label = "Younium: ⏳ Subscription found (no saved link)";
-                }
-                out.problems.push("Found subscription order via plant_id — consider saving its Younium link on the project");
-
-                dbg("no-link path: found subscription order via plant_id", {
-                  id: subOrder.id, number: subOrder.orderNumber,
-                  status: subOrder.status, derivedStatus: out.subscriptionStatus,
-                  productName: found.productName,
-                });
-
-                // Eventlog for subscription order — non-fatal.
-                try {
-                  const events = await youniumFetchOrderEventLog(subOrder.id);
-                  out.raw.subscriptionEventLog = events;
-                  out.subscriptionLatestEvent  = extractLatestEvent(events);
-                  out.subscriptionCreatedEvent = extractFirstEvent(events);
-                } catch (e) {
-                  dbg("no-link path: subscription eventlog fetch failed", e);
-                }
-              } else {
-                dbg("no-link path: no IWMAC subscription order for plant_id", plantId);
+                subMatch = { item: null, productName: found.productName };
+                subscriptionOrder = found.order;
+                subscriptionOrderIsSeparate = true;
+                out.raw.subscriptionOrder = found.order;
               }
-
-              // Also surface every order on this plant (the modal's
-              // "Other orders for this plant" section).
-              try {
-                const allOrders = await youniumFindAllOrdersByPlantId(plantId);
-                out.relatedOrders = allOrders;
-              } catch (e) {
-                dbg("no-link path: relatedOrders fetch failed", e);
-                out.relatedOrders = [];
-              }
-            } catch (e) {
-              dbg("no-link path: plant_id lookup failed", e);
             }
+            out.subscriptionProduct = subMatch ? { productName: subMatch.productName, item: subMatch.item } : null;
+            out.hasSubscriptionProduct = !!subMatch;
+            out.subscriptionOrder = subscriptionOrder;
+            out.subscriptionOrderIsSeparate = subscriptionOrderIsSeparate;
+
+            // ── Order status derivation — mirrors the saved-URL order
+            // branch below. Younium order.status enum: 1=Created, 5=Draft.
+            const now = Date.now();
+            const tsStart     = order.effectiveStartDate ? Date.parse(order.effectiveStartDate) : NaN;
+            const tsEnd       = order.effectiveEndDate   ? Date.parse(order.effectiveEndDate)   : NaN;
+            const tsCancelled = order.cancellationDate   ? Date.parse(order.cancellationDate)   : NaN;
+            const isCancelled    = Number.isFinite(tsCancelled) && tsCancelled <= now;
+            const isExpired      = Number.isFinite(tsEnd) && tsEnd <= now && !order.isAutoRenewed && !order.isRenewed;
+            const startsInFuture = Number.isFinite(tsStart) && tsStart > now;
+            const isRawDraft     = order.status === 5;
+            const isRawCreated   = order.status === 1;
+
+            const invoices = await youniumFetchInvoicesForOrder(order.orderNumber);
+            const postedInvoices = (invoices || []).filter((inv) =>
+              inv && (inv.status === 3 || inv.status === 2 || inv.posted)
+            );
+            out.raw.invoices = invoices;
+
+            if (isCancelled)                      out.orderStatus = "Cancelled";
+            else if (isRawDraft)                  out.orderStatus = "Draft";
+            else if (isRawCreated)                out.orderStatus = "Created (not finalized)";
+            else if (postedInvoices.length > 0)   out.orderStatus = "Invoiced";
+            else if (startsInFuture)              out.orderStatus = "Order (pending start)";
+            else if (order.isLastVersion)         out.orderStatus = "Order (not invoiced)";
+            else                                  out.orderStatus = "Draft (outdated version)";
+
+            // ── Subscription status derivation (if subscriptionOrder found)
+            if (subscriptionOrder) {
+              const subOrder = subscriptionOrder;
+              const subOrderNumberStr = String(subOrder.orderNumber || "").trim();
+              const subOrderNumberLooksDraft =
+                !subOrderNumberStr ||
+                subOrderNumberStr.toLowerCase() === "draft" ||
+                /^draft\b/i.test(subOrderNumberStr);
+              const subIsRawDraft     = subOrder.status === 5 || subOrderNumberLooksDraft;
+              const subIsRawCreated   = subOrder.status === 1 && subOrderNumberLooksDraft;
+              const subTsStart        = subOrder.effectiveStartDate ? Date.parse(subOrder.effectiveStartDate) : NaN;
+              const subTsEnd          = subOrder.effectiveEndDate   ? Date.parse(subOrder.effectiveEndDate)   : NaN;
+              const subTsCancelled    = subOrder.cancellationDate   ? Date.parse(subOrder.cancellationDate)   : NaN;
+              const subIsCancelled    = Number.isFinite(subTsCancelled) && subTsCancelled <= now;
+              const subIsExpired      = Number.isFinite(subTsEnd) && subTsEnd <= now && !subOrder.isAutoRenewed && !subOrder.isRenewed;
+              const subStartsInFuture = Number.isFinite(subTsStart) && subTsStart > now;
+              if (subIsCancelled)              out.subscriptionStatus = "Cancelled";
+              else if (subIsRawDraft)          out.subscriptionStatus = "Draft (not activated)";
+              else if (subIsRawCreated)        out.subscriptionStatus = "Created (not finalized)";
+              else if (subIsExpired)           out.subscriptionStatus = "Inactive";
+              else if (subStartsInFuture)      out.subscriptionStatus = "Order — not active yet";
+              else if (subOrder.isLastVersion && Number.isFinite(subTsStart))
+                                               out.subscriptionStatus = "Active";
+              else if (subOrder.isLastVersion) out.subscriptionStatus = "Order";
+              else                              out.subscriptionStatus = "Unknown";
+            }
+
+            // ── Eventlog for Created by / Last updated by rows (non-fatal)
+            try {
+              const orderEvents = await youniumFetchOrderEventLog(order.id);
+              out.raw.orderEventLog = orderEvents;
+              out.orderLatestEvent  = extractLatestEvent(orderEvents);
+              out.orderCreatedEvent = extractFirstEvent(orderEvents);
+            } catch (e) { dbg("primary eventlog fetch failed:", e); }
+            if (subscriptionOrder?.id && subscriptionOrder.id !== order.id) {
+              try {
+                const events = await youniumFetchOrderEventLog(subscriptionOrder.id);
+                out.raw.subscriptionEventLog = events;
+                out.subscriptionLatestEvent  = extractLatestEvent(events);
+                out.subscriptionCreatedEvent = extractFirstEvent(events);
+              } catch (e) { dbg("subscription eventlog fetch failed:", e); }
+            } else if (subscriptionOrder?.id) {
+              out.subscriptionLatestEvent  = out.orderLatestEvent;
+              out.subscriptionCreatedEvent = out.orderCreatedEvent;
+            }
+
+            // ── Verdict color + label — mirrors the saved-URL logic so
+            // the chip's tone matches what the modal shows.
+            if (isCancelled)               { out.color = "red";    out.label = "Younium: ✗ Cancelled"; }
+            else if (isExpired)            { out.color = "red";    out.label = "Younium: ✗ Expired"; }
+            else if (isRawDraft)           { out.color = "red";    out.label = "Younium: ⚠ Activate order in Younium"; }
+            else if (isRawCreated)         { out.color = "red";    out.label = "Younium: ⚠ Finalize order in Younium"; }
+            else if (postedInvoices.length && out.hasSubscriptionProduct && out.subscriptionStatus === "Active")
+                                           { out.color = "green";  out.label = "Younium: ✓ All good"; }
+            else if (postedInvoices.length && !out.hasSubscriptionProduct)
+                                           { out.color = "green";  out.label = "Younium: ✓ Invoiced (one-time)"; }
+            else if (out.hasSubscriptionProduct && out.subscriptionStatus === "Active")
+                                           { out.color = "yellow"; out.label = "Younium: ⏳ Awaiting first invoice"; }
+            else if (startsInFuture)       { out.color = "yellow"; out.label = "Younium: ⏳ Order — not active yet"; }
+            else                           { out.color = "yellow"; out.label = "Younium: ⏳ Order found (no saved link)"; }
+
+            out.problems.push("Found order via plant_id — consider saving its Younium link on the project");
+
+            dbg("no-link path: promoted plant primary order into Order/Offer", {
+              orderId: order.id, orderNumber: order.orderNumber,
+              status: order.status, derivedStatus: out.orderStatus,
+              hasSubscription: out.hasSubscriptionProduct,
+              subscriptionId: subscriptionOrder?.id,
+              relatedCount: allOrders.length,
+            });
+          } catch (e) {
+            dbg("no-link plant_id flow failed:", e);
           }
           return out;
         }
