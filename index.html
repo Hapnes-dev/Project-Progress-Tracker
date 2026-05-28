@@ -7592,6 +7592,96 @@
         autoLinkFetchPromise.set(p.id, promise);
         return promise;
       }
+
+      // ── Download folder handle (cached across page loads) ────────────
+      // The Files popover's "Download all" used to prompt the user to
+      // pick a folder every single time. After the FIRST pick we now
+      // cache the FileSystemDirectoryHandle in IndexedDB and reuse it
+      // for every subsequent download — zero picker prompts until the
+      // browser revokes the permission (typically only on a manual
+      // permission reset). The picker, when it does appear, opens at
+      // the user's Downloads folder so they can usually one-click it.
+      const DL_IDB_NAME = "tracker-fs-handles";
+      const DL_IDB_STORE = "handles";
+      const DL_HANDLE_KEY = "downloads-parent-dir";
+
+      function _idbOpenHandleStore() {
+        return new Promise((resolve, reject) => {
+          let req;
+          try { req = indexedDB.open(DL_IDB_NAME, 1); }
+          catch (e) { reject(e); return; }
+          req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains(DL_IDB_STORE)) {
+              db.createObjectStore(DL_IDB_STORE);
+            }
+          };
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+      }
+
+      async function idbGetSavedDownloadDir() {
+        try {
+          const db = await _idbOpenHandleStore();
+          return await new Promise((resolve, reject) => {
+            const tx = db.transaction(DL_IDB_STORE, "readonly");
+            const r = tx.objectStore(DL_IDB_STORE).get(DL_HANDLE_KEY);
+            r.onsuccess = () => resolve(r.result || null);
+            r.onerror = () => reject(r.error);
+          });
+        } catch (_) { return null; }
+      }
+
+      async function idbSaveDownloadDir(handle) {
+        try {
+          const db = await _idbOpenHandleStore();
+          await new Promise((resolve, reject) => {
+            const tx = db.transaction(DL_IDB_STORE, "readwrite");
+            const r = tx.objectStore(DL_IDB_STORE).put(handle, DL_HANDLE_KEY);
+            r.onsuccess = () => resolve();
+            r.onerror = () => reject(r.error);
+          });
+        } catch (_) {}
+      }
+
+      /**
+       * Get a writable FileSystemDirectoryHandle for the parent download
+       * folder. Prefers a previously-cached handle (one-time setup); if
+       * its permission was revoked since last use, prompts for re-grant.
+       * Falls back to showDirectoryPicker starting at the Downloads dir
+       * when no cache exists. Returns null on user cancel.
+       */
+      async function getOrPickDownloadParentDir() {
+        if (typeof window.showDirectoryPicker !== "function") return null;
+        const cached = await idbGetSavedDownloadDir();
+        if (cached) {
+          try {
+            let perm = "denied";
+            if (typeof cached.queryPermission === "function") {
+              perm = await cached.queryPermission({ mode: "readwrite" });
+            }
+            if (perm !== "granted" && typeof cached.requestPermission === "function") {
+              perm = await cached.requestPermission({ mode: "readwrite" });
+            }
+            if (perm === "granted") return cached;
+          } catch (e) {
+            console.warn("[Downloads] cached handle permission check failed:", e);
+          }
+        }
+        try {
+          const picked = await window.showDirectoryPicker({
+            mode: "readwrite",
+            startIn: "downloads",
+            id: "tracker-downloads",
+          });
+          void idbSaveDownloadDir(picked);
+          return picked;
+        } catch (e) {
+          if (e?.name === "AbortError") return null;
+          throw e;
+        }
+      }
       // Same session-only pattern for the Younium status chip — fetch
       // once per project per page load. Cached verdict (`project.youniumStatus`)
       // shows immediately; this runs in the background and updates.
@@ -27347,7 +27437,12 @@
               // Falls back to the legacy per-file download flow when the API
               // is missing (Firefox / Safari / older Chrome / file:// origin).
               //
-              // After picking the parent folder we auto-create a subfolder
+              // Uses getOrPickDownloadParentDir which caches the picked
+              // folder in IndexedDB — so after the first pick (which
+              // defaults to the Downloads folder) every subsequent run
+              // writes straight there, no picker shown.
+              //
+              // After resolving the parent folder we auto-create a subfolder
               // named after the project so each project's files stay grouped.
               // If a folder with the same name already exists, getDirectoryHandle
               // returns the existing one (and the per-file unique-name logic
@@ -27356,7 +27451,10 @@
               let destFolderName = null;
               if (typeof window.showDirectoryPicker === "function") {
                 try {
-                  const parentDir = await window.showDirectoryPicker({ mode: "readwrite" });
+                  const parentDir = await getOrPickDownloadParentDir();
+                  // User cancelled the (first-time) picker — abort cleanly
+                  // rather than falling through to the legacy per-file flow.
+                  if (!parentDir) return;
                   destFolderName = sanitizeFolderName(p?.name || ("Project " + rlPid));
                   try {
                     dirHandle = await parentDir.getDirectoryHandle(destFolderName, { create: true });
@@ -27366,11 +27464,7 @@
                     destFolderName = null;
                   }
                 } catch (e) {
-                  // User dismissed the picker → bail out without falling
-                  // through to the legacy per-file flow (that would feel
-                  // like we ignored their cancel).
-                  if (e?.name === "AbortError") return;
-                  console.warn("[FilesPopover] showDirectoryPicker failed:", e);
+                  console.warn("[FilesPopover] download dir setup failed:", e);
                 }
               }
 
