@@ -12530,7 +12530,7 @@
       function mergeProjectLinksByPriority(iqcLinks, dealDescLinks) {
         const slots = [
           "zendesk", "oneflowOrder", "oneflowSubscription",
-          "younium", "hubspot", "rocketlane",
+          "younium", "youniumSubscription", "hubspot", "rocketlane",
         ];
         const merged = {};
         const conflicts = [];
@@ -12621,6 +12621,7 @@
           oneflowOrder: "",
           oneflowSubscription: "",
           younium: "",
+          youniumSubscription: "",
           hubspot: "",
           rocketlane: "",
           // Legacy alias — same value as oneflowOrder once classified.
@@ -12629,8 +12630,9 @@
         if (!html) return result;
         const doc = new DOMParser().parseFromString(String(html), "text/html");
         const containers = doc.body.querySelectorAll("li, p, div, tr");
-        // Track ambiguous Oneflow links so the caller can warn.
+        // Track ambiguous Oneflow / Younium links so the caller can warn.
         const ambiguousOneflow = [];
+        const ambiguousYounium = [];
         for (const c of containers) {
           const a = c.querySelector("a[href]");
           if (!a) continue;
@@ -12645,9 +12647,30 @@
             case "zendesk":
               if (!result.zendesk) result.zendesk = href;
               break;
-            case "younium":
-              if (!result.younium) result.younium = href;
+            case "younium": {
+              // Younium tasks now have two link slots — "(Order / offer)" and
+              // "(Subscription)" — so apply the same order/subscription label
+              // classifier we use for Oneflow. The classifier matches keywords
+              // ("subscription"/"abonnement" vs "order"/"offer"/"tilbud") and
+              // is platform-agnostic by design.
+              const kind = classifyOneflowLinkByNearbyLabel(labelText);
+              if (kind === "subscription" && !result.youniumSubscription) {
+                result.youniumSubscription = href;
+              } else if (kind === "order" && !result.younium) {
+                result.younium = href;
+              } else if (kind === "unknown") {
+                if (!result.younium) {
+                  result.younium = href;
+                  ambiguousYounium.push({ href, labelText, slot: "order (defaulted)" });
+                } else if (!result.youniumSubscription) {
+                  result.youniumSubscription = href;
+                  ambiguousYounium.push({ href, labelText, slot: "subscription (defaulted)" });
+                } else {
+                  ambiguousYounium.push({ href, labelText, slot: "(no free slot)" });
+                }
+              }
               break;
+            }
             case "hubspot":
               if (!result.hubspot) result.hubspot = href;
               break;
@@ -12684,11 +12707,15 @@
         }
         // Legacy alias
         result.oneflow = result.oneflowOrder;
-        // Stash ambiguous-Oneflow notes on the result so the caller can
+        // Stash ambiguous-link notes on the result so the caller can
         // surface a console warning. Non-enumerable so JSON.stringify
         // doesn't clutter logs.
         Object.defineProperty(result, "_ambiguousOneflow", {
           value: ambiguousOneflow,
+          enumerable: false,
+        });
+        Object.defineProperty(result, "_ambiguousYounium", {
+          value: ambiguousYounium,
           enumerable: false,
         });
         return result;
@@ -20070,6 +20097,10 @@
                       console.warn("Ambiguous Oneflow links (label didn't disambiguate order vs subscription):",
                         iqcLinks._ambiguousOneflow);
                     }
+                    if (iqcLinks._ambiguousYounium?.length) {
+                      console.warn("Ambiguous Younium links (label didn't disambiguate order vs subscription):",
+                        iqcLinks._ambiguousYounium);
+                    }
                     console.log("Merged result + per-slot source:", { merged, sources });
                     if (conflicts.length) {
                       console.warn("Source conflicts (Internal Quality Control was used):", conflicts);
@@ -20103,6 +20134,7 @@
                 fill("oneflowUrl",             merged.oneflowOrder,        sources.oneflowOrder);
                 fill("oneflowSubscriptionUrl", merged.oneflowSubscription, sources.oneflowSubscription);
                 fill("youniumUrl",             merged.younium,             sources.younium);
+                fill("youniumSubscriptionUrl", merged.youniumSubscription, sources.youniumSubscription);
                 fill("hubspotUrl",             merged.hubspot,             sources.hubspot);
                 if (merged.rocketlane) fill("rocketlaneUrl", merged.rocketlane, sources.rocketlane);
                 if (changed) {
