@@ -21714,9 +21714,24 @@
           // Click on the dim backdrop (outside any chat content) exits
           // fullscreen. We check ev.target === chatPanel so clicks inside
           // the centered children (header, body, compose) don't trigger.
+          //
+          // Two-step guard against accidental close while selecting text:
+          // when the user mousedowns inside the chat body to select text
+          // and drags the mouse onto the backdrop before releasing, the
+          // browser still fires a `click` whose target is the common
+          // ancestor (chatPanel). The previous code closed on that. Now
+          // we also require mousedown to have STARTED on the backdrop —
+          // otherwise it's a stretched text selection, not a real
+          // backdrop click.
+          let backdropMouseDownTarget = null;
+          const exitFullscreenOnBackdropMouseDown = (ev) => {
+            backdropMouseDownTarget = ev.target;
+          };
           const exitFullscreenOnBackdropClick = (ev) => {
             if (!chatIsFullscreen) return;
-            if (ev.target === chatPanel) {
+            const startedOnBackdrop = backdropMouseDownTarget === chatPanel;
+            backdropMouseDownTarget = null;
+            if (ev.target === chatPanel && startedOnBackdrop) {
               ev.preventDefault();
               toggleChatFullscreen();
             }
@@ -21733,6 +21748,7 @@
               // Use capture phase so we beat the browser's default back-nav
               document.addEventListener("mousedown", exitFullscreenOnMouseBack, true);
               document.addEventListener("auxclick", exitFullscreenOnMouseBack, true);
+              chatPanel.addEventListener("mousedown", exitFullscreenOnBackdropMouseDown);
               chatPanel.addEventListener("click", exitFullscreenOnBackdropClick);
               // Push a history entry so the browser's back action targets us
               try { history.pushState({ chatFullscreen: true }, ""); } catch (_) {}
@@ -21742,6 +21758,7 @@
               document.removeEventListener("keydown", exitFullscreenOnEsc);
               document.removeEventListener("mousedown", exitFullscreenOnMouseBack, true);
               document.removeEventListener("auxclick", exitFullscreenOnMouseBack, true);
+              chatPanel.removeEventListener("mousedown", exitFullscreenOnBackdropMouseDown);
               chatPanel.removeEventListener("click", exitFullscreenOnBackdropClick);
               window.removeEventListener("popstate", exitFullscreenOnPopstate);
               // Pop the sentinel state we pushed when opening — only if the
