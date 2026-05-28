@@ -89,6 +89,21 @@ The single userscript handles all five platforms:
 - **Custom fields without a value are OMITTED from project responses**. When fetching a field, if it isn't on `project.fields[]`, fall back to the tenant-wide `/fields` endpoint to find its ID — `rocketlaneFindDealDescriptionFieldId()` is the reference implementation.
 - **S3 attachment URLs** expire after ~5 minutes (X-Amz-Expires=299). Always re-fetch via `fetchAttachment(id)` right before opening a link.
 
+### Task notes: Description note + Private note (bidirectional)
+
+Each task row has TWO independent notes, surfaced when the row is expanded:
+
+| UI field | Local field | Rocketlane field | Write endpoint |
+|---|---|---|---|
+| **Description note** | `t.meta.rocketlaneDescription` (linked) / `t.notes` (unlinked) | task `description` | `rocketlaneUpdateTaskDescription` → `PUT /tasks/{id}` |
+| **Private note** (cream box, behind "+ Add a private note") | `t.privateNote` | task `privateTaskDescription` (HTML) | `rocketlaneUpdateTaskPrivateNote` → `PUT /projects/{pid}/tasks/{tid}/mini` |
+
+- **A "private note" is NOT a conversation/comment.** It is the task-level `privateTaskDescription` HTML field (the cream box under the description in the task drawer). The endpoint + field name were captured from the live web UI via Playwright network interception (`PUT …/tasks/{tid}/mini`, body `{ "privateTaskDescription": "<p>…</p>" }`, `api-key` auth, minimal body accepted). **Do NOT** route this through `/tasks/{id}/messages` — that's the comment stream and was the original bug (the note silently never saved). `rocketlaneCreateTaskPrivateMessage` (the `/messages` POST) still exists but is only used for subtask-creation traceability, gated behind `ROCKETLANE_SYNC_PRIVATE_NOTES=false`.
+- `rocketlaneUpdateTaskPrivateNote(projectId, taskId, noteText)` needs the **project id** (derives it from the task via `rocketlaneGetTaskById` if not passed). Plain text → HTML via `rocketlanePlainTextToHtml`.
+- **Read**: `rocketlanePrivateNoteFromTask(task)` checks `task.privateTaskDescription` FIRST (HTML → plain text via `rocketlaneDescriptionToPlainText`). The tasks-LIST endpoint (`GET /projects/{pid}/tasks?excludeMetaDataInFields=true`) DOES include `privateTaskDescription`, so pull-sync surfaces notes authored in Rocketlane — `commitPrivateNote`'s pull maps it into `t.privateNote` (was `t.notes`; line ~16944).
+- **Clearing syncs too**: `commitPrivateNote` calls the update for empty text as well (no `next.trim()` guard), so deleting the note in the tracker PUTs `privateTaskDescription:""`. An untouched empty box never commits (the `privateNoteCurrent() === next` equality guard returns first).
+- **Data-model split**: `t.privateNote` is deliberately separate from `t.notes`. For unlinked tasks the Description note still uses `t.notes`; sharing one field would collide. Read fallback `t.privateNote ?? (linked ? t.notes : "")` shows pre-migration notes until the next sync makes `t.privateNote` authoritative.
+
 ### Project status (5-state → 8-state enum, bidirectional with Rocketlane)
 
 Local project status now uses the **same 8-state enum as Rocketlane's "Status" SELECT custom field** (fieldId varies per tenant, on Kiona it's `230410`):
@@ -689,6 +704,10 @@ Every code change ships through this verification flow before being declared don
 
 ## Recent significant changes (chronological)
 
+- **Task notes split: "Description note" + "Private note" (bidirectional with Rocketlane)**
+  - The single task-notes box was renamed **Description note**; a **+ Add a private note** link reveals a separate cream **Private note** box (mirrors Rocketlane's task-drawer affordance). New `t.privateNote` field, kept separate from `t.notes` to avoid a shared-field collision (unlinked Description note still uses `t.notes`).
+  - **Private-note write was broken** — it POSTed to `/tasks/{id}/messages` (the comment stream) so it silently never saved. Captured the real call via Playwright network interception on the live task drawer: a private note is the task-level **`privateTaskDescription`** HTML field, saved via `PUT /projects/{pid}/tasks/{tid}/mini` (minimal body, `api-key` auth). Rewrote `rocketlaneUpdateTaskPrivateNote(projectId, taskId, text)` accordingly; verified end-to-end (typed in tracker → appeared on the real RL task).
+  - `rocketlanePrivateNoteFromTask` now reads `privateTaskDescription` first; the tasks-list endpoint includes it, so RL-authored notes pull into the tracker. Clearing the note in the tracker also clears it in Rocketlane (empty PUT). See the "Task notes" subsection under Rocketlane integration for the full contract.
 - **Project status: 5-state → 8-state enum (matches Rocketlane 1:1) with bidirectional sync**
   - Local enum now: `proposed` / `in_planning` / `to_be_staffed` / `in_progress` / `on_hold` / `blocked` / `completed` / `cancelled` (was 5 lossy keys)
   - Numeric `ROCKETLANE_PROJECT_STATUS_MAP` captured via Playwright from `/api/v1/fields/230410`

@@ -37,6 +37,15 @@ Prefer a local copy? Download `Project Progress Tracker.html` and open it from y
 - **Chat history viewer** for project conversations: Private + General tabs, file attachments, inline image previews, lightbox, @-mention picker (diacritic-insensitive), notifications drawer with filter chips and rich previews.
 - **Hubspot Deal Description writer**: when you save a project, the Rocketlane custom field "Hubspot Deal Description" is updated with a plain `Links:` block listing the project's Oneflow / Younium / HubSpot URLs. Field is discovered via the tenant `/fields` endpoint when it doesn't yet exist on the project.
 
+### Task notes & private notes (synced to Rocketlane)
+
+Expand any task to edit two independent notes that mirror Rocketlane's task drawer:
+
+- **Description note** — the task's main description. For Rocketlane-linked tasks it reads/writes the Rocketlane task description; for local-only tasks it's stored in the tracker.
+- **Private note** — hidden behind a **+ Add a private note** link (matching Rocketlane's own affordance); click it to reveal a cream editor. For linked tasks this syncs to Rocketlane's task-level **`privateTaskDescription`** field — the same private note shown in the task drawer — via `PUT /projects/<projectId>/tasks/<taskId>/mini`. **Clearing** the note in the tracker also clears it in Rocketlane, and notes authored **in** Rocketlane pull back into the tracker on every sync.
+
+Stored locally as `t.privateNote`, kept separate from the description so the two never collide. Saved on Enter or click-away.
+
 ### Zendesk Tasks (per project)
 - **Section** under "Chat history" in the project detail panel, sorted by **last public reply** (not generic `updated_at`).
 - Each row shows status pill + subject + "Last reply 25.05 14:17 (i dag)" (24-h Oslo timezone, Norwegian locale).
