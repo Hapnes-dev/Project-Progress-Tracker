@@ -2509,7 +2509,8 @@
       }
 
       .task.expanded .taskDetails {
-        max-height: 800px;
+        /* Headroom for Description note + revealed Private note (was 800px). */
+        max-height: 1200px;
         padding: 10px 6px 2px;
         margin-top: 4px;
         border-top: 1px solid var(--border);
@@ -2723,6 +2724,48 @@
       .taskDescriptionBox.empty {
         color: var(--muted);
         font-style: italic;
+      }
+
+      /* "Add a private note" affordance + the cream Private note box.
+         Mirrors Rocketlane's task-drawer private note (Conversations tab):
+         the box stays hidden until the user clicks "Add a private note". */
+      .addPrivateNoteLink {
+        align-self: start;
+        width: fit-content;
+        background: none;
+        border: none;
+        padding: 2px 0;
+        margin: 0;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--accent);
+        cursor: pointer;
+      }
+      .addPrivateNoteLink:hover { text-decoration: underline; }
+
+      .taskPrivateNoteWrap { display: grid; gap: 4px; }
+      .taskPrivateNoteLabel {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+        color: #d9b441;
+      }
+      textarea.taskPrivateNote {
+        background: rgba(253, 224, 71, 0.08) !important;
+        border: 1px solid rgba(253, 224, 71, 0.30) !important;
+        color: #f4e8b8 !important;
+        min-height: 60px;
+      }
+      textarea.taskPrivateNote::placeholder { color: rgba(244, 232, 184, 0.5); }
+      @media (prefers-color-scheme: light) {
+        .taskPrivateNoteLabel { color: #8a6d08; }
+        textarea.taskPrivateNote {
+          background: #fdf6d8 !important;
+          border-color: #ecd98a !important;
+          color: #3a3209 !important;
+        }
+        textarea.taskPrivateNote::placeholder { color: #a8932f; }
       }
 
       .task .x {
@@ -16941,8 +16984,8 @@
                     et.status = nextStatus;
                     taskChanged = true;
                   }
-                  if (privateNoteText && String(et.notes ?? "") !== privateNoteText) {
-                    et.notes = privateNoteText;
+                  if (privateNoteText && String(et.privateNote ?? "") !== privateNoteText) {
+                    et.privateNote = privateNoteText;
                     taskChanged = true;
                   }
                   if (String(et.meta.rocketlaneDescription ?? "") !== desc) {
@@ -17033,8 +17076,10 @@
                 id: id(),
                 text: textToUse,
                 status: normalizeTaskStatus(status),
-                // Keep local notes mapped to Rocketlane private note.
-                notes: privateNoteText,
+                notes: "",
+                // Rocketlane private note → dedicated privateNote field
+                // (surfaced in the task's "Private note" box).
+                privateNote: privateNoteText,
                 meta: {
                   rocketlaneTaskId: rlTaskId || "",
                   rocketlaneProjectId: rlPid,
@@ -17637,7 +17682,7 @@
 
       /** @typedef {"todo" | "in_progress" | "need_assistance" | "completed" | "blocked" | "waiting_partner"} TaskStatus */
       /** @typedef {"need_work" | "low_workload" | "normal_workload" | "high_workload" | "on_hold"} OwnerLoad */
-      /** @typedef {{ id: string, text: string, status: TaskStatus, notes?: string, meta?: Record<string, any> }} Task */
+      /** @typedef {{ id: string, text: string, status: TaskStatus, notes?: string, privateNote?: string, meta?: Record<string, any> }} Task */
       /**
        * @typedef {{
        *  id: string,
@@ -17934,6 +17979,10 @@
       const taskNoteDrafts = new Map();
       /** Draft task descriptions that are not yet saved (press Enter to commit). */
       const taskDescriptionDrafts = new Map();
+      /** Draft private notes that are not yet saved (press Enter to commit). */
+      const taskPrivateNoteDrafts = new Map();
+      /** Task rows where the user revealed the Private note box (UI only). */
+      const revealedPrivateNoteRows = new Set();
       function taskDraftKey(projectId, area, taskId) {
         return String(projectId) + "|" + String(area) + "|" + String(taskId);
       }
@@ -23188,7 +23237,8 @@
           for (const t of taskList) {
             const status = normalizeTaskStatus(t.status);
             if (status === "completed") continue;
-            const noteText = String(t.notes ?? "").trim();
+            // Prefer the dedicated private note; fall back to legacy/local notes.
+            const noteText = String(t.privateNote ?? "").trim() || String(t.notes ?? "").trim();
             // Show tasks in overview if they have a note OR a non-"To do"/"In progress" status.
             if (!noteText && (status === "todo" || status === "in_progress")) continue;
             taskNotesList.push({
@@ -24263,9 +24313,7 @@
 
               const notesLabel = document.createElement("div");
               notesLabel.className = "small";
-              notesLabel.textContent = useRocketlane
-                ? "Task notes (syncs to Rocketlane)"
-                : "Task notes";
+              notesLabel.textContent = "Description note";
 
               const notesBox = document.createElement("textarea");
               notesBox.placeholder = useRocketlane
@@ -24733,6 +24781,141 @@
                 details.appendChild(descBox);
                 details.appendChild(descMsg);
               }
+
+              // --- Private note (mirrors Rocketlane's "Add a private note") ----
+              // A second, optional note hidden behind a link until clicked, then
+              // revealed as a cream textarea. Stored in t.privateNote and — for
+              // RL-linked tasks — synced to the task's private conversation.
+              // Reads back-compat from legacy t.notes (where pulled private notes
+              // used to live) until the next sync makes t.privateNote authoritative.
+              const privateNoteValue =
+                t.privateNote !== undefined
+                  ? String(t.privateNote)
+                  : (hasRocketlaneTaskLink ? String(t.notes ?? "") : "");
+              const pnDraft = taskPrivateNoteDrafts.get(taskKey);
+              const pnFlashKey = "p|" + taskKey;
+
+              const addPrivateNoteLink = document.createElement("button");
+              addPrivateNoteLink.type = "button";
+              addPrivateNoteLink.className = "addPrivateNoteLink";
+              addPrivateNoteLink.textContent = "+ Add a private note";
+
+              const privateNoteWrap = document.createElement("div");
+              privateNoteWrap.className = "taskPrivateNoteWrap";
+
+              const privateNoteLabel = document.createElement("div");
+              privateNoteLabel.className = "taskPrivateNoteLabel";
+              privateNoteLabel.textContent = "Private note";
+
+              const privateNoteBox = document.createElement("textarea");
+              privateNoteBox.className = "taskPrivateNote";
+              privateNoteBox.placeholder = hasRocketlaneTaskLink
+                ? "Type your private note here (press Enter to save to Rocketlane)..."
+                : "Type your private note here (press Enter or click outside to save)...";
+              privateNoteBox.value = pnDraft !== undefined ? pnDraft : privateNoteValue;
+
+              const pnMsg = document.createElement("div");
+              pnMsg.className = "taskNoteMsg";
+              pnMsg.innerHTML = '<span class="noteIcon" aria-hidden="true">[NOTE]</span>Private note added';
+              pnMsg.style.display = privateNoteBox.value.trim() ? "inline-flex" : "none";
+
+              const pnFlashedAt = noteSaveFlashes.get(pnFlashKey);
+              if (pnFlashedAt && Date.now() - pnFlashedAt < NOTE_SAVED_FLASH_MS) {
+                pnMsg.innerHTML = '<span class="noteIcon" aria-hidden="true">[OK]</span>Saved';
+                pnMsg.style.display = "inline-flex";
+                window.setTimeout(() => {
+                  if (noteSaveFlashes.get(pnFlashKey) === pnFlashedAt) noteSaveFlashes.delete(pnFlashKey);
+                  if (!document.contains(pnMsg)) return;
+                  pnMsg.innerHTML = '<span class="noteIcon" aria-hidden="true">[NOTE]</span>Private note added';
+                  pnMsg.style.display = privateNoteBox.value.trim() ? "inline-flex" : "none";
+                }, NOTE_SAVED_FLASH_MS);
+              }
+
+              privateNoteWrap.appendChild(privateNoteLabel);
+              privateNoteWrap.appendChild(privateNoteBox);
+              privateNoteWrap.appendChild(pnMsg);
+
+              // Reveal when there's existing content / a draft, or when the user
+              // explicitly clicks "Add a private note".
+              const pnHasContent = privateNoteBox.value.trim() !== "" || pnDraft !== undefined;
+              const pnRevealed = pnHasContent || revealedPrivateNoteRows.has(taskKey);
+              addPrivateNoteLink.style.display = pnRevealed ? "none" : "inline-flex";
+              privateNoteWrap.style.display = pnRevealed ? "grid" : "none";
+
+              addPrivateNoteLink.addEventListener("click", (e) => {
+                e.stopPropagation();
+                revealedPrivateNoteRows.add(taskKey);
+                addPrivateNoteLink.style.display = "none";
+                privateNoteWrap.style.display = "grid";
+                try { privateNoteBox.focus({ preventScroll: true }); } catch (_) {}
+              });
+
+              const privateNoteCurrent = () =>
+                t.privateNote !== undefined
+                  ? String(t.privateNote)
+                  : (hasRocketlaneTaskLink ? String(t.notes ?? "") : "");
+
+              const commitPrivateNote = () => {
+                const next = privateNoteBox.value;
+                if (privateNoteCurrent() === next) {
+                  taskPrivateNoteDrafts.delete(taskKey);
+                  return;
+                }
+                taskPrivateNoteDrafts.delete(taskKey);
+                t.privateNote = next;
+                touchProject(p.id);
+                noteSaveFlashes.set(pnFlashKey, Date.now());
+                saveState(state);
+                renderDetail();
+
+                // Sync to the Rocketlane task's private conversation (linked tasks only).
+                const rlTaskId = String(t?.meta?.rocketlaneTaskId ?? "").trim();
+                if (rlTaskId && next.trim()) {
+                  const lastSent = rocketlanePrivateNoteLastSent.get(rlTaskId);
+                  if (lastSent !== undefined && lastSent === next) return;
+                  rocketlanePrivateNoteLastSent.set(rlTaskId, next);
+                  const token = rocketlaneBumpPrivateNoteSyncToken(rlTaskId);
+                  (async () => {
+                    try {
+                      rocketlaneShowMessage("Rocketlane: saving private note...", "info");
+                      await rocketlaneUpdateTaskPrivateNote(rlTaskId, next);
+                      if (!rocketlaneIsLatestPrivateNoteSync(rlTaskId, token)) return;
+                      rocketlaneShowMessage("Rocketlane private note saved.", "info");
+                    } catch (err) {
+                      if (!rocketlaneIsLatestPrivateNoteSync(rlTaskId, token)) return;
+                      if (rocketlanePrivateNoteLastSent.get(rlTaskId) === next) {
+                        rocketlanePrivateNoteLastSent.delete(rlTaskId);
+                      }
+                      const msg =
+                        err instanceof TypeError
+                          ? "Rocketlane sync blocked by browser (CORS/network)."
+                          : String(err?.message ?? err ?? "Rocketlane sync failed.") +
+                            (err?.body ? " " + JSON.stringify(err.body) : "");
+                      rocketlaneShowMessage("Rocketlane private note not saved: " + msg, "error");
+                    }
+                  })();
+                }
+              };
+
+              privateNoteBox.addEventListener("input", () => {
+                pnMsg.style.display = privateNoteBox.value.trim() ? "inline-flex" : "none";
+                taskPrivateNoteDrafts.set(taskKey, privateNoteBox.value);
+              });
+              privateNoteBox.addEventListener("keydown", (e) => {
+                if (e.key !== "Enter" || e.shiftKey) return;
+                e.preventDefault();
+                commitPrivateNote();
+              });
+              privateNoteBox.addEventListener("blur", () => {
+                if (privateNoteCurrent() === privateNoteBox.value) {
+                  taskPrivateNoteDrafts.delete(taskKey);
+                  return;
+                }
+                commitPrivateNote();
+              });
+
+              details.appendChild(addPrivateNoteLink);
+              details.appendChild(privateNoteWrap);
 
               const toggleExpanded = () => {
                 const nowExpanded = !row.classList.contains("expanded");
