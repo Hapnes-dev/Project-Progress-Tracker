@@ -7472,6 +7472,119 @@
       // attempt, even across browser restarts.
       const autoLinkFetchInFlight = new Set();
       const autoLinkFetchTriedThisSession = new Set();
+      // Promise cache so any caller — the detail panel auto-fetch, the
+      // Younium status modal, or anything else that opens a project — can
+      // `await` the SAME in-flight fetch. Once-per-session per project.
+      const autoLinkFetchPromise = new Map();
+
+      /**
+       * Fetch a project's link slots (Zendesk / Oneflow / Younium /
+       * HubSpot) from Rocketlane's Internal Quality Control task notes +
+       * HubSpot Deal Description, and fill any empty slots on the local
+       * project. Never overwrites manually-saved values. Runs at most
+       * once per project per page load — repeat calls return the cached
+       * Promise so concurrent awaiters all resolve on the same fetch.
+       * Called from BOTH renderDetail (fire-and-forget) and
+       * computeYouniumStatus (awaited) so the Younium modal sees freshly-
+       * populated URLs without the user having to open Edit Projects.
+       */
+      async function autoFetchProjectLinksOnce(p) {
+        if (!p?.id) return;
+        const cached = autoLinkFetchPromise.get(p.id);
+        if (cached) return cached;
+
+        const rlPid = String(p.rocketlaneProjectId ?? "").trim();
+        if (!rlPid) return;
+
+        const missingAny =
+          !String(p.overviewUrl              ?? "").trim() ||
+          !String(p.oneflowUrl               ?? "").trim() ||
+          !String(p.oneflowSubscriptionUrl   ?? "").trim() ||
+          !String(p.youniumUrl               ?? "").trim() ||
+          !String(p.youniumSubscriptionUrl   ?? "").trim() ||
+          !String(p.hubspotUrl               ?? "").trim();
+        if (!missingAny) return;
+
+        const promise = (async () => {
+          autoLinkFetchInFlight.add(p.id);
+          try {
+            const [iqcRes, ddRes] = await Promise.allSettled([
+              rocketlaneFetchInternalQCTaskNotes(rlPid),
+              rocketlaneFetchHubspotDealDescription(rlPid),
+            ]);
+            const iqc = iqcRes.status === "fulfilled" ? iqcRes.value : null;
+            const dd  = ddRes.status  === "fulfilled" ? ddRes.value  : null;
+            const iqcLinks = iqc?.links || parseProjectLinksFromHtml("");
+            const ddLinks  = dd?.links  || parseProjectLinksFromHtml("");
+            const { merged, conflicts, sources } = mergeProjectLinksByPriority(iqcLinks, ddLinks);
+
+            try {
+              if (typeof window !== "undefined" && window.__matchDebug !== false) {
+                // eslint-disable-next-line no-console
+                console.groupCollapsed("[ProjectLinks] auto-fetch for " + (p.name || p.id));
+                console.log("Internal Quality Control task:",
+                  iqc?.found
+                    ? { taskId: iqc.taskId, taskName: iqc.taskName, links: iqcLinks }
+                    : "(not found on this project)");
+                console.log("HubSpot Deal Description:",
+                  dd?.fieldId
+                    ? { fieldId: dd.fieldId, links: ddLinks }
+                    : "(no Deal Description field on this project)");
+                if (iqcLinks._ambiguousOneflow?.length) {
+                  console.warn("Ambiguous Oneflow links (label didn't disambiguate order vs subscription):",
+                    iqcLinks._ambiguousOneflow);
+                }
+                if (iqcLinks._ambiguousYounium?.length) {
+                  console.warn("Ambiguous Younium links (label didn't disambiguate order vs subscription):",
+                    iqcLinks._ambiguousYounium);
+                }
+                console.log("Merged result + per-slot source:", { merged, sources });
+                if (conflicts.length) {
+                  console.warn("Source conflicts (Internal Quality Control was used):", conflicts);
+                }
+                console.groupEnd();
+              }
+            } catch (_) {}
+
+            let changed = false;
+            p.linkSources = p.linkSources || {};
+            const fill = (key, value, sourceLabel) => {
+              if (!value) return;
+              // Never overwrite a manually-saved value silently.
+              if (String(p[key] ?? "").trim()) return;
+              p[key] = value;
+              p.linkSources[key] = sourceLabel;
+              changed = true;
+              try {
+                if (typeof window !== "undefined" && window.__matchDebug !== false) {
+                  // eslint-disable-next-line no-console
+                  console.log("[ProjectLinks] filled " + key + " ←", value, "(from " + sourceLabel + ")");
+                }
+              } catch (_) {}
+            };
+            fill("overviewUrl",            merged.zendesk,             sources.zendesk);
+            fill("oneflowUrl",             merged.oneflowOrder,        sources.oneflowOrder);
+            fill("oneflowSubscriptionUrl", merged.oneflowSubscription, sources.oneflowSubscription);
+            fill("youniumUrl",             merged.younium,             sources.younium);
+            fill("youniumSubscriptionUrl", merged.youniumSubscription, sources.youniumSubscription);
+            fill("hubspotUrl",             merged.hubspot,             sources.hubspot);
+            if (merged.rocketlane) fill("rocketlaneUrl", merged.rocketlane, sources.rocketlane);
+
+            if (changed) {
+              saveState(state);
+              if (state.selectedProjectId === p.id && typeof renderDetail === "function") renderDetail();
+              if (typeof renderList === "function") renderList();
+            }
+          } catch (err) {
+            console.warn("[ProjectLinks] auto-fetch failed:", err);
+          } finally {
+            autoLinkFetchInFlight.delete(p.id);
+            autoLinkFetchTriedThisSession.add(p.id);
+          }
+        })();
+        autoLinkFetchPromise.set(p.id, promise);
+        return promise;
+      }
       // Same session-only pattern for the Younium status chip — fetch
       // once per project per page load. Cached verdict (`project.youniumStatus`)
       // shows immediately; this runs in the background and updates.
@@ -10322,6 +10435,15 @@
             }
           } catch (_) {}
         };
+        // Before reading project.youniumUrl / project.youniumSubscriptionUrl,
+        // ensure they've been auto-fetched from Rocketlane (Internal Quality
+        // Control task notes + HubSpot Deal Description) at least once this
+        // session. Same logic the detail panel uses on render — sharing the
+        // helper means the user doesn't have to open Edit Projects first for
+        // the modal to see the right URLs. Once-per-session per project,
+        // cheap when already populated, awaited so the rest of this function
+        // reads the filled values.
+        try { await autoFetchProjectLinksOnce(project); } catch (_) {}
         const out = {
           color: "gray",
           label: "Younium: Missing",
@@ -20040,118 +20162,13 @@
         // shows the actual brand mark instead of an emoji approximation.
         if (els.detailDynamicLinks) {
           els.detailDynamicLinks.innerHTML = "";
-          // If the project is synced with Rocketlane but local link fields
-          // are empty, fetch HubSpot Deal Description links from Rocketlane
-          // and persist them into the project state so the toolbar icons
-          // appear without the user having to open + save the Edit dialog.
-          //
-          // Tracking is module-level (autoLinkFetchTriedThisSession +
-          // autoLinkFetchInFlight Sets — declared near the top of the
-          // script). Both reset on every page load so a previously-failed
-          // or empty fetch doesn't permanently block re-fetch on future
-          // sessions. Within a session, we only attempt once per project.
-          const rlPid = String(p.rocketlaneProjectId ?? "").trim();
-          const missingAny =
-            !String(p.overviewUrl              ?? "").trim() ||
-            !String(p.oneflowUrl               ?? "").trim() ||
-            !String(p.oneflowSubscriptionUrl   ?? "").trim() ||
-            !String(p.youniumUrl               ?? "").trim() ||
-            !String(p.hubspotUrl               ?? "").trim();
-          if (
-            rlPid &&
-            missingAny &&
-            !autoLinkFetchInFlight.has(p.id) &&
-            !autoLinkFetchTriedThisSession.has(p.id)
-          ) {
-            autoLinkFetchInFlight.add(p.id);
-            // ── Source priority (per user spec) ──
-            // 1. Internal Quality Control task notes (primary, trusted)
-            // 2. HubSpot Deal Description (fallback for missing slots)
-            // Run both fetches in parallel — partial data beats none.
-            Promise.allSettled([
-              rocketlaneFetchInternalQCTaskNotes(rlPid),
-              rocketlaneFetchHubspotDealDescription(rlPid),
-            ])
-              .then(([iqcRes, ddRes]) => {
-                const iqc = iqcRes.status === "fulfilled" ? iqcRes.value : null;
-                const dd  = ddRes.status  === "fulfilled" ? ddRes.value  : null;
-                const iqcLinks = iqc?.links || parseProjectLinksFromHtml("");
-                const ddLinks  = dd?.links  || parseProjectLinksFromHtml("");
-                const { merged, conflicts, sources } = mergeProjectLinksByPriority(iqcLinks, ddLinks);
-
-                // Debug breadcrumb so the user can see exactly what
-                // happened in DevTools when something looks off.
-                try {
-                  if (typeof window !== "undefined" && window.__matchDebug !== false) {
-                    // eslint-disable-next-line no-console
-                    console.groupCollapsed("[ProjectLinks] auto-fetch for " + (p.name || p.id));
-                    console.log("Internal Quality Control task:",
-                      iqc?.found
-                        ? { taskId: iqc.taskId, taskName: iqc.taskName, links: iqcLinks }
-                        : "(not found on this project)");
-                    console.log("HubSpot Deal Description:",
-                      dd?.fieldId
-                        ? { fieldId: dd.fieldId, links: ddLinks }
-                        : "(no Deal Description field on this project)");
-                    if (iqcLinks._ambiguousOneflow?.length) {
-                      console.warn("Ambiguous Oneflow links (label didn't disambiguate order vs subscription):",
-                        iqcLinks._ambiguousOneflow);
-                    }
-                    if (iqcLinks._ambiguousYounium?.length) {
-                      console.warn("Ambiguous Younium links (label didn't disambiguate order vs subscription):",
-                        iqcLinks._ambiguousYounium);
-                    }
-                    console.log("Merged result + per-slot source:", { merged, sources });
-                    if (conflicts.length) {
-                      console.warn("Source conflicts (Internal Quality Control was used):", conflicts);
-                    }
-                    console.groupEnd();
-                  }
-                } catch (_) {}
-
-                let changed = false;
-                // Initialize the per-field source map. We attribute every
-                // filled field so the dialog hint can show "Auto-filled
-                // from Internal Quality Control" / "Auto-filled from
-                // HubSpot Deal Description" later.
-                p.linkSources = p.linkSources || {};
-                const fill = (key, value, sourceLabel) => {
-                  if (!value) return;
-                  // Never overwrite a manually-saved value silently.
-                  // (The auto-fetch only fills EMPTY slots.)
-                  if (String(p[key] ?? "").trim()) return;
-                  p[key] = value;
-                  p.linkSources[key] = sourceLabel; // "iqc" | "dealDescription"
-                  changed = true;
-                  try {
-                    if (typeof window !== "undefined" && window.__matchDebug !== false) {
-                      // eslint-disable-next-line no-console
-                      console.log("[ProjectLinks] filled " + key + " ←", value, "(from " + sourceLabel + ")");
-                    }
-                  } catch (_) {}
-                };
-                fill("overviewUrl",            merged.zendesk,             sources.zendesk);
-                fill("oneflowUrl",             merged.oneflowOrder,        sources.oneflowOrder);
-                fill("oneflowSubscriptionUrl", merged.oneflowSubscription, sources.oneflowSubscription);
-                fill("youniumUrl",             merged.younium,             sources.younium);
-                fill("youniumSubscriptionUrl", merged.youniumSubscription, sources.youniumSubscription);
-                fill("hubspotUrl",             merged.hubspot,             sources.hubspot);
-                if (merged.rocketlane) fill("rocketlaneUrl", merged.rocketlane, sources.rocketlane);
-                if (changed) {
-                  saveState(state);
-                  // Re-render so the toolbar icons appear immediately,
-                  // and also re-render the project LIST so list-view
-                  // affordances reflect the new state.
-                  if (state.selectedProjectId === p.id) renderDetail();
-                  if (typeof renderList === "function") renderList();
-                }
-              })
-              .catch((err) => console.warn("[ProjectLinks] auto-fetch failed:", err))
-              .finally(() => {
-                autoLinkFetchInFlight.delete(p.id);
-                autoLinkFetchTriedThisSession.add(p.id);
-              });
-          }
+          // If the project is synced with Rocketlane but local link slots
+          // are empty, fetch from Internal Quality Control task notes +
+          // HubSpot Deal Description and persist into project state. The
+          // helper is shared with the Younium status modal so both code
+          // paths trigger / await the same once-per-session fetch — see
+          // autoFetchProjectLinksOnce near the top of the script.
+          void autoFetchProjectLinksOnce(p);
           const faviconFor = (host) =>
             "https://www.google.com/s2/favicons?domain=" + host + "&sz=32";
           // Note: Rocketlane is intentionally NOT in this favicon toolbar
