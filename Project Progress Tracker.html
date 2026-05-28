@@ -15518,6 +15518,14 @@
           return out;
         };
 
+        // Canonical field used by the Rocketlane web UI for a task's "private note"
+        // (the cream box under the description). It is HTML, so strip to plain text.
+        // Verified live: task.privateTaskDescription on GET /projects/{pid}/tasks/{tid}.
+        const canonicalPrivate = rocketlaneDescriptionToPlainText(
+          String(task?.privateTaskDescription ?? task?.taskInfo?.privateTaskDescription ?? ""),
+        ).trim();
+        if (canonicalPrivate) return canonicalPrivate;
+
         const dedicatedCandidates = [
           task?.privateNote,
           task?.private_note,
@@ -15582,75 +15590,35 @@
         throw new Error(errMsg + (errBody ? " " + errBody : ""));
       }
 
-      async function rocketlaneUpdateTaskPrivateNote(rocketlaneTaskId, noteText) {
-        const id = String(rocketlaneTaskId ?? "").trim();
-        if (!id) throw new Error("Missing Rocketlane taskId.");
-        const text = String(noteText ?? "");
-        const trimmed = text.trim();
+      async function rocketlaneUpdateTaskPrivateNote(rocketlaneProjectId, rocketlaneTaskId, noteText) {
+        const taskId = String(rocketlaneTaskId ?? "").trim();
+        if (!taskId) throw new Error("Missing Rocketlane taskId.");
 
-        // Primary path: task conversation/private note stream.
-        if (trimmed) {
+        // Rocketlane stores a task's "private note" (the cream box under the
+        // description in the task drawer) as the task-level `privateTaskDescription`
+        // HTML field — NOT as a conversation/comment. It is saved via the task
+        // partial-update endpoint. Verified against the live web UI:
+        //   PUT /projects/{projectId}/tasks/{taskId}/mini
+        //   body: { "privateTaskDescription": "<p>...</p>" }
+        // (api-key auth; minimal body with just this field is accepted.)
+        let projectId = String(rocketlaneProjectId ?? "").trim();
+        if (!projectId) {
+          // Derive the project id from the task itself if the caller didn't pass one.
           try {
-            return await rocketlaneCreateTaskPrivateMessage(id, text);
-          } catch (e) {
-            // Fallback below for tenants that don't expose /messages.
-            if (e instanceof TypeError) throw e;
-          }
+            const t = await rocketlaneGetTaskById(taskId);
+            projectId = String(
+              t?.project?.projectId ?? t?.project?.id ?? t?.projectId ?? t?.project ?? "",
+            ).trim();
+          } catch (_) {}
         }
+        if (!projectId) throw new Error("Missing Rocketlane projectId for private-note update.");
 
-        const currentTask = await rocketlaneGetTaskById(id);
-        const curName = String(currentTask?.taskName ?? currentTask?.name ?? "").trim();
-        // Include identity fields so Rocketlane doesn't reject the PUT.
-        const base = {
-          ...(curName ? { taskName: curName } : {}),
-          ...(currentTask?.project ? { project: currentTask.project } : {}),
-          ...(currentTask?.phase ? { phase: currentTask.phase } : {}),
-          ...(currentTask?.status ? { status: currentTask.status } : {}),
-          ...(currentTask?.type ? { type: currentTask.type } : {}),
-        };
-
-        // Fallback: write to task-level private note variants.
-        // We accept the first 2xx response, because private notes are often not readable in GET responses.
-        const taskInfo =
-          currentTask?.taskInfo && typeof currentTask.taskInfo === "object"
-            ? currentTask.taskInfo
-            : currentTask?.task_info && typeof currentTask.task_info === "object"
-              ? currentTask.task_info
-              : {};
-        const bodies = [
-          { ...base, privateNote: text },
-          { ...base, private_note: text },
-          { ...base, internalNote: text },
-          { ...base, internal_note: text },
-          { ...base, taskInfo: { ...taskInfo, privateNote: text } },
-          { ...base, taskInfo: { ...taskInfo, private_note: text } },
-          { ...base, taskInfo: { ...taskInfo, internalNote: text } },
-          { ...base, taskInfo: { ...taskInfo, notes: text } },
-          { ...base, task_info: { ...taskInfo, privateNote: text } },
-          { ...base, task_info: { ...taskInfo, private_note: text } },
-          { ...base, task_info: { ...taskInfo, internalNote: text } },
-          { ...base, task_info: { ...taskInfo, notes: text } },
-          { ...base, notes: text },
-        ];
-        const candidates = [...bodies, ...bodies.map((b) => ({ data: b }))];
-
-        let lastErr = /** @type {any} */ (null);
-        for (const body of candidates) {
-          try {
-            await rocketlaneRequestJson("PUT", "/tasks/" + encodeURIComponent(id), undefined, body);
-            return true;
-          } catch (e) {
-            lastErr = e;
-            if (e instanceof TypeError) throw e; // Network/CORS — stop immediately
-            const status = Number(e?.status ?? 0);
-            if (![400, 404, 422].includes(status)) throw e; // Unexpected error — stop
-            // 400/404/422 means wrong field name — try the next one.
-          }
-        }
-
-        const errBody = lastErr?.body ? JSON.stringify(lastErr.body) : "";
-        const errMsg = String(lastErr?.message ?? lastErr ?? "Rocketlane task private note update failed.");
-        throw new Error(errMsg + (errBody ? " " + errBody : ""));
+        const html =
+          noteText && String(noteText).trim() ? rocketlanePlainTextToHtml(String(noteText)) : "";
+        const path =
+          "/projects/" + encodeURIComponent(projectId) + "/tasks/" + encodeURIComponent(taskId) + "/mini";
+        await rocketlaneRequestJson("PUT", path, undefined, { privateTaskDescription: html });
+        return true;
       }
 
       function rocketlaneBumpPrivateNoteSyncToken(rocketlaneTaskId) {
@@ -24474,7 +24442,7 @@
                   (async () => {
                     try {
                       rocketlaneShowMessage("Rocketlane: saving task private note...", "info");
-                      await rocketlaneUpdateTaskPrivateNote(rlTaskId, next);
+                      await rocketlaneUpdateTaskPrivateNote(String(t?.meta?.rocketlaneProjectId ?? ""), rlTaskId, next);
                       if (!rocketlaneIsLatestPrivateNoteSync(rlTaskId, token)) return;
                       rocketlaneShowMessage("Rocketlane task private note updated.", "info");
                     } catch (err) {
@@ -24878,7 +24846,7 @@
                   (async () => {
                     try {
                       rocketlaneShowMessage("Rocketlane: saving private note...", "info");
-                      await rocketlaneUpdateTaskPrivateNote(rlTaskId, next);
+                      await rocketlaneUpdateTaskPrivateNote(String(t?.meta?.rocketlaneProjectId ?? ""), rlTaskId, next);
                       if (!rocketlaneIsLatestPrivateNoteSync(rlTaskId, token)) return;
                       rocketlaneShowMessage("Rocketlane private note saved.", "info");
                     } catch (err) {
@@ -25135,7 +25103,7 @@
                     const token = rocketlaneBumpPrivateNoteSyncToken(rlTaskId);
                     (async () => {
                       try {
-                        await rocketlaneUpdateTaskPrivateNote(rlTaskId, task.notes);
+                        await rocketlaneUpdateTaskPrivateNote(String(task?.meta?.rocketlaneProjectId ?? ""), rlTaskId, task.notes);
                         if (!rocketlaneIsLatestPrivateNoteSync(rlTaskId, token)) return;
                         rocketlaneShowMessage("Rocketlane task private note updated.", "info");
                       } catch (err) {
