@@ -6710,7 +6710,14 @@
                 placeholder="Paste Younium Subscription order link (or keep empty)"
                 inputmode="url"
               />
+              <button
+                type="button"
+                class="btn oneflowFindBtn"
+                id="btnFindYouniumSubscription"
+                title="Find the IWMAC Subscription / Abonnement order for this project's plant_id — same lookup the Younium status chip uses"
+              >🔎 Find</button>
             </div>
+            <div class="oneflowFindStatus" id="youniumSubscriptionFindStatus" aria-live="polite"></div>
             <div class="linkSourceHint" id="fYouniumSubscriptionUrlSource"></div>
           </div>
           <div class="hubspotLinkBlock">
@@ -11491,7 +11498,76 @@
           e.preventDefault();
           void findYouniumOrderForEditDialog();
         }
+        if (t.id === "btnFindYouniumSubscription" || t.closest?.("#btnFindYouniumSubscription")) {
+          e.preventDefault();
+          void findYouniumSubscriptionForEditDialog();
+        }
       });
+
+      /**
+       * Edit Project dialog: find the IWMAC Subscription / Abonnement
+       * Younium order for the project's plant_id and populate the
+       * "Younium link (Subscription)" input.
+       *
+       * Reuses the SAME logic the Younium status chip's plant_id fallback
+       * uses (`youniumFindSubscriptionByPlantId`) — strict regex match on
+       * `IWMAC Subscription` / `IWMAC Abonnement` product names, filtered
+       * by the project's plant_id custom field, latest version only.
+       *
+       * The Edit dialog already auto-fetches IQC + Deal Description URLs
+       * once on open via autoFetchProjectLinksOnce, so if those sources
+       * had a subscription URL the field would already be filled. This
+       * button is the explicit "now search Younium by plant_id" trigger
+       * for projects where IQC / Deal Description didn't carry it.
+       */
+      async function findYouniumSubscriptionForEditDialog() {
+        const inputEl  = els?.fYouniumSubscriptionUrl;
+        const statusEl = els?.youniumSubscriptionFindStatus;
+        if (!inputEl) return;
+
+        const setStatus = (text, tone) => {
+          if (!statusEl) return;
+          statusEl.textContent = text || "";
+          // Reuse the existing status-tone styling from oneflowFindStatus
+          statusEl.classList.remove("oneflowFindStatusInfo", "oneflowFindStatusGood", "oneflowFindStatusWarn", "oneflowFindStatusError");
+          if (tone) statusEl.classList.add("oneflowFindStatus" + tone[0].toUpperCase() + tone.slice(1));
+        };
+
+        setStatus("Searching Younium by plant_id…", "info");
+
+        try {
+          const projectName = String(els?.fName?.value || "").trim();
+          const plantId = extractPlantIdFromProjectName(projectName);
+          if (!plantId) {
+            setStatus("No plant ID prefix in project name (expected pattern like '4732 - …') — can't search.", "warn");
+            return;
+          }
+
+          if (!window.YouniumBridge?.searchOrders || !window.YouniumBridge?.getOrderById) {
+            setStatus("Younium bridge not available — update the Tampermonkey userscript.", "error");
+            return;
+          }
+
+          const found = await youniumFindSubscriptionByPlantId(plantId);
+          if (!found) {
+            setStatus("No IWMAC Subscription / Abonnement order found for plant " + plantId + ".", "warn");
+            return;
+          }
+
+          const subUrl = "https://eu.younium.com/orders/" + String(found.order?.id || "");
+          inputEl.value = subUrl;
+          // Notify any other listeners (form-change tracking, etc.) of the
+          // programmatic change.
+          inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+          inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+
+          const orderNum = found.order?.orderNumber || "subscription";
+          setStatus("Found " + orderNum + " — " + (found.productName || "IWMAC product") + ".", "good");
+        } catch (err) {
+          console.warn("[YouniumSubFind] failed:", err);
+          setStatus("Error: " + (err?.message ?? err), "error");
+        }
+      }
 
       // Diagnostic: window.__yn for DevTools testing:
       //   await window.__yn.me()        // current user
@@ -18917,6 +18993,8 @@
         fYouniumUrl: document.getElementById("fYouniumUrl"),
         fYouniumSubscriptionUrl: document.getElementById("fYouniumSubscriptionUrl"),
         fYouniumSubscriptionUrlSource: document.getElementById("fYouniumSubscriptionUrlSource"),
+        btnFindYouniumSubscription: document.getElementById("btnFindYouniumSubscription"),
+        youniumSubscriptionFindStatus: document.getElementById("youniumSubscriptionFindStatus"),
         fHubspotUrl: document.getElementById("fHubspotUrl"),
         fRocketlaneUrl: document.getElementById("fRocketlaneUrl"),
         fRocketlaneProjectId: document.getElementById("fRocketlaneProjectId"),
@@ -25294,6 +25372,10 @@
           els.youniumFindStatus.textContent = "";
           const stalePicker = els.youniumFindStatus.parentElement?.querySelector(".oneflowFindPicker");
           if (stalePicker) stalePicker.remove();
+        }
+        if (els.youniumSubscriptionFindStatus) {
+          els.youniumSubscriptionFindStatus.className = "oneflowFindStatus";
+          els.youniumSubscriptionFindStatus.textContent = "";
         }
         if (els.fYouniumUrl) els.fYouniumUrl.value = p.youniumUrl ?? "";
         if (els.fYouniumSubscriptionUrl) els.fYouniumSubscriptionUrl.value = p.youniumSubscriptionUrl ?? "";
