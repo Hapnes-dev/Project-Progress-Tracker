@@ -6683,12 +6683,12 @@
             <div class="linkSourceHint" id="fOneflowSubscriptionUrlSource"></div>
           </div>
           <div class="youniumLinkBlock">
-            <label class="small" for="fYouniumUrl">Younium link</label>
+            <label class="small" for="fYouniumUrl">Younium link (Order / offer)</label>
             <div class="oneflowFindRow">
               <input
                 class="input"
                 id="fYouniumUrl"
-                placeholder="Paste Younium link (or keep empty)"
+                placeholder="Paste Younium Order / offer link (or keep empty)"
                 inputmode="url"
               />
               <button
@@ -6700,6 +6700,18 @@
             </div>
             <div class="oneflowFindStatus" id="youniumFindStatus" aria-live="polite"></div>
             <div class="linkSourceHint" id="fYouniumUrlSource"></div>
+          </div>
+          <div class="youniumLinkBlock">
+            <label class="small" for="fYouniumSubscriptionUrl">Younium link (Subscription)</label>
+            <div class="oneflowFindRow">
+              <input
+                class="input"
+                id="fYouniumSubscriptionUrl"
+                placeholder="Paste Younium Subscription order link (or keep empty)"
+                inputmode="url"
+              />
+            </div>
+            <div class="linkSourceHint" id="fYouniumSubscriptionUrlSource"></div>
           </div>
           <div class="hubspotLinkBlock">
             <label class="small" for="fHubspotUrl">HubSpot link</label>
@@ -10371,11 +10383,36 @@
             out.orderNumber = order.orderNumber || primarySummary.id;
             out.links.saved = "https://eu.younium.com/orders/" + order.id;
 
-            // ── Subscription detection on the discovered primary, then
-            // fall back to plant_id-wide search for a separate sub order.
-            let subMatch = findIwmacSubscriptionItem(order);
-            let subscriptionOrder = subMatch ? order : null;
+            // ── Subscription detection priority: (1) explicit
+            // youniumSubscriptionUrl saved on the project, (2) IWMAC product
+            // on the discovered primary, (3) plant_id-wide search.
+            let subMatch = null;
+            let subscriptionOrder = null;
             let subscriptionOrderIsSeparate = false;
+            const subUrlSaved = String(project?.youniumSubscriptionUrl || "").trim();
+            if (subUrlSaved) {
+              const sc = classifyLinkUrl(subUrlSaved);
+              if (sc?.platform === "younium" && sc.recordId && sc.recordType === "order") {
+                try {
+                  const fetched = await youniumFetchOrderDetails(sc.recordId);
+                  if (fetched) {
+                    const pm = findIwmacSubscriptionItem(fetched);
+                    subMatch = pm ?? { item: null, productName: "Subscription (saved URL)" };
+                    subscriptionOrder = fetched;
+                    subscriptionOrderIsSeparate = fetched.id !== order.id;
+                    if (subscriptionOrderIsSeparate) out.raw.subscriptionOrder = fetched;
+                    dbg("no-link path: subscription from saved youniumSubscriptionUrl", { id: fetched.id });
+                  }
+                } catch (e) { dbg("no-link path: explicit subscriptionUrl fetch failed", e); }
+              }
+            }
+            if (!subMatch) {
+              const onOrder = findIwmacSubscriptionItem(order);
+              if (onOrder) {
+                subMatch = onOrder;
+                subscriptionOrder = order;
+              }
+            }
             if (!subMatch) {
               const found = await youniumFindSubscriptionByPlantId(plantId);
               if (found) {
@@ -10526,7 +10563,27 @@
           const plantId = extractPlantIdFromProjectName(project?.name);
           if (plantId) {
             try {
-              const found = await youniumFindSubscriptionByPlantId(plantId);
+              // Priority 1: explicit youniumSubscriptionUrl saved on the project.
+              // Priority 2: plant_id-wide search.
+              let resolvedSubscription = null;
+              const subUrlSaved = String(project?.youniumSubscriptionUrl || "").trim();
+              if (subUrlSaved) {
+                const sc = classifyLinkUrl(subUrlSaved);
+                if (sc?.platform === "younium" && sc.recordId && sc.recordType === "order") {
+                  try {
+                    const fetched = await youniumFetchOrderDetails(sc.recordId);
+                    if (fetched) {
+                      const pm = findIwmacSubscriptionItem(fetched);
+                      resolvedSubscription = {
+                        order: fetched,
+                        productName: pm ? pm.productName : "Subscription (saved URL)",
+                      };
+                      dbg("quote path: subscription from saved youniumSubscriptionUrl", { id: fetched.id });
+                    }
+                  } catch (e) { dbg("quote path: explicit subscriptionUrl fetch failed", e); }
+                }
+              }
+              const found = resolvedSubscription || await youniumFindSubscriptionByPlantId(plantId);
               if (found) {
                 const subOrder = found.order;
                 out.subscriptionProduct = { productName: found.productName, item: null };
@@ -10621,20 +10678,54 @@
         out.raw = { order };
 
         // ── Subscription product check ──
-        // First look at the SAVED order — if it contains an IWMAC
-        // Abonnement / Subscription product line, this same order
-        // creates a subscription, no extra lookup needed.
-        let subMatch = findIwmacSubscriptionItem(order);
-        let subscriptionOrder = subMatch ? order : null;
+        // Priority: (1) explicit `youniumSubscriptionUrl` saved on the
+        // project wins — the user said "this IS the subscription order".
+        // (2) Saved primary order contains an IWMAC Subscription /
+        // Abonnement line. (3) plant_id-wide search for a separate sub.
+        let subMatch = null;
+        let subscriptionOrder = null;
         let subscriptionOrderIsSeparate = false;
 
-        // Otherwise, hunt for the subscription order by plant_id —
-        // every IWMAC subscription order in this tenant carries a
-        // plant_id custom field that matches the project's plant
-        // (the 4-digit prefix on the project name).
+        // (1) Explicit youniumSubscriptionUrl saved on the project.
+        const subUrlSaved = String(project?.youniumSubscriptionUrl || "").trim();
+        if (subUrlSaved) {
+          const subClassified = classifyLinkUrl(subUrlSaved);
+          if (subClassified?.platform === "younium" && subClassified.recordId && subClassified.recordType === "order") {
+            try {
+              const subFetched = await youniumFetchOrderDetails(subClassified.recordId);
+              if (subFetched) {
+                const productMatch = findIwmacSubscriptionItem(subFetched);
+                subMatch = productMatch ?? { item: null, productName: "Subscription (saved URL)" };
+                subscriptionOrder = subFetched;
+                subscriptionOrderIsSeparate = subFetched.id !== order.id;
+                if (subscriptionOrderIsSeparate) out.raw.subscriptionOrder = subFetched;
+                dbg("subscription resolved from saved youniumSubscriptionUrl", {
+                  id: subFetched.id, number: subFetched.orderNumber,
+                  productName: subMatch.productName,
+                });
+              }
+            } catch (e) {
+              dbg("explicit youniumSubscriptionUrl fetch failed", e);
+            }
+          } else {
+            dbg("saved youniumSubscriptionUrl is not a Younium order URL", { url: subUrlSaved, classified: subClassified });
+          }
+        }
+
+        // (2) Saved primary order itself contains an IWMAC subscription line.
+        if (!subMatch) {
+          const onOrder = findIwmacSubscriptionItem(order);
+          if (onOrder) {
+            subMatch = onOrder;
+            subscriptionOrder = order;
+          }
+        }
+
+        // (3) Plant_id search — every IWMAC subscription order carries a
+        // plant_id custom field matching the project's plant prefix.
         if (!subMatch) {
           const plantId = extractPlantIdFromProjectName(project?.name);
-          dbg("primary order has no IWMAC product, searching by plant_id", plantId);
+          dbg("no IWMAC sub on saved order, searching by plant_id", plantId);
           if (plantId) {
             const found = await youniumFindSubscriptionByPlantId(plantId);
             if (found) {
@@ -12618,7 +12709,8 @@
         const rows = [
           ["Oneflow (Order)",        links.oneflow],
           ["Oneflow (Subscription)", links.oneflowSubscription],
-          ["Younium",                links.younium],
+          ["Younium (Order)",        links.younium],
+          ["Younium (Subscription)", links.youniumSubscription],
           ["HubSpot",                links.hubspot],
         ].filter(([, url]) => url && /^https?:/i.test(url));
         if (!rows.length) return "";
@@ -18674,6 +18766,8 @@
         btnFindYounium: document.getElementById("btnFindYounium"),
         youniumFindStatus: document.getElementById("youniumFindStatus"),
         fYouniumUrl: document.getElementById("fYouniumUrl"),
+        fYouniumSubscriptionUrl: document.getElementById("fYouniumSubscriptionUrl"),
+        fYouniumSubscriptionUrlSource: document.getElementById("fYouniumSubscriptionUrlSource"),
         fHubspotUrl: document.getElementById("fHubspotUrl"),
         fRocketlaneUrl: document.getElementById("fRocketlaneUrl"),
         fRocketlaneProjectId: document.getElementById("fRocketlaneProjectId"),
@@ -25100,6 +25194,7 @@
         if (els.fOneflowUrl) els.fOneflowUrl.value = "";
         if (els.fOneflowSubscriptionUrl) els.fOneflowSubscriptionUrl.value = "";
         if (els.fYouniumUrl) els.fYouniumUrl.value = "";
+        if (els.fYouniumSubscriptionUrl) els.fYouniumSubscriptionUrl.value = "";
         if (els.fHubspotUrl) els.fHubspotUrl.value = "";
         els.fRocketlaneUrl.value = "";
         if (els.fRocketlaneProjectId) els.fRocketlaneProjectId.value = "";
@@ -25152,6 +25247,7 @@
           if (stalePicker) stalePicker.remove();
         }
         if (els.fYouniumUrl) els.fYouniumUrl.value = p.youniumUrl ?? "";
+        if (els.fYouniumSubscriptionUrl) els.fYouniumSubscriptionUrl.value = p.youniumSubscriptionUrl ?? "";
         if (els.fHubspotUrl) els.fHubspotUrl.value = p.hubspotUrl ?? "";
         els.fRocketlaneUrl.value = p.rocketlaneUrl ?? "";
         if (els.fRocketlaneProjectId) els.fRocketlaneProjectId.value = String(p.rocketlaneProjectId ?? "");
@@ -28799,6 +28895,7 @@
         const oneflowUrl = (els.fOneflowUrl?.value ?? "").trim();
         const oneflowSubscriptionUrl = (els.fOneflowSubscriptionUrl?.value ?? "").trim();
         const youniumUrl = (els.fYouniumUrl?.value ?? "").trim();
+        const youniumSubscriptionUrl = (els.fYouniumSubscriptionUrl?.value ?? "").trim();
         const hubspotUrl = (els.fHubspotUrl?.value ?? "").trim();
         const rocketlaneProjectId = (els.fRocketlaneProjectId?.value ?? "").trim();
         // The Rocketlane link field was removed from the UI — the link is
@@ -28822,6 +28919,7 @@
             oneflowUrl: oneflowUrl || "",
             oneflowSubscriptionUrl: oneflowSubscriptionUrl || "",
             youniumUrl: youniumUrl || "",
+            youniumSubscriptionUrl: youniumSubscriptionUrl || "",
             hubspotUrl: hubspotUrl || "",
             rocketlaneUrl: rocketlaneUrl || "",
             rocketlaneProjectId: rocketlaneProjectId || "",
@@ -28863,6 +28961,7 @@
           p.oneflowUrl = oneflowUrl || "";
           p.oneflowSubscriptionUrl = oneflowSubscriptionUrl || "";
           p.youniumUrl = youniumUrl || "";
+          p.youniumSubscriptionUrl = youniumSubscriptionUrl || "";
           p.hubspotUrl = hubspotUrl || "";
           p.rocketlaneUrl = rocketlaneUrl || "";
           p.rocketlaneProjectId = rocketlaneProjectId || "";
@@ -28871,7 +28970,7 @@
           // edited a link manually). Empty fields shouldn't claim a
           // source — clear those out before saving.
           p.linkSources = p.linkSources || {};
-          for (const key of ["overviewUrl", "oneflowUrl", "oneflowSubscriptionUrl", "youniumUrl", "hubspotUrl", "rocketlaneUrl"]) {
+          for (const key of ["overviewUrl", "oneflowUrl", "oneflowSubscriptionUrl", "youniumUrl", "youniumSubscriptionUrl", "hubspotUrl", "rocketlaneUrl"]) {
             if (!String(p[key] || "").trim()) delete p.linkSources[key];
           }
           // Keep existing notes unchanged (Notes field removed from dialog)
@@ -28907,6 +29006,7 @@
                   oneflow:             p.oneflowUrl,
                   oneflowSubscription: p.oneflowSubscriptionUrl,
                   younium:             p.youniumUrl,
+                  youniumSubscription: p.youniumSubscriptionUrl,
                   hubspot:             p.hubspotUrl,
                   rocketlane:          p.rocketlaneUrl,
                 });
