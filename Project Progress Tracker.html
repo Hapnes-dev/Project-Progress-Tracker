@@ -29198,11 +29198,10 @@
           els.search.select();
           return;
         }
-        if (!e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "n") {
-          // quick new project
-          if (els.dlg.open) return;
-          openDlgNew();
-        }
+        // "n" shortcut for quick new project removed — too easy to trigger
+        // by accident while typing in fields outside the textarea/input/
+        // select check above (e.g. status pickers, chat compose). Users
+        // can still open the new-project dialog via the toolbar button.
         if (e.key === "Escape" && els.dlg.open) {
           els.dlg.close();
         }
