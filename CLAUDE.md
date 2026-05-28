@@ -649,10 +649,35 @@ When adding new code that calls Rocketlane / Zendesk / Oneflow / HubSpot / Youni
 - Never embed secrets in source.
 - If logging a request body for debugging, redact `Authorization`, `api-key`, `xsrf-token`, `X-CSRF-*`, and any field with `*key*` / `*token*` / `*secret*` in its name.
 
+## Testing protocol (mandatory after every change)
+
+Every code change ships through this verification flow before being declared done. Skip a step only when it doesn't apply (see exceptions at the end).
+
+**Inner loop — local-file first (fast):**
+
+1. **PowerShell — file integrity**: after writing, confirm the file landed where intended. `Get-FileHash` or compare `(Get-Item ...).Length` across the 3 HTML mirror locations (`Desktop\Project Progress Tracker.html`, repo `Project Progress Tracker.html`, repo `index.html`). They must be byte-identical.
+2. **PowerShell — git state**: `git status` shows only the expected files dirty. If `index.html` and the repo `Project Progress Tracker.html` diverge after a sync, the build is wrong.
+3. **Playwright — open local file**: navigate to `file:///C:/Users/Thomas/Desktop/Project%20Progress%20Tracker.html`. The local file path is the inner-loop target because there's no GitHub Pages deploy wait.
+4. **Playwright — exercise the changed UI**: actually click/type/navigate the surface that changed. A change without a click-through is unverified.
+5. **Playwright — console must be clean**: call `browser_console_messages` after the action. Treat any new `error` or `Uncaught` as a failure even if the UI looked fine — a 29k-line single-file app silently breaks easily.
+6. **Playwright — screenshot for visual changes**: capture and inspect when the change is CSS, layout, or any visible polish.
+
+**Outer loop — live URL after push:**
+
+7. **PowerShell — commit + push**: `git add -p` or named files (never `-A`), commit, push.
+8. **PowerShell — confirm deploy**: `curl.exe -I https://hapnes-dev.github.io/Project-Progress-Tracker/` and grep for the updated `Last-Modified` or `etag` (GitHub Pages typically takes 30–90 s). Poll until it flips.
+9. **Playwright — re-test on live URL**: same click-path as step 4 against `https://hapnes-dev.github.io/Project-Progress-Tracker/`. Catches deploy-only bugs (cache headers, relative-path breaks, GitHub Pages quirks).
+10. **Playwright — live console clean**: re-check `browser_console_messages` on the live page.
+
+**Playwright bridge caveat**: Tampermonkey doesn't inject into Playwright. For bridge-touching code, use the **mock-bridge-with-call-log** pattern — install `window.XBridge` with a recording stub, exercise the UI, then assert the captured `apiRequest` calls match what the real bridge would emit. End-to-end bridge verification still requires curl or a separate Playwright tab on the platform itself.
+
+**Exceptions** (skip noted steps with a one-line justification in chat):
+- **Docs-only change** (CLAUDE.md / README.md): skip steps 3–6, 9–10. PowerShell + git verification still required.
+- **Bridge-only change** (userscript): skip steps 3–6 in favor of a Tampermonkey reload + manual sanity ping in the user's normal browser, since Playwright can't host the bridge.
+
 ## When working with Claude
 
 - Prefer minimal, surgical edits. The file is large and any unrelated change is high-risk.
-- Test changes in the browser using Playwright when available — Tampermonkey isn't injectable into Playwright, so use the **mock-bridge-with-call-log** pattern: install `window.XBridge` with a recording stub, exercise the UI, then verify captured `apiRequest` calls match what the real bridge would emit. End-to-end verification still requires curl or a separate Playwright tab on the platform itself.
 - For animations: less is more. `render()` rebuilds DOM. Instant toggle is the most reliable.
 - The Rocketlane API has tenant-specific field IDs. Never hardcode them — always look up by name prefix. AND check both project.fields[] AND the tenant /fields endpoint, since custom fields without values are omitted from project responses.
 - HubSpot's internal API is undocumented and region-split — be ready for breaking changes between UI versions. For load-bearing integrations, prefer a Private App access token + `api.hubspot.com/crm/v3/*`.
