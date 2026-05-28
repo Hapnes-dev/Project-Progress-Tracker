@@ -24836,9 +24836,11 @@
                 saveState(state);
                 renderDetail();
 
-                // Sync to the Rocketlane task's private conversation (linked tasks only).
+                // Sync to the Rocketlane task's privateTaskDescription field
+                // (linked tasks only). Runs for empty text too, so clearing the
+                // note in the tracker also clears it in Rocketlane.
                 const rlTaskId = String(t?.meta?.rocketlaneTaskId ?? "").trim();
-                if (rlTaskId && next.trim()) {
+                if (rlTaskId) {
                   const lastSent = rocketlanePrivateNoteLastSent.get(rlTaskId);
                   if (lastSent !== undefined && lastSent === next) return;
                   rocketlanePrivateNoteLastSent.set(rlTaskId, next);
