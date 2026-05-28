@@ -13743,14 +13743,25 @@
           const list = Array.isArray(all) ? all : [];
           rocketlaneProjectPickerVisibleTotal = list.length;
 
+          // Drop terminal-state projects (Completed / Cancelled / Closed)
+          // before counting and listing. The picker is for IMPORTING new
+          // projects into the tracker — there's no value in surfacing
+          // finished work, and previously a freshly-completed project
+          // (e.g. 1170217 "2746 - Meny Heimdal") still showed up.
+          // Reuses the same predicate the workload aggregator uses, which
+          // reads remoteProject.fields[]["Status"].metaFieldValue.label.
+          const activeList = list.filter(rocketlaneProjectIsActiveForWorkload);
+          const hiddenTerminal = list.length - activeList.length;
+
           // Show only projects where the selected user is involved
-          const owned = list.filter((pr) => rocketlaneProjectIsOwnedByUser(pr, user));
-          const member = list.filter((pr) => rocketlaneProjectHasTeamMember(pr, user));
-          let mine = list.filter((pr) => rocketlaneProjectIsOwnedByUser(pr, user) || rocketlaneProjectHasTeamMember(pr, user));
+          const owned = activeList.filter((pr) => rocketlaneProjectIsOwnedByUser(pr, user));
+          const member = activeList.filter((pr) => rocketlaneProjectHasTeamMember(pr, user));
+          let mine = activeList.filter((pr) => rocketlaneProjectIsOwnedByUser(pr, user) || rocketlaneProjectHasTeamMember(pr, user));
           rocketlaneProjectPickerAll = mine;
 
           setRocketlaneStatus(
             `Projects for ${rocketlaneUserDisplayName(user)}: ${mine.length} (owned: ${owned.length}, member: ${member.length})` +
+              (hiddenTerminal > 0 ? ` — ${hiddenTerminal} Completed/Cancelled hidden` : "") +
               (rocketlaneProjectPickerVisibleTotal ? ` (of ${rocketlaneProjectPickerVisibleTotal} visible)` : ""),
             "info",
           );
@@ -13767,13 +13778,14 @@
                 setRocketlaneStatus(`Fetching tasks... page ${p.page} (${p.fetched}${total})`, "info");
               });
               const projectIds = new Set(tasks.map((t) => rocketlaneTaskProjectId(t)).filter(Boolean));
-              const inferred = list.filter(
+              const inferred = activeList.filter(
                 (pr) => projectIds.has(rocketlaneProjectId(pr)) || rocketlaneProjectIsOwnedByUser(pr, user),
               );
               rocketlaneProjectPickerAll = inferred;
               mine = inferred;
               setRocketlaneStatus(
                 `Projects for ${rocketlaneUserDisplayName(user)}: ${inferred.length} (from ${tasks.length} assigned tasks)` +
+                  (hiddenTerminal > 0 ? ` — ${hiddenTerminal} Completed/Cancelled hidden` : "") +
                   (rocketlaneProjectPickerVisibleTotal ? ` (of ${rocketlaneProjectPickerVisibleTotal} total)` : ""),
                 "info",
               );
