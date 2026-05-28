@@ -13287,6 +13287,23 @@
 
         // Keyboard shortcuts
         area.addEventListener("keydown", (e) => {
+          // Tab inside a bullet/numbered list item → indent the list level
+          // (Shift+Tab → outdent). Outside a list we leave Tab alone so it
+          // can advance focus like normal.
+          if (e.key === "Tab") {
+            const sel = window.getSelection();
+            const anchor = sel && sel.rangeCount ? sel.getRangeAt(0).startContainer : null;
+            const inListItem = anchor
+              ? (anchor.nodeType === Node.TEXT_NODE
+                  ? anchor.parentElement?.closest("li")
+                  : (anchor instanceof Element ? anchor.closest("li") : null))
+              : null;
+            if (inListItem && area.contains(inListItem)) {
+              e.preventDefault();
+              document.execCommand(e.shiftKey ? "outdent" : "indent");
+              return;
+            }
+          }
           if (!(e.ctrlKey || e.metaKey)) return;
           const k = e.key.toLowerCase();
           if (k === "b") { e.preventDefault(); document.execCommand("bold"); }
