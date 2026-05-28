@@ -672,7 +672,7 @@ Every code change ships through this verification flow before being declared don
 **Playwright bridge caveat**: Tampermonkey doesn't inject into Playwright. For bridge-touching code, use the **mock-bridge-with-call-log** pattern — install `window.XBridge` with a recording stub, exercise the UI, then assert the captured `apiRequest` calls match what the real bridge would emit. End-to-end bridge verification still requires curl or a separate Playwright tab on the platform itself.
 
 **Exceptions** (skip noted steps with a one-line justification in chat):
-- **Docs-only change** (CLAUDE.md / README.md): skip steps 3–6, 9–10. PowerShell + git verification still required.
+- **Docs-only change** (CLAUDE.md / README.md): skip steps 3–6 and 9–10 (no UI surface). For step 8, the GitHub Pages `Last-Modified` won't flip because `index.html` isn't touched — replace it with `curl https://raw.githubusercontent.com/Hapnes-dev/Project-Progress-Tracker/main/<file>` and grep for the new content.
 - **Bridge-only change** (userscript): skip steps 3–6 in favor of a Tampermonkey reload + manual sanity ping in the user's normal browser, since Playwright can't host the bridge.
 
 ## When working with Claude
