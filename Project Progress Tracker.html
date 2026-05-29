@@ -16280,24 +16280,47 @@
               if (parentTaskIdRaw) {
                 const createdTaskId = rocketlaneTaskId(task);
                 if (createdTaskId) {
-                  let checked = false;
-                  let parentLinked = false;
-                  try {
-                    const createdFull = await rocketlaneGetTaskById(createdTaskId, true);
-                    checked = true;
-                    const linkedParentId = String(rocketlaneTaskParentTaskId(createdFull) ?? "").trim();
-                    parentLinked = linkedParentId === String(parentTaskIdRaw);
-                  } catch (e) {
-                    // If verification call fails, keep the created task rather than risking data loss.
-                    console.warn("Rocketlane parent-link verify failed for created task", createdTaskId, e);
+                  const wantParent = String(parentTaskIdRaw);
+                  // 1) Trust the create response FIRST. Rocketlane returns the
+                  //    parent link inline on POST (verified via Playwright probe
+                  //    2026-05-29: created.parentTask === parent id immediately),
+                  //    so the normal path needs no re-fetch at all. A task that
+                  //    already shows the correct parent is accepted here and is
+                  //    NEVER eligible for the delete path below — this is what
+                  //    guarantees a correctly-created subtask can't be destroyed
+                  //    by a transient verification read.
+                  let linkedParentId = String(rocketlaneTaskParentTaskId(task) ?? "").trim();
+                  let parentLinked = linkedParentId === wantParent;
+                  // 2) Only if the create response didn't surface the link, confirm
+                  //    via re-fetch — with one retry to absorb eventual-consistency
+                  //    / partial projections. A single transient empty read must
+                  //    never be enough to delete the subtask.
+                  let verifyThrew = false;
+                  for (let attempt = 0; attempt < 2 && !parentLinked; attempt++) {
+                    try {
+                      if (attempt > 0) await new Promise((r) => setTimeout(r, 700));
+                      const createdFull = await rocketlaneGetTaskById(createdTaskId, true);
+                      linkedParentId = String(rocketlaneTaskParentTaskId(createdFull) ?? "").trim();
+                      parentLinked = linkedParentId === wantParent;
+                    } catch (e) {
+                      // Verify call failed — keep the created task rather than risk data loss.
+                      console.warn("Rocketlane parent-link verify failed for created task", createdTaskId, e);
+                      verifyThrew = true;
+                      break;
+                    }
                   }
-                  if (checked && !parentLinked) {
+                  // 3) Delete-and-try-next-shape ONLY on positive evidence of a real
+                  //    mismatch: the task came back linked to a DIFFERENT parent. An
+                  //    empty/unknown link, or a verify that threw, is treated as
+                  //    "keep" — the create API reliably nests, so absence of evidence
+                  //    must never destroy a correctly-created subtask.
+                  if (!parentLinked && !verifyThrew && linkedParentId && linkedParentId !== wantParent) {
                     try {
                       await rocketlaneRequestJson("DELETE", "/tasks/" + encodeURIComponent(createdTaskId), undefined);
                     } catch (e) {
                       console.warn("Rocketlane cleanup delete failed for mismatched subtask", createdTaskId, e);
                     }
-                    lastErr = new Error("Rocketlane created task without parent link.");
+                    lastErr = new Error("Rocketlane created task linked to wrong parent (" + linkedParentId + ").");
                     continue;
                   }
                 }
