@@ -15249,10 +15249,19 @@
         return rocketlaneTaskFieldValue(task, /category|discipline|domain|system/);
       }
       function rocketlaneTaskParentTaskId(task) {
+        // Rocketlane (Kiona tenant) returns the child's parent as a BARE
+        // number on `parentTask` (e.g. parentTask: 33759095) plus a
+        // `parentTaskObject` with the full parent. Older/other shapes use
+        // nested objects. Read all of them, primitive first.
+        const pt = task?.parentTask;
+        const ptPrimitive = typeof pt === "number" || typeof pt === "string" ? pt : null;
         return String(
           task?.parentTaskId ??
+            ptPrimitive ??
             task?.parentTask?.taskId ??
             task?.parentTask?.id ??
+            task?.parentTaskObject?.taskId ??
+            task?.parentTaskObject?.id ??
             task?.parent?.taskId ??
             task?.parent?.id ??
             "",
@@ -15264,6 +15273,8 @@
           task?.parentTask?.taskName ??
           task?.parentTask?.name ??
           task?.parentTask?.label ??
+          task?.parentTaskObject?.taskName ??
+          task?.parentTaskObject?.name ??
           task?.parent?.taskName ??
           task?.parent?.name ??
           task?.parent?.label ??
