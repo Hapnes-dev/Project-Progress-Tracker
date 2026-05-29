@@ -1889,13 +1889,37 @@
          hidden in DevTools — so we show them in the picker too (the
          title tooltip still echoes the same content for hover users). */
       .oneflowFindPickerSignals {
-        margin-top: 3px;
-        font-size: 10.5px;
-        color: var(--muted2);
-        font-style: italic;
-        line-height: 1.4;
-        white-space: normal;
+        margin-top: 6px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 5px;
       }
+      /* Each matching signal is its own pill: a color-coded points value
+         (+green / −red) followed by the label, instead of one cramped
+         run-on line. Wraps cleanly across rows. */
+      .oneflowFindPickerSignal {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 5px;
+        font-size: 10.5px;
+        line-height: 1.5;
+        padding: 1px 8px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--hairline, rgba(255, 255, 255, 0.10));
+        color: var(--muted2);
+        white-space: nowrap;
+      }
+      .oneflowFindPickerSignal .sigPts {
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        color: var(--good, #34d399);
+      }
+      .oneflowFindPickerSignal.neg {
+        background: var(--bad-soft, rgba(248, 113, 113, 0.10));
+        border-color: rgba(248, 113, 113, 0.30);
+      }
+      .oneflowFindPickerSignal.neg .sigPts { color: var(--bad, #f87171); }
 
       /* Compact toolbar row of project link buttons (Zendesk / Oneflow /
          Younium / HubSpot / Rocketlane). Mirrors the .btn style used by
@@ -9941,9 +9965,19 @@
           if (entry.signals && entry.signals.length) {
             const breakdown = document.createElement("div");
             breakdown.className = "oneflowFindPickerSignals";
-            breakdown.textContent = entry.signals
-              .map((s) => "+" + s.points + " " + s.label)
-              .join("  ·  ");
+            for (const s of entry.signals) {
+              const chip = document.createElement("span");
+              chip.className = "oneflowFindPickerSignal" + (s.points < 0 ? " neg" : "");
+              const pts = document.createElement("span");
+              pts.className = "sigPts";
+              // Proper sign: "+35" / "−20" (not the old "+-20").
+              pts.textContent = (s.points < 0 ? "−" : "+") + Math.abs(s.points);
+              const lbl = document.createElement("span");
+              lbl.textContent = s.label;
+              chip.appendChild(pts);
+              chip.appendChild(lbl);
+              breakdown.appendChild(chip);
+            }
             left.appendChild(breakdown);
           }
 
@@ -9956,7 +9990,7 @@
 
           // Tooltip duplicates the breakdown for hover convenience.
           const tooltipLines = entry.signals && entry.signals.length
-            ? entry.signals.map((s) => "+" + s.points + "  " + s.label)
+            ? entry.signals.map((s) => (s.points < 0 ? "−" : "+") + Math.abs(s.points) + "  " + s.label)
             : ["(no matching signals)"];
           item.title = tooltipLines.join("\n");
 
