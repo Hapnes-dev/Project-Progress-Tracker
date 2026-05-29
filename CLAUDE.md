@@ -262,8 +262,9 @@ Calibrated from live data captured via Playwright across two real projects (plan
 | Signal | Weight |
 |---|---|
 | Foreign-key ID match (project custom field carries the platform ID) | 35 |
-| Plant ID exact (native field or leading digits) | 35 |
-| Plant ID elsewhere in text (mutually exclusive with the above) | 18 |
+| Plant ID exact — native `plant_id` field | 35 |
+| Plant ID at start of the record's name/title | 30 |
+| Plant ID elsewhere in text (`\bID\b`, so `O-013299` ≠ plant 3299) | 18 |
 | **Younium order # matches RL `Youniumordernumber` field** (Younium only) | 30 |
 | **Linked from RL HubspotDealDescription / DeliveryStatusMessage** | 25 |
 | Org number exact match (9-digit Norwegian orgnr) | 20 |
@@ -280,9 +281,12 @@ Calibrated from live data captured via Playwright across two real projects (plan
 | Date proximity vs project due OR start (≤7d → 4, ≤14d → 3, ≤30d → 2) | 0..4 |
 | **HubSpot department / dealType / orderType tag match** | 3 each |
 | Same email domain (e.g. both `kiona.com`) | 3 |
-| "Live" status (not closed/cancelled/declined/lost/expired/etc.) | 0..3 |
+| "Live" status (not closed/cancelled/declined/lost/expired/etc.) | +3 |
+| **Dead status** (cancelled/declined/closed/lost/void/voided/expired/rejected/overdue) | **−20** |
 | **HubSpot deal stage tag match** | 2 |
 | **Contact domain match** (RL contact email domain ↔ candidate) | 2 |
+
+> **Dead-status penalty** (`MATCH_DEAD_STATUSES`): a `−20` hit (not merely the absence of the `+3` bonus) keeps cancelled/expired/lost records well below the 85% auto-fill bar even when every other signal is perfect — they can still appear in the picker for manual override, but never auto-fill.
 
 #### Multi-term search
 
@@ -297,7 +301,7 @@ Instead of a single query, the find orchestrator now runs a **prioritized list o
 7. Customer alone (priority 20)
 8. Contact email (priority 15) or contact email domain (priority 10)
 
-Results are merged by record ID (deduplicated), with early stop once we have ≥ 12 candidates from at least 2 different sources. Each term tried gets logged via `console.log("[Platform Find] search terms tried:", ...)`.
+Terms are **deduped by the normalized term string** (lowercased, whitespace-collapsed) — NOT by `priority+term` — so the same string isn't searched twice when it qualifies under two priorities; `add()` runs highest-priority first, so the first occurrence wins. Results are merged by record ID (deduplicated), with early stop once we have ≥ 12 candidates from at least 2 different sources. Each term tried gets logged via `console.log("[Platform Find] search terms tried:", ...)`.
 
 #### Existing-link validation
 
@@ -305,7 +309,7 @@ Before deciding auto-fill vs picker, every find function calls `detectExistingLi
 
 - **`orphan`** — saved link couldn't be URL-parsed.
 - **`wrongPlatform`** — saved URL points to a different platform than its slot (e.g. a Zendesk ticket saved in the Oneflow slot).
-- **`fkMismatch`** — Rocketlane has a foreign-key custom field (e.g. `HubspotDealID_357728 = 494492985563`) but the saved URL points to a different record ID.
+- **`fkMismatch`** — Rocketlane has a foreign-key custom field (e.g. `HubspotDealID_357728 = 494492985563`) but the saved URL points to a different record ID. **Same-id-shape guard**: the FK compare only runs when the saved URL's `recordId` and the RL field are the same KIND of identifier (both UUID, or both not-UUID). This prevents a correct Younium `/orders/<uuid>` link from being falsely flagged just because `YouniumOrderNumber` is an order number (`O-014603`) that can never equal a UUID — HubSpot/Oneflow IDs are numeric on both sides, so they still compare. (The Younium order-number ↔ `candidate.orderNumber` check lives in `scoreMatchCandidate`, not here.)
 
 If a mismatch is detected, **auto-fill is suppressed** regardless of score. The picker opens with a red warning row at the top quoting the discrepancy ("Saved link record ID X ≠ Rocketlane field Y"), and the user picks a replacement manually. We never silently overwrite a saved link.
 
@@ -315,7 +319,8 @@ If a mismatch is detected, **auto-fill is suppressed** regardless of score. The 
 
 `decideMatchOutcome`:
 
-- Best ≥ **85%** AND beats #2 by ≥ **15 percentage points** → auto-fill.
+- Best ≥ **85%** (the clamped `percent`) AND beats #2 by ≥ **15** → auto-fill.
+- The **lead is measured on the RAW uncapped `score`**, not `percent`. `percent` clamps at 100, so two strong-but-distinct candidates can both saturate to 100% and falsely look tied (lead 0), or a real gap above 100 raw gets hidden — measuring the lead on raw score keeps the "is #1 clearly better?" guard honest.
 - Otherwise → picker, sorted by percent desc.
 
 Override per call via `decideMatchOutcome(scored, { autoFillMinPercent, autoFillMinLeadPercent })`.
@@ -576,13 +581,12 @@ When a project has a `rocketlaneProjectId` set and any of the link slots (`overv
 **Source priority** (highest first):
 1. **Internal Quality Control task notes** — `rocketlaneFetchInternalQCTaskNotes(rlPid)` looks for a task whose name matches `/\binternal\s+(?:quality\s+control|qc)\b/i` (covers the canonical "Internal Quality control and notes" plus user-listed variants "Internal Quality Control", "Internal QC"). Parses the task's `taskDescription` HTML.
 2. **HubSpot Deal Description custom field** — `rocketlaneFetchHubspotDealDescription(rlPid)`. Fallback for any slot IQC didn't fill.
-3. **Existing fallback search / matching** — the Find buttons (Oneflow / HubSpot / Younium) remain available for manual lookup.
+3. **HubSpot Delivery status update message custom field** — parsed from the SAME `/projects/<id>` fetch as the Deal Description (no extra API call), returned as `deliveryStatusLinks`. Lowest of the three embedded-link sources.
+4. **Existing fallback search / matching** — the Find buttons (Oneflow / HubSpot / Younium) remain available for manual lookup.
 
-**Merging behavior** (`mergeProjectLinksByPriority`):
-- IQC has value, Deal Desc empty → IQC wins (source: `iqc`)
-- IQC empty, Deal Desc has value → Deal Desc wins (source: `dealDescription`)
-- Both agree → IQC source attributed
-- Both differ → IQC wins, conflict recorded + logged as `console.warn`
+**Merging behavior** (`mergeProjectLinksByPriority(iqcLinks, dealDescLinks, deliveryStatusLinks)`):
+- Generalised to a ranked source list (descending priority: `iqc` > `dealDescription` > `deliveryStatus`). Per slot, the first non-empty source wins; any lower-priority source that DISAGREES is recorded in `conflicts` (`{ slot, winner, winnerUrl, source, url }`) and logged — never silently overwriting the winner.
+- `sources[slot]` is `"iqc" | "dealDescription" | "deliveryStatus" | "none"`.
 
 **Never silently overwrite manual values**: the auto-fill only writes into EMPTY fields. Saved (non-empty) links survive every refresh; the user must explicitly clear a field before auto-fill will repopulate it.
 
@@ -734,6 +738,14 @@ Every code change ships through this verification flow before being declared don
 
 ## Recent significant changes (chronological)
 
+- **Matcher accuracy: 6 audit gaps closed (calibrated weights kept)**
+  - `detectExistingLinkMismatch`: same-id-shape guard — FK-compare only when the saved URL's recordId and the RL field are both-UUID or both-not-UUID, so a correct Younium `/orders/<uuid>` link is no longer falsely flagged vs the `O-xxxx` order-number field.
+  - `decideMatchOutcome`: the "beats #2 by ≥15" lead is measured on the RAW uncapped `score`, not `percent` (which clamps at 100 and faked ties / hid real gaps).
+  - `scoreMatchCandidate`: dead statuses take a **−20** penalty (was: just no +3); plant-id split into 3 tiers (native +35 / at-start +30 / anywhere +18).
+  - Auto-fill link sources: HubSpot **Delivery status update message** parsed from the same project fetch as a 3rd source below Deal Description; `mergeProjectLinksByPriority` generalised to a ranked source list.
+  - `buildSearchTerms`: dedup by normalized term only (was priority+term).
+  - `Project` typedef: added `oneflowSubscriptionUrl`, `youniumSubscriptionUrl`, `linkSources`.
+  - All verified live by unit-testing the window-exposed matcher fns (`scoreMatchCandidate`, `decideMatchOutcome`, `detectExistingLinkMismatch`, `buildSearchTerms`, `mergeProjectLinksByPriority`, `classifyLinkUrl`).
 - **Workflow: repo is the single source of truth**
   - The standalone desktop copy `C:\Users\Thomas\Desktop\Project Progress Tracker.html` was removed. Edit ONLY in the repo (`C:\Users\Thomas\Desktop\project-progress-tracker`), keep `Project Progress Tracker.html` + `index.html` byte-identical, `git pull --ff-only` first, and test on the LIVE URL (see Testing protocol). This killed the 3-mirror sync that previously caused a wrong-direction `cp` to clobber edits.
 - **Notifications: Zendesk recent-replies polish + reliability**
