@@ -6,7 +6,7 @@ This file is read by Claude Code on every session start. It documents the archit
 
 - **Vanilla HTML + CSS + JS** in a single file: `Project Progress Tracker.html` (~25k lines).
 - No build step, no framework, no bundler. All state in `localStorage`.
-- **Tampermonkey userscript** bridge (`rocketlane-chat-bridge/`) handles cross-origin API calls to FIVE platforms: Rocketlane, Zendesk, Oneflow, HubSpot, Younium. Bridge version is v1.9.11+ as of this writing (v1.9.11 added `YouniumBridge.getOrderEventLog` for the Younium status modal's "Last updated by" / "Created by" rows; v1.9.10 added `getOrderById` / `getInvoicesForOrder` / `getQuoteById`).
+- **Tampermonkey userscript** bridge (`rocketlane-chat-bridge/`) handles cross-origin API calls to FIVE platforms: Rocketlane, Zendesk, Oneflow, HubSpot, Younium. Bridge version is v1.9.13+ as of this writing (v1.9.13 made `HubSpotBridge.searchDeals` fetch ALL deal properties via `includeAllProperties`; v1.9.12 added local-dev `@match`; v1.9.11 added `YouniumBridge.getOrderEventLog` for the Younium status modal's "Last updated by" / "Created by" rows; v1.9.10 added `getOrderById` / `getInvoicesForOrder` / `getQuoteById`).
 - Designed to run from either `file://` on the user's desktop or `https://hapnes-dev.github.io/Project-Progress-Tracker/`.
 
 ## File layout inside `Project Progress Tracker.html`
@@ -262,7 +262,9 @@ Calibrated from live data captured via Playwright across two real projects (plan
 | Signal | Weight |
 |---|---|
 | Foreign-key ID match (project custom field carries the platform ID) | 35 |
+| **Reverse cross-link — candidate embeds the project's HubSpot Deal ID** (e.g. an Oneflow order's `Hubspot Deal ID` custom field == the project deal) | 35 |
 | Plant ID exact — native `plant_id` field | 35 |
+| **Zendesk ticket cross-link** (candidate's `Churn: Zendesk Ticket ID` ∈ `ctx.zendeskTicketIds`, the Zendesk tickets embedded in the RL deal description / delivery status) | 20 |
 | Plant ID at start of the record's name/title | 30 |
 | Plant ID elsewhere in text (`\bID\b`, so `O-013299` ≠ plant 3299) | 18 |
 | **Younium order # matches RL `Youniumordernumber` field** (Younium only) | 30 |
@@ -349,8 +351,8 @@ Each platform has a `xToMatchCandidate(rawApiResult)` function returning the com
 
 | Platform | Adapter | URL builder | Notes |
 |---|---|---|---|
-| Oneflow | `oneflowToMatchCandidate` | `oneflowDocumentUrl(id)` | Harvests `agreement_value.amount` + `currency`, `parties[].orgnr`, `parties[].email`, `parties[].participants[].email/fullname`. Sets `oneflowKind: "order" \| "subscription"` via `classifyOneflowDocumentKind(name)` — names containing "Abonnementsavtale" or "Subscription agreement" classify as subscription. PrimaryText is prefixed with 📄 Order or 📑 Subscription. |
-| HubSpot | `hubspotToMatchCandidate` | `hubspotDealUrl(objectId)` (async — needs portalId from bridge) | Reads `properties.amount.value` AND `properties.amount.unit` (currency). closedate/createdate are epoch-ms strings → converted to ISO. |
+| Oneflow | `oneflowToMatchCandidate` | `oneflowDocumentUrl(id)` | Harvests `agreement_value.amount` + `currency`, `parties[].orgnr`, `parties[].email`, `parties[].participants[].email/fullname`. **`extractOneflowDataFields(a)` mines the "Custom fields" (`data_fields[]`)**: Plant ID (→ native plant-id tier even when the doc name is generic), Plant Name / Your reference / Description (→ matchableTexts), Deal Partner (→ partyNames), Deal Contact e-mail / phone / Customer contact (→ contact arrays), and the cross-link IDs `hubspotDealId` + `zendeskTicketId`. **Search/list responses may omit `data_fields`** → the Find flow hydrates the top ~10 candidates via `GET /agreements/{id}` (bounded, parallel, fully defensive — a hydration failure never breaks the Find). Sets `oneflowKind: "order" \| "subscription"` via `classifyOneflowDocumentKind(name)`. PrimaryText is prefixed with 📄 Order or 📑 Subscription. |
+| HubSpot | `hubspotToMatchCandidate` | `hubspotDealUrl(objectId)` (async — needs portalId from bridge) | Reads `properties.amount.value` AND `properties.amount.unit` (currency). closedate/createdate are epoch-ms strings → converted to ISO. Reads tenant custom props: `plant_id`, `plant_name`, `deal_partner`, `deal_contact`, `contact_email`, `deal_contact_tlf_nr`, `deal_organization_nr_younium` (→ orgNumbers), `deal_younium_quote_number`. **These only populate because the bridge's `searchDeals` requests `includeAllProperties:true` (v1.9.13+)** — the prior 6-property default left every custom prop empty, so deal matching ran on the deal name alone. |
 | Younium (orders) | `youniumToMatchCandidate` | `youniumOrderUrl(id)` (async — needs region from bridge) | Hard-filters by exact `plant_id` (search returns false positives like `O-013299` for query `3299`). Money picks `totalContractValue` > `annualContractValue` > `mrr`. `recordType: "order"`. |
 | Younium (quotes) | `youniumToQuoteMatchCandidate` | `youniumQuoteUrl(id)` (async) | Quotes use `/api/data/query/quote` (entity `"quote"`). Many quotes have **empty `plant_id`** even when matching — promoting a quote to an order is what fills it. Loose filter: accept on plant_id exact OR plant_name/accountName token overlap with project name OR plant ID literal in description/remarks. `recordType: "quote"`. Picker label prefixed with 📄 to distinguish from orders. |
 
@@ -753,6 +755,7 @@ Every code change ships through this verification flow before being declared don
   - "Zendesk · recent replies" header is a persistent collapse toggle (caret + count; `.notifZdBody` wrapper; `zendesk_notif_collapsed_v1`).
   - **Bug fix**: the bell's Zendesk mark-read + list-load were INSIDE the Rocketlane `try`, so a Rocketlane error left the Zendesk count stuck. Split into independent blocks — clicking the bell now clears + loads Zendesk even when Rocketlane fails. Verified live (RL mock throwing, Zendesk still loaded + marked read).
   - The 2-min poll (`notifTick`) now also refreshes the OPEN drawer's Zendesk list in place (`notifZdRefresh`), on top of the existing badge-count refresh.
+- **Bridge v1.9.13**: `HubSpotBridge.searchDeals` now defaults to `includeAllProperties:true` (and `searchCrm` honors an `includeAllProperties` opt) so **every** deal property is returned. The matcher's `hubspotToMatchCandidate` reads tenant custom props (`plant_id`, `deal_partner`, `deal_organization_nr_younium`, `deal_contact`, `contact_email`, `deal_contact_tlf_nr`, `deal_younium_quote_number`, `plant_name`) that the prior 6-property default left empty — so HubSpot deal matching had been running on the deal name alone. Using `includeAllProperties` (vs enumerating names) avoids a 400 on any tenant-specific property that doesn't exist. **Requires the user to refresh the userscript to v1.9.13.**
 - **Bridge v1.9.12**: `@match http://127.0.0.1:8102/*` + `localhost:8102`, gated behind the `rocketlane-tracker` meta tag (same opt-in as `file://`) so the bridge injects on a local dev server only for the tracker page.
 - **Task notes split: "Description note" + "Private note" (bidirectional with Rocketlane)**
   - The single task-notes box was renamed **Description note**; a **+ Add a private note** link reveals a separate cream **Private note** box (mirrors Rocketlane's task-drawer affordance). New `t.privateNote` field, kept separate from `t.notes` to avoid a shared-field collision (unlinked Description note still uses `t.notes`).
