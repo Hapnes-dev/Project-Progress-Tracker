@@ -9324,6 +9324,13 @@
         };
         const allEmbedded = dedupeByUrl(embeddedLinks);
 
+        // Zendesk ticket IDs embedded in the project's deal description /
+        // delivery status. An Oneflow order's "Churn: Zendesk Ticket ID"
+        // custom field matching one of these is a cross-link signal.
+        const zendeskTicketIds = allEmbedded
+          .filter((l) => l && l.platform === "zendesk" && l.recordId)
+          .map((l) => String(l.recordId));
+
         // Product types (multi-select from HubSpot) — both as a set
         // for fast lookup and as a list for display.
         const productTypes = Array.isArray(cf.hubspotProductTypes) ? cf.hubspotProductTypes : [];
@@ -9398,6 +9405,7 @@
 
           // ── Embedded links (parsed from description / delivery status) ──
           embeddedLinks: allEmbedded,
+          zendeskTicketIds,
 
           // ── Currently-saved link state (used for validation) ──
           existingLinks: { oneflow: ofUrl, hubspot: hsUrl, younium: ynUrl },
@@ -9521,6 +9529,25 @@
             signals.push({ label: "Foreign-key ID match (" + fkExpected + ")", points: 35 });
             raw += 35;
           }
+        }
+
+        // ── Reverse foreign-key: the CANDIDATE embeds the PROJECT's id ──
+        // An Oneflow order carries its source "Hubspot Deal ID" as a
+        // custom field; if it equals the project's HubSpot deal, that's a
+        // deterministic cross-link — just as strong as the forward FK.
+        const projHsDeal = String(ctx.foreignKeys?.hubspotDealId || "").trim();
+        if (projHsDeal && candidate.hubspotDealId &&
+            String(candidate.hubspotDealId).trim() === projHsDeal) {
+          signals.push({ label: "HubSpot Deal ID cross-link (" + projHsDeal + ")", points: 35 });
+          raw += 35;
+        }
+        // The order's "Churn: Zendesk Ticket ID" matching a Zendesk ticket
+        // embedded in the project's deal description / delivery status is
+        // a weaker but still-deterministic association.
+        if (candidate.zendeskTicketId && Array.isArray(ctx.zendeskTicketIds) &&
+            ctx.zendeskTicketIds.includes(String(candidate.zendeskTicketId).trim())) {
+          signals.push({ label: "Zendesk ticket cross-link (" + candidate.zendeskTicketId + ")", points: 20 });
+          raw += 20;
         }
 
         // ── Plant ID — strongest fuzzy signal ──
@@ -10146,12 +10173,79 @@
       }
 
       /**
+       * Harvest the Oneflow "Custom fields" (the API's `data_fields`
+       * array) into a small normalized bundle of matching signals.
+       *
+       * An Oneflow Order Draft exposes — under "Custom fields" — a set of
+       * fields that are matching GOLD and that the old adapter ignored:
+       *   Hubspot Deal ID, Plant ID, Plant Name, Deal Partner,
+       *   Customer contact, Deal Contact e-mail address, Deal Contact
+       *   Phone, Your reference, Churn: Zendesk Ticket ID.
+       *
+       * `data_fields` entries look like:
+       *   { id, custom_id, name: "Hubspot Deal ID", value: "446138988745" }
+       * We match by BOTH the human label (`name`) and the stable
+       * `custom_id` slug, normalized to lowercase-alphanumerics, so it
+       * survives tenant-specific labels and punctuation differences.
+       *
+       * Returns a bundle with "" for any field that isn't present.
+       */
+      function extractOneflowDataFields(a) {
+        const out = {
+          plantId: "", plantName: "", hubspotDealId: "", zendeskTicketId: "",
+          dealPartner: "", customerContact: "", dealContactEmail: "",
+          dealContactPhone: "", yourReference: "", description: "",
+        };
+        const fields = Array.isArray(a?.data_fields) ? a.data_fields
+                     : Array.isArray(a?.dataFields)  ? a.dataFields : [];
+        const norm = (s) => String(s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+        for (const f of fields) {
+          const value = String(f?.value ?? "").trim();
+          if (!value) continue;
+          const key = norm(f?.name);
+          const cid = norm(f?.custom_id ?? f?.customId);
+          const has = (n) => key.includes(n) || cid.includes(n);
+          const eq  = (n) => key === n || cid === n;
+
+          if (!out.hubspotDealId && has("hubspotdealid")) {
+            const d = value.replace(/\D+/g, "");
+            if (d) out.hubspotDealId = d;
+          } else if (!out.plantId && (eq("plantid") || cid === "plantid")) {
+            // Exact "plantid" only — NOT "Plant ID-Invoice Account CM".
+            out.plantId = value.replace(/\D+/g, "") || value;
+          } else if (!out.plantName && has("plantname")) {
+            out.plantName = value;
+          } else if (has("zendeskticket")) {
+            const d = value.replace(/\D+/g, "");
+            if (d && !out.zendeskTicketId) out.zendeskTicketId = d;
+          } else if (!out.dealPartner && has("dealpartner")) {
+            out.dealPartner = value;
+          } else if (!out.customerContact && has("customercontact")) {
+            out.customerContact = value;
+          } else if (!out.dealContactEmail && has("dealcontactemail")) {
+            out.dealContactEmail = value.toLowerCase();
+          } else if (!out.dealContactPhone && has("dealcontactphone")) {
+            out.dealContactPhone = value;
+          } else if (!out.yourReference && has("yourreference")) {
+            out.yourReference = value;
+          }
+        }
+        // The Details-panel "Description" is a standard agreement field,
+        // not a custom field. Harvest it too when present.
+        if (!out.description) out.description = String(a?.description ?? "").trim();
+        return out;
+      }
+
+      /**
        * Map an Oneflow agreement (raw API response) to the shared
        * Candidate shape consumed by scoreMatchCandidate.
        *
        * Oneflow returns: { id, name, state, parties: [{name, ...}], ... }
        * Some installations also include created_time / updated_time and
        * a "value" object for currency — we extract date hints from both.
+       * The "Custom fields" (data_fields) — when present (search results
+       * may omit them; see the hydration step in the Find flow) — are
+       * harvested via extractOneflowDataFields for far stronger matching.
        */
       function oneflowToMatchCandidate(a) {
         const stateLabel = ONEFLOW_STATE_LABEL[a?.state] ?? ("state " + a?.state);
@@ -10177,6 +10271,19 @@
             }
           }
         }
+        // Custom fields (data_fields) — the high-value signals from the
+        // Order Draft. Fold contact details into the existing arrays so
+        // they feed the same owner/contact scoring as party participants.
+        const df = extractOneflowDataFields(a);
+        if (df.dealContactEmail) contactEmails.push(df.dealContactEmail);
+        if (df.customerContact)  contactNames.push(df.customerContact);
+        if (df.dealContactPhone) contactPhones.push(df.dealContactPhone);
+        // "Deal Partner" is a company name — add it to partyNames so the
+        // partner/company signal fires even when the parties[] array is
+        // empty or holds a differently-spelled entity.
+        if (df.dealPartner && !partyNames.some((n) => matchNormalize(n) === matchNormalize(df.dealPartner))) {
+          partyNames.push(df.dealPartner);
+        }
         // Money: Oneflow search responses include agreement_value
         // (amount + currency). May be missing for older draft contracts.
         const amount = Number(a?.agreement_value?.amount);
@@ -10193,13 +10300,27 @@
           // Order/offer from Subscription rows.
           primaryText: kindBadge + (String(a?.name ?? "").trim() || "(no name)"),
           secondaryText: stateLabel + (partyNames.length ? " · " + partyNames.join(", ") : ""),
-          matchableTexts: [a?.name, ...partyNames].filter(Boolean),
+          matchableTexts: [
+            a?.name,
+            ...partyNames,
+            df.plantName,
+            df.yourReference,
+            df.description,
+          ].filter(Boolean),
           partyNames,
           contactNames,
           contactEmails,
           contactPhones,
           orgNumbers,
-          plantId: matchExtractPlantId(a?.name ?? ""),
+          // Prefer a plant ID parsed from the doc name; otherwise fall
+          // back to the native "Plant ID" custom field — which lets the
+          // +35 "exact native" tier fire even when the name is generic.
+          plantId: matchExtractPlantId(a?.name ?? "") || df.plantId || "",
+          // Cross-link IDs the order embeds about ITS source deal/ticket.
+          // scoreMatchCandidate matches these against the project's own
+          // foreign keys / embedded Zendesk links (deterministic links).
+          hubspotDealId: df.hubspotDealId || "",
+          zendeskTicketId: df.zendeskTicketId || "",
           status: stateLabel,
           date,
           amount: Number.isFinite(amount) && amount > 0 ? amount : null,
@@ -10309,6 +10430,33 @@
           statusEl.textContent = "No matching Oneflow documents found.";
           return;
         }
+
+        // ── Hydrate custom fields (data_fields) ──
+        // The /agreements search/list endpoint may omit data_fields (the
+        // "Custom fields": Hubspot Deal ID, Plant ID, Plant Name, Deal
+        // Partner, Deal Contact e-mail/phone, Your reference, …). The
+        // per-agreement detail endpoint includes them, so for the top
+        // candidates lacking them we fetch detail in parallel and merge.
+        // Bounded + fully defensive: a hydration failure must NEVER break
+        // the Find (matching still works on name/party). buildSearchTerms
+        // ordered the most specific terms first, so the merged insertion
+        // order front-loads the likely hits.
+        try {
+          const toHydrate = results
+            .slice(0, 10)
+            .filter((a) => a && a.id && !Array.isArray(a.data_fields));
+          if (toHydrate.length) {
+            await Promise.all(toHydrate.map(async (a) => {
+              try {
+                const detail = await oneflowApiRequest(
+                  "GET", "/agreements/" + encodeURIComponent(a.id));
+                if (detail && (Array.isArray(detail.data_fields) || detail.id)) {
+                  Object.assign(a, detail);
+                }
+              } catch (_) { /* leave un-hydrated — name/party still match */ }
+            }));
+          }
+        } catch (_) { /* never block the Find on hydration */ }
 
         // Map → score → sort. Shared framework handles all of this,
         // then we adjust per-candidate based on the requested kind
