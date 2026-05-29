@@ -25446,6 +25446,38 @@
         return out;
       }
 
+      /**
+       * Best-effort HTTP status code from a Rocketlane error. The bridge throws
+       * `Error("HTTP 403: …")` (no .status), the direct-fetch path sets .status —
+       * handle both. @param {any} e @returns {number} 0 if unknown.
+       */
+      function rocketlaneErrorStatusCode(e) {
+        const direct = Number(e?.status ?? 0);
+        if (Number.isFinite(direct) && direct >= 100) return direct;
+        const m = String(e?.message ?? e ?? "").match(/\bHTTP\s+(\d{3})\b/i);
+        return m ? Number(m[1]) : 0;
+      }
+
+      /**
+       * True when a Rocketlane error means the task no longer exists — it was
+       * deleted or made access-restricted. Rocketlane answers a deleted task id
+       * with 404 NOT_FOUND or 403 ACCESS_RESTRICTED ("Access is denied").
+       * We treat these as permanent (verified live: a deleted subtask id returns
+       * 403 ACCESS_RESTRICTED consistently across sessions) so status changes can
+       * keep the local value instead of reverting against a task that's gone.
+       * @param {any} e @returns {boolean}
+       */
+      function rocketlaneIsTaskGoneError(e) {
+        const code = rocketlaneErrorStatusCode(e);
+        if (code === 404) return true;
+        if (code === 403) {
+          return /ACCESS_RESTRICTED|access\s+is\s+denied|not\s*found/i.test(
+            String(e?.message ?? e ?? ""),
+          );
+        }
+        return false;
+      }
+
       function setTaskStatus(projectId, area, taskId, status, opts) {
         const p = state.projects.find((x) => x.id === projectId);
         if (!p) return;
@@ -25473,6 +25505,29 @@
               rocketlaneShowMessage("Rocketlane status updated.", "info");
             } catch (e) {
               if (!rocketlaneIsLatestTaskStatusSync(rlTaskId, token)) return;
+
+              // The linked Rocketlane task is gone (deleted / access-restricted).
+              // Reverting here was the cause of "I can't change a subtask's
+              // status": the status snapped back and nothing reached Rocketlane.
+              // Keep the user's LOCAL change instead, and clear the dead link so
+              // future status edits work normally and stop erroring.
+              if (rocketlaneIsTaskGoneError(e)) {
+                const proj2 = state.projects.find((x) => x.id === projectId);
+                const t2 = (proj2?.tasksByArea?.[area] ?? []).find((x) => x.id === taskId);
+                if (t2?.meta) {
+                  delete t2.meta.rocketlaneTaskId;
+                  delete t2.meta.rocketlaneProjectId;
+                  touchProject(projectId);
+                  saveState(state);
+                  render();
+                }
+                rocketlaneShowMessage(
+                  "Rocketlane task no longer exists (deleted or access-restricted). " +
+                    "Kept your local status and cleared the broken link.",
+                  "error",
+                );
+                return;
+              }
 
               const msg =
                 e instanceof TypeError
