@@ -21817,7 +21817,7 @@
                   // Non-image file → styled chip with icon + name + size + download link
                   const chip = document.createElement("a");
                   chip.className = "chatFileChip";
-                  chip.href = fullUrl || url;
+                  chip.href = toHttpUrl(fullUrl || url) || "#";
                   chip.target = "_blank";
                   chip.rel = "noopener noreferrer";
                   chip.download = fileName;
@@ -29121,7 +29121,7 @@
               const attId = att?.attachmentId;
               const row = document.createElement("a");
               row.className = "filesListRow";
-              row.href = fullUrl || thumbUrl || "#";
+              row.href = toHttpUrl(fullUrl || thumbUrl) || "#";
               row.target = "_blank";
               row.rel = "noopener noreferrer";
               row.title = fileName;
@@ -29176,9 +29176,9 @@
                     console.warn("[FilesPopover] URL refresh failed:", e);
                   }
                   if (!dest) dest = fullUrl || thumbUrl;
-                  if (placeholder && dest) {
+                  if (placeholder && toHttpUrl(dest)) {
                     try { placeholder.opener = null; } catch (_) {}
-                    placeholder.location.href = dest;
+                    placeholder.location.href = toHttpUrl(dest);
                   } else if (placeholder) {
                     placeholder.document.body.innerText = "No download URL available for this file.";
                   }
@@ -29196,9 +29196,9 @@
                   const placeholder = window.open("about:blank", "_blank");
                   try {
                     const { full } = await getFreshUrls(attId);
-                    if (placeholder && full) {
+                    if (placeholder && toHttpUrl(full)) {
                       try { placeholder.opener = null; } catch (_) {}
-                      placeholder.location.href = full;
+                      placeholder.location.href = toHttpUrl(full);
                     }
                   } catch (_) {
                     if (placeholder) placeholder.close();
@@ -29815,8 +29815,13 @@
       let currentYouniumStatusVerdict = null;
 
       function escHtml(s) {
-        return String(s ?? "").replace(/[<&>]/g, (c) =>
-          c === "<" ? "&lt;" : c === ">" ? "&gt;" : "&amp;");
+        // Escapes the five HTML-significant chars. Quotes are included so
+        // this is safe for ATTRIBUTE contexts (e.g. href="...") too, not
+        // just text nodes — prevents attribute breakout / event-handler
+        // injection when interpolating untrusted values.
+        return String(s ?? "").replace(/[<>&"']/g, (c) =>
+          c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === "&" ? "&amp;" :
+          c === '"' ? "&quot;" : "&#39;");
       }
 
       /**
@@ -29932,8 +29937,16 @@
         const orderBadgeClass = orderIsInvoiced ? "youniumSubBadge-green"
           : (orderIsBad ? "youniumSubBadge-red" : "youniumSubBadge-yellow");
 
+        // RAW(html) marks a value as already-safe, intentionally-built
+        // HTML that renderKV should emit verbatim. ANY value NOT wrapped
+        // in RAW() is treated as plain text and HTML-escaped — so an
+        // attacker-controlled field (e.g. order.description) can never
+        // inject markup. Fail-safe by default (a missing RAW() wrapper
+        // over-escapes — a display glitch — instead of opening XSS).
+        const RAW = (h) => ({ __html: String(h) });
+
         // Render an event entry (user + timestamp + optional description)
-        // as a HTML fragment suitable for a KV value cell. Returns '' on
+        // as a HTML fragment suitable for a KV value cell. Returns null on
         // missing event so the row gets filtered out by renderKV.
         const renderEvent = (ev) => {
           if (!ev || !ev.user) return null;
@@ -29946,19 +29959,19 @@
             val += '<br><span style="color: var(--muted); font-size: 11px;">' +
                    escHtml(String(ev.description)) + '</span>';
           }
-          return val;
+          return RAW(val);
         };
 
         const orderKV = [
-          ["Younium link",                orderLink
-            ? '<a href="' + escHtml(orderLink) + '" target="_blank" rel="noopener noreferrer">' + escHtml(orderLink) + "</a>"
-            : '<em style="color: var(--muted);">none</em>'],
+          ["Younium link",                RAW(orderLink
+            ? '<a href="' + escHtml(toHttpUrl(orderLink) || "#") + '" target="_blank" rel="noopener noreferrer">' + escHtml(orderLink) + "</a>"
+            : '<em style="color: var(--muted);">none</em>')],
           ["Order ID",                    order?.id || quote?.id || "—"],
           ["Order number",                verdict.orderNumber],
           ["Order name",                  orderName],
-          ["Order status",                '<strong style="color: ' + orderStatusColor + ';">' +
+          ["Order status",                RAW('<strong style="color: ' + orderStatusColor + ';">' +
                                           (orderIsInvoiced ? "✓ " : "") +
-                                          escHtml(verdict.orderStatus) + '</strong>'],
+                                          escHtml(verdict.orderStatus) + '</strong>')],
           // Invoice status — hidden entirely when the order itself is in
           // a bad state (Draft, Cancelled, Expired). In those cases the
           // invoices Younium returns belong to a PRIOR version of the
@@ -29966,7 +29979,7 @@
           // renderKV() drops rows whose value is null.
           ["Invoice status",              orderIsBad
             ? null
-            : (invoices.length
+            : RAW(invoices.length
                 ? '<strong style="color: ' + invoiceStatusColor + ';">' +
                   (orderHasPostedInvoices ? "✓ " : "") +
                   (orderHasPostedInvoices ? "Posted/paid (" + invoices.length + ")" : "Drafted (" + invoices.length + ")") +
@@ -29992,14 +30005,14 @@
         const subOrderLink = subOrder?.id ? "https://eu.younium.com/orders/" + subOrder.id : null;
         const subscriptionKV = verdict.hasSubscriptionProduct
           ? [
-              ["Younium link",             subOrderLink
-                ? '<a href="' + escHtml(subOrderLink) + '" target="_blank" rel="noopener noreferrer">' + escHtml(subOrderLink) + '</a>'
-                : '<em style="color: var(--muted);">none</em>'],
+              ["Younium link",             RAW(subOrderLink
+                ? '<a href="' + escHtml(toHttpUrl(subOrderLink) || "#") + '" target="_blank" rel="noopener noreferrer">' + escHtml(subOrderLink) + '</a>'
+                : '<em style="color: var(--muted);">none</em>')],
               ["Order ID",                 subOrder?.id || "—"],
-              ["Order number",             subOrder?.orderNumber
+              ["Order number",             RAW(subOrder?.orderNumber
                 ? escHtml(String(subOrder.orderNumber))
-                : '<strong style="color: var(--bad);">— (no number assigned → Draft)</strong>'],
-              ["Subscription status",      '<strong style="color: ' + subStatusBadgeColor + ';">' + escHtml(verdict.subscriptionStatus) + '</strong>'],
+                : '<strong style="color: var(--bad);">— (no number assigned → Draft)</strong>')],
+              ["Subscription status",      RAW('<strong style="color: ' + subStatusBadgeColor + ';">' + escHtml(verdict.subscriptionStatus) + '</strong>')],
               ["Start date",               fmtDateOnly(subOrder?.effectiveStartDate)],
               ["End date",                 fmtDateOnly(subOrder?.effectiveEndDate)],
               ["Cancellation date",        subOrder?.cancellationDate ? fmtDateOnly(subOrder.cancellationDate) : "—"],
@@ -30023,7 +30036,17 @@
           '<dl class="youniumKV">' +
           rows
             .filter(([k, v]) => v !== "" && v !== null && v !== undefined)
-            .map(([k, v]) => '<dt>' + escHtml(k) + '</dt><dd>' + (String(v).includes("<") ? v : escHtml(String(v))) + '</dd>')
+            .map(([k, v]) => {
+              // RAW-wrapped values are intentional, already-built HTML and
+              // are emitted verbatim; EVERYTHING else is HTML-escaped as
+              // plain text. This replaces the old `.includes("<")`
+              // heuristic, which injected any attacker value containing a
+              // "<" (e.g. order.description) raw → stored XSS.
+              const cell = (v && typeof v === "object" && "__html" in v)
+                ? v.__html
+                : escHtml(String(v));
+              return '<dt>' + escHtml(k) + '</dt><dd>' + cell + '</dd>';
+            })
             .join("") +
           '</dl>';
 
@@ -30116,7 +30139,7 @@
 
         // Footer action buttons — show/hide based on what's available
         if (orderLink) {
-          els.btnYouniumStatusOpenOrder.href = orderLink;
+          els.btnYouniumStatusOpenOrder.href = toHttpUrl(orderLink) || "#";
           els.btnYouniumStatusOpenOrder.style.display = "";
         } else {
           els.btnYouniumStatusOpenOrder.style.display = "none";
@@ -30126,14 +30149,14 @@
         // "Open Younium order" already points to it). Hides otherwise.
         if (els.btnYouniumStatusOpenYouniumSub) {
           if (subOrderLink && verdict.subscriptionOrderIsSeparate) {
-            els.btnYouniumStatusOpenYouniumSub.href = subOrderLink;
+            els.btnYouniumStatusOpenYouniumSub.href = toHttpUrl(subOrderLink) || "#";
             els.btnYouniumStatusOpenYouniumSub.style.display = "";
           } else {
             els.btnYouniumStatusOpenYouniumSub.style.display = "none";
           }
         }
         if (subLink) {
-          els.btnYouniumStatusOpenSub.href = subLink;
+          els.btnYouniumStatusOpenSub.href = toHttpUrl(subLink) || "#";
           els.btnYouniumStatusOpenSub.style.display = "";
         } else {
           els.btnYouniumStatusOpenSub.style.display = "none";

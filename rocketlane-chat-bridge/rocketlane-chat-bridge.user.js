@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.9.13
+// @version      1.9.14
 // @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.9.12: also injects on http://127.0.0.1:8102 / localhost:8102 local dev servers, meta-tag gated like file://.)
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
@@ -276,15 +276,19 @@
   // We require the page to declare itself as the tracker via a
   // dedicated meta tag — anything else gets nothing.
   //
-  // GitHub Pages and any other https-served tracker copies match by
-  // @match URL alone (already narrowly scoped). file:// AND localhost dev
-  // servers (127.0.0.1 / localhost) are broad origins that could host
-  // arbitrary pages, so they must opt-in via the tracker meta tag.
-  const isLocalDevOrigin =
+  // Every bridge-EXPOSING origin must opt in via the tracker meta tag —
+  // including GitHub Pages. github.io is a SHARED host (any page under the
+  // account could be served from it), and file:// / localhost are broad
+  // origins that could host arbitrary pages. Requiring the marker means
+  // only the real tracker document (which ships the meta tag) ever gets
+  // the privileged bridge. The capture-only platform pages (rocketlane.com,
+  // zendesk.com, …) are NOT in this set, so token capture is unaffected.
+  const isTrackerHostOrigin =
     location.protocol === "file:" ||
     location.hostname === "127.0.0.1" ||
-    location.hostname === "localhost";
-  if (isLocalDevOrigin) {
+    location.hostname === "localhost" ||
+    location.hostname === "hapnes-dev.github.io";
+  if (isTrackerHostOrigin) {
     const marker = document.querySelector(
       'meta[name="rocketlane-tracker"][content="hapnes-dev/Project-Progress-Tracker"]'
     );
@@ -320,6 +324,17 @@
         return;
       }
       const url = /^https?:/i.test(path) ? path : (TENANT_API + path);
+      // SECURITY: only attach the secret api-key when the request really
+      // targets the Rocketlane API origin. If a caller passes an absolute
+      // URL to another @connect host (e.g. an S3 bucket), refuse — else
+      // the api-key would be exfiltrated to that host. Relative paths
+      // always resolve to TENANT_API, so legitimate calls are unaffected.
+      let reqOrigin = "";
+      try { reqOrigin = new URL(url).origin; } catch (_) {}
+      if (reqOrigin !== "https://kiona.api.rocketlane.com") {
+        reject(new Error("Refusing to send Rocketlane api-key to non-Rocketlane origin: " + (reqOrigin || url)));
+        return;
+      }
       const headers = { "api-key": apiKey, accept: "application/json" };
       const init = { method, url, headers, timeout: 20000,
         onload: (res) => {
@@ -882,6 +897,14 @@
    */
   async function gmYouniumRequest(method, path, body) {
     const url = /^https?:/i.test(path) ? path : (YOUNIUM_API + (path.startsWith("/") ? path : "/" + path));
+    // SECURITY: never attach the Bearer JWT to a non-Younium origin. A
+    // caller-supplied absolute URL to another @connect host must not
+    // receive the token. Relative paths always resolve to api.younium.com.
+    let __ynOrigin = "";
+    try { __ynOrigin = new URL(url).origin; } catch (_) {}
+    if (__ynOrigin !== "https://api.younium.com") {
+      throw new Error("Refusing to send Younium token to non-Younium origin: " + (__ynOrigin || url));
+    }
 
     // Use cached token if it's not about to expire; otherwise refresh.
     let token = GM_getValue("ynAccessToken", "");
@@ -1672,9 +1695,16 @@
     async apiRequest(method, path, body) {
       return await gmYouniumRequest(method, path, body);
     },
-    /** Force a token refresh (on-demand). Returns the new access token string. */
+    /**
+     * Force a token refresh (on-demand). Returns only a STATUS object —
+     * never the raw JWT — so page-world code can't harvest a bearer token
+     * valid against api.younium.com. Internal callers (gmYouniumRequest)
+     * use gmYouniumRefreshToken() directly and are unaffected.
+     */
     async refreshToken() {
-      return await gmYouniumRefreshToken();
+      await gmYouniumRefreshToken();
+      const expiresAt = Number(GM_getValue("ynAccessTokenExpiresAt", 0)) || null;
+      return { refreshed: true, expiresAt };
     },
     /** Currently logged-in Younium user — proof session is valid. */
     async getCurrentUser() {
