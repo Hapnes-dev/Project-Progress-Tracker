@@ -8548,6 +8548,29 @@
       const ZENDESK_LIST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days (last week)
       let zendeskNotifMeIdCache = null;
 
+      // Client-side "last seen" for ROCKETLANE notifications. The bridge's
+      // server-side markNotificationsSeen() currently fails (HTTP 400
+      // INVALID_INPUTS), so the server last-seen never advances and the bell
+      // count would reappear after every refresh. We track our own last-seen
+      // and count unread against max(serverLastSeen, localLastSeen) so clicking
+      // the bell reliably clears the count. Returns 0 when unset (we max with
+      // the server value, so no need to seed it to "now").
+      const ROCKETLANE_NOTIF_LAST_SEEN_KEY = "rocketlane_notif_last_seen_v1";
+      function rocketlaneGetNotifLastSeen() {
+        try {
+          const raw = localStorage.getItem(ROCKETLANE_NOTIF_LAST_SEEN_KEY);
+          const t = raw ? Date.parse(raw) : 0;
+          return Number.isFinite(t) ? t : 0;
+        } catch (_) {
+          return 0;
+        }
+      }
+      function rocketlaneSetNotifLastSeen(ms) {
+        try {
+          localStorage.setItem(ROCKETLANE_NOTIF_LAST_SEEN_KEY, new Date(Number(ms) || Date.now()).toISOString());
+        } catch (_) {}
+      }
+
       function zendeskGetNotifLastSeen() {
         try {
           let raw = localStorage.getItem(ZENDESK_NOTIF_LAST_SEEN_KEY);
@@ -27839,7 +27862,7 @@
                 bridge.getNotificationLastSeen(),
               ]);
               notifGroupsCache = groups;
-              notifLastSeenAt = new Date(seen?.lastSeenAt ?? 0).getTime() || 0;
+              notifLastSeenAt = Math.max(new Date(seen?.lastSeenAt ?? 0).getTime() || 0, rocketlaneGetNotifLastSeen());
               rlUnread = (groups || []).reduce((acc, g) => {
                 const newest = Math.max(
                   0,
@@ -27988,6 +28011,7 @@
             // "Clear all" pushes last-seen-at forward + visually empties the list.
             try { await bridge.markNotificationsSeen?.(); } catch (_) {}
             notifLastSeenAt = Date.now();
+            rocketlaneSetNotifLastSeen(Date.now());
             zendeskSetNotifLastSeen(Date.now());
             // Re-render with all unread markers removed (keep the lists visible)
             if (notifGroupsCache) renderNotifList(list, notifGroupsCache, notifFilter);
@@ -28014,15 +28038,16 @@
               bridge.getNotificationLastSeen(),
             ]);
             notifGroupsCache = groups;
-            notifLastSeenAt = new Date(seen?.lastSeenAt ?? 0).getTime() || 0;
+            notifLastSeenAt = Math.max(new Date(seen?.lastSeenAt ?? 0).getTime() || 0, rocketlaneGetNotifLastSeen());
             renderNotifList(list, groups, notifFilter);
-            // Mark all as read by pushing last-seen-at to "now" — this matches
-            // Rocketlane's own behavior of clearing the dot when the panel opens.
-            try {
-              await bridge.markNotificationsSeen?.();
-              if (els.notifBadge) els.notifBadge.style.display = "none";
-              notifLastSeenAt = Date.now();
-            } catch (_) { /* badge will catch up on next refresh */ }
+            // Mark all as read. Rocketlane's own mark-seen API is unreliable
+            // (currently 400s via the bridge), so advance OUR last-seen too —
+            // the badge counts unread against max(serverLastSeen, this), so the
+            // count clears reliably on click even when the server call fails.
+            try { await bridge.markNotificationsSeen?.(); } catch (_) {}
+            rocketlaneSetNotifLastSeen(Date.now());
+            notifLastSeenAt = Date.now();
+            if (els.notifBadge) els.notifBadge.style.display = "none";
 
             // Load + list RECENT Zendesk replies (assigned to me) over a wider
             // window than the unread count, so the list stays populated even
