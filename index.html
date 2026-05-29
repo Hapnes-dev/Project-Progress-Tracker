@@ -7747,7 +7747,8 @@
             const dd  = ddRes.status  === "fulfilled" ? ddRes.value  : null;
             const iqcLinks = iqc?.links || parseProjectLinksFromHtml("");
             const ddLinks  = dd?.links  || parseProjectLinksFromHtml("");
-            const { merged, conflicts, sources } = mergeProjectLinksByPriority(iqcLinks, ddLinks);
+            const dsLinks  = dd?.deliveryStatusLinks || parseProjectLinksFromHtml("");
+            const { merged, conflicts, sources } = mergeProjectLinksByPriority(iqcLinks, ddLinks, dsLinks);
 
             try {
               if (typeof window !== "undefined" && window.__matchDebug !== false) {
@@ -9179,7 +9180,11 @@
         const add = (raw, source, priority) => {
           const t = String(raw || "").trim();
           if (!t || t.length < 2) return;
-          const key = priority + ":" + t.toLowerCase();
+          // Dedup by the NORMALIZED term only (not priority+term), so the same
+          // string isn't searched twice when it qualifies under two priorities.
+          // `add` is called highest-priority first, so the first occurrence —
+          // the highest-priority one — wins.
+          const key = t.toLowerCase().replace(/\s+/g, " ");
           if (seen.has(key)) return;
           seen.add(key);
           terms.push({ term: t, source, priority });
@@ -9500,12 +9505,14 @@
             String(candidate.plantId).trim() === ctx.plantId;
           const primaryStartsWithPlant = !candidatePlantExact &&
             matchExtractPlantId(candidate.primaryText) === ctx.plantId;
-          if (candidatePlantExact || primaryStartsWithPlant) {
-            const label = candidatePlantExact
-              ? "Plant ID exact (" + ctx.plantId + ")"
-              : "Plant ID prefix (" + ctx.plantId + ")";
-            signals.push({ label, points: 35 });
+          if (candidatePlantExact) {
+            // Native plant_id field equals the project's plant — strongest.
+            signals.push({ label: "Plant ID exact native (" + ctx.plantId + ")", points: 35 });
             raw += 35;
+          } else if (primaryStartsWithPlant) {
+            // Plant ID is the leading token of the record's name/title.
+            signals.push({ label: "Plant ID at start of name (" + ctx.plantId + ")", points: 30 });
+            raw += 30;
           } else {
             const re = new RegExp("\\b" + ctx.plantId + "\\b");
             const anywhere = candidate.matchableTexts.some((t) => re.test(String(t ?? "")));
@@ -9762,12 +9769,18 @@
           }
         }
 
-        // ── "Live" status bonus ──
+        // ── Status: "live" bonus, or a strong penalty for dead records ──
+        // Cancelled / declined / lost / expired / rejected / void / overdue
+        // records must NOT auto-fill, so they take a -20 hit (drops them well
+        // below the 85% bar even with otherwise-perfect signals).
         if (candidate.status) {
           const sNorm = matchNormalize(candidate.status);
           if (!MATCH_DEAD_STATUSES.has(sNorm)) {
             signals.push({ label: "Active status (" + candidate.status + ")", points: 3 });
             raw += 3;
+          } else {
+            signals.push({ label: "Dead status (" + candidate.status + ")", points: -20 });
+            raw -= 20;
           }
         }
 
@@ -9794,10 +9807,15 @@
         const best = scored[0];
         const second = scored[1];
         if (!best) return { kind: "none" };
-        const beats = !second || (best.percent - second.percent) >= minLead;
+        // The lead is measured on the RAW (uncapped) score, not `percent`.
+        // `percent` clamps at 100, so two strong-but-distinct candidates can
+        // both saturate to 100% and falsely look "tied" (lead 0) — or a real
+        // gap above 100 raw gets hidden. Raw score keeps the ≥15 lead honest.
+        const lead = second ? (best.score - second.score) : Infinity;
+        const beats = lead >= minLead;
         if (best.percent >= minPct && beats) {
           return { kind: "auto", entry: best, reason: second
-            ? "best " + best.percent + "% beats #2 " + second.percent + "% by ≥" + minLead + "pp"
+            ? "best " + best.percent + "% (raw " + Math.round(best.score) + ") beats #2 raw " + Math.round(second.score) + " by ≥" + minLead
             : "best " + best.percent + "% (only candidate ≥" + minPct + "%)",
           };
         }
@@ -9808,7 +9826,7 @@
           reason:
             best.percent < minPct
               ? "best " + best.percent + "% < " + minPct + "% auto-fill threshold"
-              : "best " + best.percent + "% only " + (best.percent - (second?.percent ?? 0)) + "pp ahead — too close to call",
+              : "best raw " + Math.round(best.score) + " only " + Math.round(lead) + " ahead of #2 — too close to call",
         };
       }
 
@@ -9851,7 +9869,17 @@
           platform === "hubspot"  ? String(ctx.foreignKeys?.hubspotDealId      || "").trim() :
           platform === "oneflow"  ? String(ctx.foreignKeys?.oneflowAgreementId || "").trim() :
           platform === "younium"  ? String(ctx.foreignKeys?.youniumOrderId     || "").trim() : "";
-        if (fkExpected && classified.recordId && String(classified.recordId) !== fkExpected) {
+        // Only FK-compare when the saved URL's recordId and the Rocketlane
+        // field are the SAME KIND of identifier. A Younium order URL yields a
+        // UUID (/orders/<uuid>), but the YouniumOrderNumber field is an order
+        // number like "O-014603" — comparing those would ALWAYS "mismatch"
+        // even for a perfectly-correct link. HubSpot/Oneflow IDs are numeric
+        // on both sides, so they still compare. (Younium order-number vs the
+        // candidate's orderNumber is validated in scoreMatchCandidate, not here.)
+        const isUuidLike = (s) =>
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s ?? "").trim());
+        const sameIdShape = isUuidLike(classified.recordId) === isUuidLike(fkExpected);
+        if (fkExpected && classified.recordId && sameIdShape && String(classified.recordId) !== fkExpected) {
           return {
             kind: "fkMismatch",
             message: "Saved link record ID " + classified.recordId +
@@ -13225,6 +13253,16 @@
         );
         const project = json?.data ?? json;
         const fields = Array.isArray(project?.fields) ? project.fields : [];
+        // Pull the "Delivery status update message" field's links from the
+        // SAME response (no extra API call) — a 3rd, lower-priority link
+        // source than the Deal Description.
+        const dsMatch = fields.find((f) => {
+          const n = String(f?.fieldName ?? "").toLowerCase().replace(/\s+/g, "");
+          return n.startsWith("hubspotdeliverystatusupdatemessage") ||
+                 n.startsWith("deliverystatusupdatemessage") ||
+                 n.startsWith("hubspotdeliverystatus");
+        });
+        const deliveryStatusLinks = parseProjectLinksFromHtml(String(dsMatch?.fieldValue ?? ""));
         const match = fields.find((f) => {
           const n = String(f?.fieldName ?? "").toLowerCase().replace(/\s+/g, "");
           return n.startsWith("hubspotdealdescription") || n.startsWith("dealdescription");
@@ -13233,7 +13271,7 @@
           const html = String(match.fieldValue ?? "");
           // Remember the fieldId for future calls (avoids re-walking /fields).
           _rocketlaneDealDescriptionFieldId = match.fieldId;
-          return { html, fieldId: match.fieldId, links: parseProjectLinksFromHtml(html) };
+          return { html, fieldId: match.fieldId, links: parseProjectLinksFromHtml(html), deliveryStatusLinks };
         }
         // Field exists in the TENANT schema but the project hasn't been
         // written to yet — Rocketlane omits custom fields with no value
@@ -13241,9 +13279,9 @@
         // from the tenant-wide /fields endpoint so we can still write.
         const tenantFieldId = await rocketlaneFindDealDescriptionFieldId();
         if (tenantFieldId) {
-          return { html: "", fieldId: tenantFieldId, links: parseProjectLinksFromHtml("") };
+          return { html: "", fieldId: tenantFieldId, links: parseProjectLinksFromHtml(""), deliveryStatusLinks };
         }
-        return { html: "", fieldId: null, links: parseProjectLinksFromHtml("") };
+        return { html: "", fieldId: null, links: parseProjectLinksFromHtml(""), deliveryStatusLinks };
       }
 
       /**
@@ -13307,36 +13345,39 @@
        *   - Both have different links                → use IQC, record conflict
        *   - Both empty                               → empty in result
        */
-      function mergeProjectLinksByPriority(iqcLinks, dealDescLinks) {
+      function mergeProjectLinksByPriority(iqcLinks, dealDescLinks, deliveryStatusLinks) {
         const slots = [
           "zendesk", "oneflowOrder", "oneflowSubscription",
           "younium", "youniumSubscription", "hubspot", "rocketlane",
         ];
+        // Sources in DESCENDING priority. Per slot, the first non-empty wins;
+        // any lower-priority source that DISAGREES is recorded as a conflict
+        // (and never silently overwrites the winner). Source priority:
+        //   Internal Quality Control > HubSpot Deal Description >
+        //   HubSpot Delivery status update message.
+        const ranked = [
+          { name: "iqc", links: iqcLinks },
+          { name: "dealDescription", links: dealDescLinks },
+          { name: "deliveryStatus", links: deliveryStatusLinks },
+        ];
         const merged = {};
         const conflicts = [];
-        const sources = {}; // key → "iqc" | "dealDescription" | "none"
+        const sources = {}; // key → "iqc" | "dealDescription" | "deliveryStatus" | "none"
         for (const k of slots) {
-          const a = String(iqcLinks?.[k] || "").trim();
-          const b = String(dealDescLinks?.[k] || "").trim();
-          if (a && b) {
-            if (a === b) {
-              merged[k] = a;
-              sources[k] = "iqc"; // both agree, attribute to the higher-priority source
-            } else {
-              merged[k] = a;
-              sources[k] = "iqc";
-              conflicts.push({ slot: k, iqc: a, dealDescription: b });
+          let chosen = "";
+          let chosenSource = "none";
+          for (const src of ranked) {
+            const v = String(src.links?.[k] || "").trim();
+            if (!v) continue;
+            if (!chosen) {
+              chosen = v;
+              chosenSource = src.name;
+            } else if (v !== chosen) {
+              conflicts.push({ slot: k, winner: chosenSource, winnerUrl: chosen, source: src.name, url: v });
             }
-          } else if (a) {
-            merged[k] = a;
-            sources[k] = "iqc";
-          } else if (b) {
-            merged[k] = b;
-            sources[k] = "dealDescription";
-          } else {
-            merged[k] = "";
-            sources[k] = "none";
           }
+          merged[k] = chosen;
+          sources[k] = chosenSource;
         }
         // Legacy alias for callers that read `.oneflow`
         merged.oneflow = merged.oneflowOrder;
@@ -18225,10 +18266,13 @@
        *  notes?: string,
        *  overviewUrl?: string,
        *  oneflowUrl?: string,
+       *  oneflowSubscriptionUrl?: string,
        *  youniumUrl?: string,
+       *  youniumSubscriptionUrl?: string,
        *  hubspotUrl?: string,
        *  rocketlaneUrl?: string,
        *  rocketlaneProjectId?: string,
+       *  linkSources?: Record<string, string>,
        *  overviewNotes?: string,
        *  docsFolderName?: string,
        *  hideTasks?: boolean,
@@ -26428,7 +26472,8 @@
             const dd  = ddRes.status  === "fulfilled" ? ddRes.value  : null;
             const iqcLinks = iqc?.links || parseProjectLinksFromHtml("");
             const ddLinks  = dd?.links  || parseProjectLinksFromHtml("");
-            const { merged, conflicts, sources } = mergeProjectLinksByPriority(iqcLinks, ddLinks);
+            const dsLinks  = dd?.deliveryStatusLinks || parseProjectLinksFromHtml("");
+            const { merged, conflicts, sources } = mergeProjectLinksByPriority(iqcLinks, ddLinks, dsLinks);
             try {
               if (typeof window !== "undefined" && window.__matchDebug !== false) {
                 // eslint-disable-next-line no-console
