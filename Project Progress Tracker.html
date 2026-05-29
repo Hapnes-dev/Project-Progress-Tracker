@@ -5186,6 +5186,18 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
+      .notifZdNew {
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #fff;
+        background: #ef4444;
+        border-radius: 999px;
+        padding: 1px 6px;
+        line-height: 1.4;
+        flex-shrink: 0;
+      }
       .notifZdMeta { font-size: 11.5px; color: var(--muted); }
       .notifZdSnippet {
         font-size: 12px;
@@ -8529,6 +8541,10 @@
       // last-seen and was written by someone other than me.
       // ──────────────────────────────────────────────────────────────────
       const ZENDESK_NOTIF_LAST_SEEN_KEY = "zendesk_notif_last_seen_v1";
+      // How far back the drawer LIST looks. The bell COUNT only counts replies
+      // newer than last-seen, but the list shows recent replies over this whole
+      // window so it stays populated after opening the bell resets the count.
+      const ZENDESK_LIST_WINDOW_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
       let zendeskNotifMeIdCache = null;
 
       function zendeskGetNotifLastSeen() {
@@ -8601,7 +8617,8 @@
           // the 2-min poll cheap.
           candidates = results
             .filter((r) => r?.result_type === "ticket")
-            .filter((t) => (Date.parse(String(t?.updated_at ?? "")) || 0) > since);
+            .filter((t) => (Date.parse(String(t?.updated_at ?? "")) || 0) > since)
+            .slice(0, 40); // bound comment fetches (results are updated_at desc)
         } catch (e) {
           console.debug("[ZendeskNotif] search failed:", e?.message ?? e);
           return empty;
@@ -27005,6 +27022,9 @@
         let notifLastSeenAt = 0; // epoch ms
         let notifGroupsCache = null;
         let notifMyUserId = null;
+        // Last-rendered Zendesk replies, so "Clear all" can keep the list
+        // visible (just drop the "New" flags) instead of emptying it.
+        let notifZdTicketsCache = [];
         // Right-click fullscreen reader for a comment (Zendesk reply / RL chat).
         let activeCommentFullscreenContext = null;
         // Cache project names by Rocketlane projectId so we can replace
@@ -27481,22 +27501,26 @@
           activeCommentFullscreenContext = { close };
         };
 
-        // Render the Zendesk "new replies" section at the top of the drawer.
-        // `tickets` come from zendeskFetchUnreadInfo (assigned to me, newest
-        // public reply by someone else since last-seen).
-        const renderZdSection = (sectionEl, tickets) => {
+        // Render the Zendesk replies section at the top of the drawer.
+        // `tickets` are assigned-to-me tickets whose newest public comment is
+        // someone else's (i.e. awaiting my reply), over a recent window. This
+        // list is intentionally decoupled from the bell COUNT: it stays
+        // populated after opening the bell resets the count. Replies newer than
+        // `newSinceMs` (the last-seen captured on open) are flagged "New".
+        const renderZdSection = (sectionEl, tickets, newSinceMs) => {
           if (!sectionEl) return;
           sectionEl.textContent = "";
+          const newSince = Number(newSinceMs) || 0;
           const header = document.createElement("div");
           header.className = "notifZdHeader";
-          header.textContent = "Zendesk · new replies";
+          header.textContent = "Zendesk · recent replies";
           sectionEl.appendChild(header);
 
           const items = Array.isArray(tickets) ? tickets : [];
           if (!items.length) {
             const empty = document.createElement("div");
             empty.className = "notifZdEmpty";
-            empty.textContent = "No new Zendesk replies.";
+            empty.textContent = "No recent Zendesk replies.";
             sectionEl.appendChild(empty);
             return;
           }
@@ -27516,6 +27540,12 @@
             chip.className = "zendeskTaskStatus zd-" + (st || "open");
             chip.textContent = st || "open";
             top.appendChild(subj);
+            if (newSince && Number(t.replyTs || 0) > newSince) {
+              const nb = document.createElement("span");
+              nb.className = "notifZdNew";
+              nb.textContent = "New";
+              top.appendChild(nb);
+            }
             top.appendChild(chip);
             item.appendChild(top);
 
@@ -27958,9 +27988,9 @@
             try { await bridge.markNotificationsSeen?.(); } catch (_) {}
             notifLastSeenAt = Date.now();
             zendeskSetNotifLastSeen(Date.now());
-            // Re-render with all unread markers removed
+            // Re-render with all unread markers removed (keep the lists visible)
             if (notifGroupsCache) renderNotifList(list, notifGroupsCache, notifFilter);
-            renderZdSection(zdSection, []);
+            renderZdSection(zdSection, notifZdTicketsCache, 0);
             if (els.notifBadge) els.notifBadge.style.display = "none";
           });
 
@@ -27993,11 +28023,16 @@
               notifLastSeenAt = Date.now();
             } catch (_) { /* badge will catch up on next refresh */ }
 
-            // Load + list the Zendesk tickets with new replies (assigned to me).
+            // Load + list RECENT Zendesk replies (assigned to me) over a wider
+            // window than the unread count, so the list stays populated even
+            // after opening the bell resets the count. Replies newer than the
+            // last-seen captured above (zdSince) are flagged "New".
             try {
-              const zd = await zendeskFetchUnreadInfo(zdSince);
-              renderZdSection(zdSection, zd?.tickets || []);
+              const zd = await zendeskFetchUnreadInfo(Date.now() - ZENDESK_LIST_WINDOW_MS);
+              notifZdTicketsCache = zd?.tickets || [];
+              renderZdSection(zdSection, notifZdTicketsCache, zdSince);
             } catch (_) {
+              notifZdTicketsCache = [];
               renderZdSection(zdSection, []);
             }
             zdSection.style.display = activeTab === "new" ? "" : "none";
