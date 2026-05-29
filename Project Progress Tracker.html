@@ -16213,19 +16213,31 @@
           ];
         }
         if (parentTaskIdRaw) {
+          // VERIFIED working shape (Playwright probe 2026-05-29 on project
+          // 1113681 / task 33759095): POST /tasks with parentTask = NUMERIC
+          // parent id, type = "TASK" (uppercase), and the same
+          // project:{projectId} + projectPhase:{projectPhaseId} shape the
+          // no-parent path uses. The created subtask's `parentTask` field
+          // came back === 33759095 on re-fetch (parent link survived). The
+          // legacy `parent:{taskId:…}` / `parentTaskId:…` shapes below
+          // either get silently dropped or return 201 without setting the
+          // parent — kept as fallbacks but tried AFTER the verified shape.
           const parentRefs = [
+            { parentTask: parentTaskIdV },
             { parent: { taskId: parentTaskIdV } },
             { parent: { taskId: parentTaskIdV, taskName: "" } },
             { parent: { id: parentTaskIdV } },
             { parent: parentTaskIdV },
             { parentTaskId: parentTaskIdV },
             { parentTaskID: parentTaskIdV },
-            { parentTask: parentTaskIdV },
             { parentTask: { taskId: parentTaskIdV } },
             { parentTask: { id: parentTaskIdV } },
             { parentTask: { value: parentTaskIdV } },
           ];
           const baseForParent = [
+            // Verified working base — projectPhase shape + type "TASK"
+            { taskName: name, project: { projectId: pidV }, projectPhase: { projectPhaseId: phaseIdV }, startDate, dueDate, type: "TASK" },
+            // Legacy fallbacks (kept for older tenants)
             { taskName: name, project: projectRef, phase: phaseRef, startDate, dueDate, type: "Task" },
             { taskName: name, project: projectRef, phase: phaseRef, startDate, dueDate },
             { taskName: name, projectId: pidV, phaseId: phaseIdV, startDate, dueDate, type: "Task" },
