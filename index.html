@@ -8541,10 +8541,11 @@
       // last-seen and was written by someone other than me.
       // ──────────────────────────────────────────────────────────────────
       const ZENDESK_NOTIF_LAST_SEEN_KEY = "zendesk_notif_last_seen_v1";
-      // How far back the drawer LIST looks. The bell COUNT only counts replies
-      // newer than last-seen, but the list shows recent replies over this whole
-      // window so it stays populated after opening the bell resets the count.
-      const ZENDESK_LIST_WINDOW_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
+      // How far back the drawer LIST looks: the last week. The bell COUNT only
+      // counts replies newer than last-seen, but the list shows ALL replies from
+      // the last 7 days (newest on top), so it stays populated after opening the
+      // bell resets the count.
+      const ZENDESK_LIST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days (last week)
       let zendeskNotifMeIdCache = null;
 
       function zendeskGetNotifLastSeen() {
