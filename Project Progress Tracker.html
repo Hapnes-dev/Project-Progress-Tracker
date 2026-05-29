@@ -5189,7 +5189,9 @@
       .notifZdEmpty { font-size: 12px; color: var(--muted2); }
       .notifZdItem {
         border: 1px solid var(--border);
-        border-left: 3px solid var(--accent, #60a5fa);
+        /* Neutral left edge by default (already-read replies). The blue accent
+           stripe only shows on .unread items (replies newer than last-seen). */
+        border-left: 3px solid var(--border);
         border-radius: 10px;
         padding: 8px 10px;
         background: rgba(255, 255, 255, 0.03);
@@ -5197,6 +5199,7 @@
         display: grid;
         gap: 4px;
       }
+      .notifZdItem.unread { border-left-color: var(--accent, #60a5fa); }
       .notifZdItem:hover { background: var(--accent-soft, rgba(96, 165, 250, 0.08)); }
       .notifZdTop {
         display: flex;
@@ -8782,7 +8785,11 @@
             const ts = Date.parse(String(lp.created_at ?? "")) || 0;
             const byMe = Number(lp.author_id) === meId;
             if (ts > since && !byMe) {
-              const rawBody = String(lp.body ?? "").trim();
+              // Strip U+FFFD replacement chars: Zendesk degrades emoji to
+              // U+FFFD in BOTH body and html_body when ingesting some emails
+              // (e.g. "Sendt fra Outlook for iOS"), so they arrive already
+              // corrupted and unrecoverable — drop them rather than show "◊◊".
+              const rawBody = String(lp.body ?? "").replace(/�/g, "").trim();
               const collapsed = rawBody.replace(/\s+/g, " ");
               found.push({
                 id: t.id,
@@ -27697,7 +27704,11 @@
           }
           for (const t of items) {
             const item = document.createElement("div");
-            item.className = "notifZdItem";
+            // "Unread" = reply is newer than the last-seen captured when the
+            // drawer opened. Drives both the blue left stripe and the New pill,
+            // so once you've read everything the item shows no blue.
+            const isUnread = !!(newSince && Number(t.replyTs || 0) > newSince);
+            item.className = "notifZdItem" + (isUnread ? " unread" : "");
             item.setAttribute("data-ticket-id", String(t.id));
 
             const top = document.createElement("div");
@@ -27711,7 +27722,7 @@
             chip.className = "zendeskTaskStatus zd-" + (st || "open");
             chip.textContent = st || "open";
             top.appendChild(subj);
-            if (newSince && Number(t.replyTs || 0) > newSince) {
+            if (isUnread) {
               const nb = document.createElement("span");
               nb.className = "notifZdNew";
               nb.textContent = "New";
