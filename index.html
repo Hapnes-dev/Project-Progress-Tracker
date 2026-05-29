@@ -5159,7 +5159,33 @@
         letter-spacing: 0.04em;
         text-transform: uppercase;
         color: var(--muted);
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        cursor: pointer;
+        user-select: none;
+        outline: none;
       }
+      .notifZdHeader:hover { color: var(--text); }
+      .notifZdHeader .notifZdCaret {
+        font-size: 10px;
+        line-height: 1;
+        transition: transform 140ms ease;
+        opacity: 0.8;
+      }
+      .notifZdHeader.collapsed .notifZdCaret { transform: rotate(-90deg); }
+      .notifZdHeaderLabel { flex: 0 0 auto; }
+      .notifZdCount {
+        margin-left: auto;
+        font-size: 10.5px;
+        font-weight: 700;
+        color: var(--muted2);
+        background: rgba(255, 255, 255, 0.06);
+        border-radius: 999px;
+        padding: 1px 7px;
+        letter-spacing: 0;
+      }
+      .notifZdBody { display: grid; gap: 8px; }
       .notifZdEmpty { font-size: 12px; color: var(--muted2); }
       .notifZdItem {
         border: 1px solid var(--border);
@@ -8541,11 +8567,11 @@
       // last-seen and was written by someone other than me.
       // ──────────────────────────────────────────────────────────────────
       const ZENDESK_NOTIF_LAST_SEEN_KEY = "zendesk_notif_last_seen_v1";
-      // How far back the drawer LIST looks: the last week. The bell COUNT only
+      // How far back the drawer LIST looks: the last month. The bell COUNT only
       // counts replies newer than last-seen, but the list shows ALL replies from
-      // the last 7 days (newest on top), so it stays populated after opening the
+      // the last 30 days (newest on top), so it stays populated after opening the
       // bell resets the count.
-      const ZENDESK_LIST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days (last week)
+      const ZENDESK_LIST_WINDOW_MS = 30 * 24 * 60 * 60 * 1000; // 30 days (last month)
       let zendeskNotifMeIdCache = null;
 
       // Client-side "last seen" for ROCKETLANE notifications. The bridge's
@@ -8589,6 +8615,23 @@
       function zendeskSetNotifLastSeen(ms) {
         try {
           localStorage.setItem(ZENDESK_NOTIF_LAST_SEEN_KEY, new Date(Number(ms) || Date.now()).toISOString());
+        } catch (_) {}
+      }
+
+      // Collapse state for the drawer's "Zendesk · recent replies" section.
+      // Persisted (UI-only) so it survives the section's re-renders + reopens.
+      // Default = expanded.
+      const ZENDESK_NOTIF_COLLAPSED_KEY = "zendesk_notif_collapsed_v1";
+      function zendeskGetNotifCollapsed() {
+        try {
+          return localStorage.getItem(ZENDESK_NOTIF_COLLAPSED_KEY) === "1";
+        } catch (_) {
+          return false;
+        }
+      }
+      function zendeskSetNotifCollapsed(collapsed) {
+        try {
+          localStorage.setItem(ZENDESK_NOTIF_COLLAPSED_KEY, collapsed ? "1" : "0");
         } catch (_) {}
       }
 
@@ -8672,7 +8715,7 @@
             query: "type:ticket assignee:" + meId + " updated>" + day,
             sort_by: "updated_at",
             sort_order: "desc",
-            per_page: "50",
+            per_page: "100",
           });
           const json = await bridge.apiRequest("GET", "/search.json?" + params.toString());
           const results = Array.isArray(json?.results) ? json.results : [];
@@ -8682,7 +8725,7 @@
           candidates = results
             .filter((r) => r?.result_type === "ticket")
             .filter((t) => (Date.parse(String(t?.updated_at ?? "")) || 0) > since)
-            .slice(0, 40); // bound comment fetches (results are updated_at desc)
+            .slice(0, 50); // bound comment fetches (results are updated_at desc)
         } catch (e) {
           console.debug("[ZendeskNotif] search failed:", e?.message ?? e);
           return empty;
@@ -27594,17 +27637,57 @@
           if (!sectionEl) return;
           sectionEl.textContent = "";
           const newSince = Number(newSinceMs) || 0;
+          const items = Array.isArray(tickets) ? tickets : [];
+          const collapsed = zendeskGetNotifCollapsed();
+
+          // Clickable header → collapses the list (state persisted in localStorage).
           const header = document.createElement("div");
-          header.className = "notifZdHeader";
-          header.textContent = "Zendesk · recent replies";
+          header.className = "notifZdHeader" + (collapsed ? " collapsed" : "");
+          header.setAttribute("role", "button");
+          header.tabIndex = 0;
+          header.setAttribute("aria-expanded", collapsed ? "false" : "true");
+          const caret = document.createElement("span");
+          caret.className = "notifZdCaret";
+          caret.textContent = "▾";
+          caret.setAttribute("aria-hidden", "true");
+          const label = document.createElement("span");
+          label.className = "notifZdHeaderLabel";
+          label.textContent = "Zendesk · recent replies";
+          header.appendChild(caret);
+          header.appendChild(label);
+          if (items.length) {
+            const count = document.createElement("span");
+            count.className = "notifZdCount";
+            count.textContent = String(items.length);
+            header.appendChild(count);
+          }
           sectionEl.appendChild(header);
 
-          const items = Array.isArray(tickets) ? tickets : [];
+          const body = document.createElement("div");
+          body.className = "notifZdBody";
+          body.style.display = collapsed ? "none" : "grid";
+          sectionEl.appendChild(body);
+
+          const toggleCollapse = () => {
+            const next = !zendeskGetNotifCollapsed();
+            zendeskSetNotifCollapsed(next);
+            header.classList.toggle("collapsed", next);
+            header.setAttribute("aria-expanded", next ? "false" : "true");
+            body.style.display = next ? "none" : "grid";
+          };
+          header.addEventListener("click", toggleCollapse);
+          header.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              toggleCollapse();
+            }
+          });
+
           if (!items.length) {
             const empty = document.createElement("div");
             empty.className = "notifZdEmpty";
             empty.textContent = "No recent Zendesk replies.";
-            sectionEl.appendChild(empty);
+            body.appendChild(empty);
             return;
           }
           for (const t of items) {
@@ -27665,7 +27748,7 @@
                 bodyText: t.fullBody || t.snippet || "",
               });
             });
-            sectionEl.appendChild(item);
+            body.appendChild(item);
           }
         };
 
