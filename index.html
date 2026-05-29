@@ -1577,6 +1577,26 @@
         overflow-wrap: anywhere;
       }
 
+      .taskNoteName {
+        font-size: 13px;
+        font-weight: 650;
+        color: var(--text);
+        margin-bottom: 6px;
+        overflow-wrap: anywhere;
+      }
+      .taskNoteName .taskNoteSubMark {
+        color: var(--muted);
+        font-weight: 700;
+        margin-right: 4px;
+      }
+      .taskNoteParent {
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--muted);
+        margin-top: 2px;
+        overflow-wrap: anywhere;
+      }
+
       .taskNoteStatusLine {
         font-size: 12px;
         font-weight: 650;
@@ -23293,11 +23313,29 @@
             const noteText = String(t.privateNote ?? "").trim() || String(t.notes ?? "").trim();
             // Show tasks in overview if they have a note OR a non-"To do"/"In progress" status.
             if (!noteText && (status === "todo" || status === "in_progress")) continue;
+            // Identify the task by NAME on the card (not just its category) so
+            // subtasks are distinguishable from their parent — both otherwise
+            // render as e.g. "Integration / To do / Note: …" and look identical.
+            const meta = t?.meta ?? {};
+            const isSubtask = !!(
+              String(meta.parentLocalTaskId ?? "").trim() || String(meta.parentTaskId ?? "").trim()
+            );
+            let parentName = String(meta.parentTaskName ?? "").trim();
+            if (isSubtask && !parentName) {
+              const parentLocalId = String(meta.parentLocalTaskId ?? "").trim();
+              if (parentLocalId) {
+                const parentTask = taskList.find((x) => String(x?.id ?? "") === parentLocalId);
+                if (parentTask) parentName = taskDisplayText(parentTask.text);
+              }
+            }
             taskNotesList.push({
               taskKey: taskDraftKey(p.id, area, t.id),
               areaKey: area,
               taskId: String(t?.id ?? ""),
               category: areaLabel,
+              name: taskDisplayText(t.text) || "(untitled task)",
+              isSubtask,
+              parentName,
               note: noteText || "-",
               status,
             });
@@ -23329,6 +23367,24 @@
             head.className = "taskNoteHead";
             head.textContent = item.category;
 
+            // Task name line — with a subtask marker (↳) and the parent's name
+            // so a subtask is never confused with its parent task.
+            const nameEl = document.createElement("div");
+            nameEl.className = "taskNoteName";
+            if (item.isSubtask) {
+              const mark = document.createElement("span");
+              mark.className = "taskNoteSubMark";
+              mark.textContent = "↳";
+              nameEl.appendChild(mark);
+            }
+            nameEl.appendChild(document.createTextNode(item.name));
+            if (item.isSubtask && item.parentName) {
+              const par = document.createElement("div");
+              par.className = "taskNoteParent";
+              par.textContent = "under " + item.parentName;
+              nameEl.appendChild(par);
+            }
+
             const statusLine = document.createElement("div");
             statusLine.className = "taskNoteStatusLine";
             statusLine.textContent = taskStatusLabel(item.status);
@@ -23344,6 +23400,7 @@
             body.appendChild(lbl);
             body.appendChild(txt);
             row.appendChild(head);
+            row.appendChild(nameEl);
             row.appendChild(statusLine);
             row.appendChild(body);
             taskNotesBlock.appendChild(row);
