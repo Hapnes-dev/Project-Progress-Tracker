@@ -5349,9 +5349,16 @@
       }
       .notifClearAll:hover { filter: brightness(1.2); }
 
-      .notifList {
+      /* Single scroll region holding the Zendesk section + the Rocketlane list,
+         so a long Zendesk list (1-month window) scrolls as one instead of
+         overflowing the fixed drawer and becoming unreachable.
+         `min-height: 0` is required for a flex child to actually scroll. */
+      .notifScroll {
         flex: 1;
+        min-height: 0;
         overflow-y: auto;
+      }
+      .notifList {
         padding: 14px 14px 18px;
         display: flex;
         flex-direction: column;
@@ -28191,8 +28198,13 @@
           notifDrawerEl.appendChild(head);
           notifDrawerEl.appendChild(filtersWrap);
           notifDrawerEl.appendChild(tabs);
-          notifDrawerEl.appendChild(zdSection);
-          notifDrawerEl.appendChild(list);
+          // Zendesk section + Rocketlane list share ONE scroll region so a long
+          // Zendesk list scrolls instead of pushing the list off the drawer.
+          const scrollWrap = document.createElement("div");
+          scrollWrap.className = "notifScroll";
+          scrollWrap.appendChild(zdSection);
+          scrollWrap.appendChild(list);
+          notifDrawerEl.appendChild(scrollWrap);
           document.body.appendChild(notifDrawerEl);
           document.addEventListener("keydown", notifEscKey, true);
 
