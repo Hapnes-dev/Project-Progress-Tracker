@@ -517,15 +517,17 @@ Note the three money values differ (RL labor 31238, signed contract 16377, deal 
 
 ### Tracker HTML lives in TWO files within ONE repo — keep them in sync
 
-The tracker repo at `C:\Users\ThomasKvalvåg\Documents\Project-Progress-Tracker\` holds two identical HTML files:
+The tracker repo at `C:\Users\Thomas\Desktop\project-progress-tracker` holds two identical HTML files:
 
 1. `Project Progress Tracker.html` (the "download me" copy users grab for `file://` use)
 2. `index.html` (the file GitHub Pages serves at `https://hapnes-dev.github.io/Project-Progress-Tracker/`)
 
-If you commit only one, the other drifts. Pattern after editing:
+**There is NO third copy.** The old standalone desktop file `C:\Users\Thomas\Desktop\Project Progress Tracker.html` was removed by the user — do not recreate or sync to it. Edit only inside this repo, and `git pull --ff-only` before starting so you build on GitHub's latest.
+
+If you commit only one of the two repo files, the other drifts. Pattern after editing:
 
 ```powershell
-cd "C:\Users\ThomasKvalvåg\Documents\Project-Progress-Tracker"
+cd "C:\Users\Thomas\Desktop\project-progress-tracker"
 Copy-Item "Project Progress Tracker.html" "index.html" -Force
 git add "Project Progress Tracker.html" index.html CLAUDE.md README.md
 git commit -m "..." ; git push
@@ -697,27 +699,26 @@ When adding new code that calls Rocketlane / Zendesk / Oneflow / HubSpot / Youni
 
 Every code change ships through this verification flow before being declared done. Skip a step only when it doesn't apply (see exceptions at the end).
 
-**Inner loop — local-file first (fast):**
+**Source of truth + workflow (READ FIRST):**
+- The ONLY local working copy is the git repo at **`C:\Users\Thomas\Desktop\project-progress-tracker`**. Edit there. The old standalone desktop copy `C:\Users\Thomas\Desktop\Project Progress Tracker.html` has been **removed by the user — never read, edit, or sync it.**
+- **Pull GitHub first** every session/turn before editing: `git pull --ff-only origin main`. Other sessions push here too; the GitHub `main` is authoritative — stay on top of it so you never build on a stale tree.
+- The repo holds **two HTML files that must stay byte-identical**: `Project Progress Tracker.html` (download-me copy) and `index.html` (what GitHub Pages serves). After editing one, copy it onto the other before committing.
+- **Testing is on the LIVE URL**, not a local file or server. The desktop file is gone, Playwright blocks `file://`, and a local `http.server` triggered a stale-service-worker redirect to the live origin. The deployed URL is the only reliable target. Trade-off: a ~30–90 s GitHub Pages deploy wait per push — so batch edits before pushing.
 
-1. **PowerShell — file integrity**: after writing, confirm the file landed where intended. `Get-FileHash` or compare `(Get-Item ...).Length` across the 3 HTML mirror locations (`Desktop\Project Progress Tracker.html`, repo `Project Progress Tracker.html`, repo `index.html`). They must be byte-identical.
-2. **PowerShell — git state**: `git status` shows only the expected files dirty. If `index.html` and the repo `Project Progress Tracker.html` diverge after a sync, the build is wrong.
-3. **Playwright — open local file**: navigate to `file:///C:/Users/Thomas/Desktop/Project%20Progress%20Tracker.html`. The local file path is the inner-loop target because there's no GitHub Pages deploy wait.
-4. **Playwright — exercise the changed UI**: actually click/type/navigate the surface that changed. A change without a click-through is unverified.
+**Steps:**
+
+1. **PowerShell — sync + integrity**: copy `Project Progress Tracker.html` → `index.html`, then confirm the two repo HTML files are byte-identical (`Get-FileHash`). `git status` shows only the expected files dirty.
+2. **PowerShell — commit + push**: `git add` named files (never `-A`), commit, push to `origin main`.
+3. **PowerShell — confirm deploy**: poll `curl.exe -s "https://hapnes-dev.github.io/Project-Progress-Tracker/index.html?cb=<n>"` for a unique marker string from your change (GitHub Pages takes ~30–90 s; the CDN + browser cache, so cache-bust the query string). Don't test until the marker appears.
+4. **Playwright — exercise the changed UI on the LIVE URL**: load `https://hapnes-dev.github.io/Project-Progress-Tracker/`, then click/type/navigate the surface that changed. A change without a click-through is unverified.
 5. **Playwright — console must be clean**: call `browser_console_messages` after the action. Treat any new `error` or `Uncaught` as a failure even if the UI looked fine — a 29k-line single-file app silently breaks easily.
 6. **Playwright — screenshot for visual changes**: capture and inspect when the change is CSS, layout, or any visible polish.
 
-**Outer loop — live URL after push:**
-
-7. **PowerShell — commit + push**: `git add -p` or named files (never `-A`), commit, push.
-8. **PowerShell — confirm deploy**: `curl.exe -I https://hapnes-dev.github.io/Project-Progress-Tracker/` and grep for the updated `Last-Modified` or `etag` (GitHub Pages typically takes 30–90 s). Poll until it flips.
-9. **Playwright — re-test on live URL**: same click-path as step 4 against `https://hapnes-dev.github.io/Project-Progress-Tracker/`. Catches deploy-only bugs (cache headers, relative-path breaks, GitHub Pages quirks).
-10. **Playwright — live console clean**: re-check `browser_console_messages` on the live page.
-
-**Playwright bridge caveat**: Tampermonkey doesn't inject into Playwright. For bridge-touching code, use the **mock-bridge-with-call-log** pattern — install `window.XBridge` with a recording stub, exercise the UI, then assert the captured `apiRequest` calls match what the real bridge would emit. End-to-end bridge verification still requires curl or a separate Playwright tab on the platform itself.
+**Playwright bridge caveat**: Tampermonkey doesn't inject into Playwright, so the notifications bell / Younium / Zendesk / Find UIs won't open on their own. Use the **mock-bridge pattern** — install `window.RocketlaneBridge` / `window.ZendeskBridge` / etc. with stubs that return realistic shapes (the bell needs `RocketlaneBridge.fetchNotificationGroups`; Zendesk needs `apiRequest` for `/search.json` + `/comments.json` + `getCurrentUser`), exercise the UI, then assert behaviour. To prove an outgoing request shape (e.g. the Zendesk search window), record calls in the stub and inspect the captured path. End-to-end bridge verification still requires the user's real Chrome.
 
 **Exceptions** (skip noted steps with a one-line justification in chat):
-- **Docs-only change** (CLAUDE.md / README.md): skip steps 3–6 and 9–10 (no UI surface). For step 8, the GitHub Pages `Last-Modified` won't flip because `index.html` isn't touched — replace it with `curl https://raw.githubusercontent.com/Hapnes-dev/Project-Progress-Tracker/main/<file>` and grep for the new content.
-- **Bridge-only change** (userscript): skip steps 3–6 in favor of a Tampermonkey reload + manual sanity ping in the user's normal browser, since Playwright can't host the bridge.
+- **Docs-only change** (CLAUDE.md / README.md): skip steps 4–6 (no UI surface). For step 3, the GitHub Pages `Last-Modified` won't flip because `index.html` isn't touched — instead `curl https://raw.githubusercontent.com/Hapnes-dev/Project-Progress-Tracker/main/<file>` and grep for the new content.
+- **Bridge-only change** (userscript in `Hapnes-dev/tampermonkey-scripts`): skip steps 4–6 in favor of a Tampermonkey reload + manual sanity ping in the user's normal browser, since Playwright can't host the bridge.
 
 ## When working with Claude
 
@@ -733,6 +734,14 @@ Every code change ships through this verification flow before being declared don
 
 ## Recent significant changes (chronological)
 
+- **Workflow: repo is the single source of truth**
+  - The standalone desktop copy `C:\Users\Thomas\Desktop\Project Progress Tracker.html` was removed. Edit ONLY in the repo (`C:\Users\Thomas\Desktop\project-progress-tracker`), keep `Project Progress Tracker.html` + `index.html` byte-identical, `git pull --ff-only` first, and test on the LIVE URL (see Testing protocol). This killed the 3-mirror sync that previously caused a wrong-direction `cp` to clobber edits.
+- **Notifications: Zendesk recent-replies polish + reliability**
+  - List window 7 d → 30 d (`ZENDESK_LIST_WINDOW_MS`); search `per_page` 50→100 + candidate cap 40→50 so a busy month isn't truncated.
+  - "Zendesk · recent replies" header is a persistent collapse toggle (caret + count; `.notifZdBody` wrapper; `zendesk_notif_collapsed_v1`).
+  - **Bug fix**: the bell's Zendesk mark-read + list-load were INSIDE the Rocketlane `try`, so a Rocketlane error left the Zendesk count stuck. Split into independent blocks — clicking the bell now clears + loads Zendesk even when Rocketlane fails. Verified live (RL mock throwing, Zendesk still loaded + marked read).
+  - The 2-min poll (`notifTick`) now also refreshes the OPEN drawer's Zendesk list in place (`notifZdRefresh`), on top of the existing badge-count refresh.
+- **Bridge v1.9.12**: `@match http://127.0.0.1:8102/*` + `localhost:8102`, gated behind the `rocketlane-tracker` meta tag (same opt-in as `file://`) so the bridge injects on a local dev server only for the tracker page.
 - **Task notes split: "Description note" + "Private note" (bidirectional with Rocketlane)**
   - The single task-notes box was renamed **Description note**; a **+ Add a private note** link reveals a separate cream **Private note** box (mirrors Rocketlane's task-drawer affordance). New `t.privateNote` field, kept separate from `t.notes` to avoid a shared-field collision (unlinked Description note still uses `t.notes`).
   - **Private-note write was broken** — it POSTed to `/tasks/{id}/messages` (the comment stream) so it silently never saved. Captured the real call via Playwright network interception on the live task drawer: a private note is the task-level **`privateTaskDescription`** HTML field, saved via `PUT /projects/{pid}/tasks/{tid}/mini` (minimal body, `api-key` auth). Rewrote `rocketlaneUpdateTaskPrivateNote(projectId, taskId, text)` accordingly; verified end-to-end (typed in tracker → appeared on the real RL task).
