@@ -21,8 +21,8 @@ This file is read by Claude Code on every session start. It documents the archit
 | 10000–13000 | Render orchestration (`render()`, `renderList`, `renderOwnerStatusOverview` with team groups, `renderDetail`) |
 | 13000–14500 | `renderDetail` body — KPIs, notes, chat history, link toolbar, PANG/BAF buttons, Zendesk Tasks section |
 | 14500–16500 | Task category rendering (`.areaBox`), task expand UI, status picker, mention picker |
-| 16500–18500 | Dialogs (edit project, Younium import), context menus, notifications drawer |
-| 18500–end | Event wiring, sync timers, file-load handlers, install-prompt modal, init flow |
+| 16500–18500 | Dialogs (edit project, Younium import), context menus |
+| 18500–end | Event wiring, sync timers, file-load handlers, install-prompt modal, init flow, notifications bell + drawer (Rocketlane + Zendesk unread badge, Zendesk recent-replies list, right-click fullscreen reader, incremental fetch cache) |
 
 ## Five platform bridges
 
@@ -183,6 +183,35 @@ Zendesk + Rocketlane links are intentionally excluded — Zendesk lives in the p
 - Comment body rendered via `sanitizeZendeskHtml(c.html_body)` — allowlist tags + style attributes, strips inline `color:` (would otherwise appear black on dark theme).
 - Reply submission via `PUT /api/v2/tickets/<id>.json` with `{ ticket: { comment: { body, public: true|false } } }`. Public/Internal switch uses a sliding-thumb pill (yellow when internal, accent when public).
 - Timestamps: 24-hour Norwegian (Europe/Oslo) format via `Intl` API; "DD.MM HH:MM" always shown with `(i dag)` / `(i går)` / weekday context tags.
+
+### Notifications bell (Rocketlane + Zendesk)
+
+The 🔔 (`#btnNotifications` + `#notifBadge`) lives in the project-list header; all badge/drawer logic is in the `if (els.btnNotifications)` block.
+
+**Badge** = Rocketlane unread groups **+** Zendesk unread tickets, recomputed by `refreshNotifBadge()` (initial load, every 2 min while visible, on `visibilitychange`). The `#btnNotifications` `title` shows the per-source split ("Rocketlane: 3, Zendesk: 0").
+
+**Timestamp gotcha (fixed — do not regress):** Rocketlane `n.timestamp` is an ISO string, so `Number(n.timestamp)` is `NaN`. The unread reduce, the drawer's per-card unread marker, `notifFormatRelative`, and the group sorts MUST use `Date.parse(String(n.timestamp))`. The original `Number()` made the badge silently always 0 and "x ago" never render.
+
+**Mark-seen is client-side** because `bridge.markNotificationsSeen()` currently returns **HTTP 400 INVALID_INPUTS** (bridge bug — the server last-seen never advances, so the count came back on the next poll). Both platforms keep a localStorage last-seen and count unread against `max(serverLastSeen, localLastSeen)`:
+
+| Purpose | localStorage key |
+|---|---|
+| Rocketlane last-seen — advanced on bell open / Clear all | `rocketlane_notif_last_seen_v1` |
+| Zendesk last-seen — badge count cutoff; advanced on bell open / Clear all | `zendesk_notif_last_seen_v1` |
+| Zendesk ticket comment cache — keyed by ticket `updated_at`, capped at 80 | `zendesk_ticket_cache_v1` |
+| Zendesk author-name cache — by user id | `zendesk_author_cache_v1` |
+
+`getNotificationLastSeen()` is still read and `max()`'d in, so marking seen in the Rocketlane app (a newer server value) is also respected. The server `markNotificationsSeen()` is still attempted best-effort so it self-heals if the bridge is ever fixed.
+
+**Zendesk** (`zendeskFetchUnreadInfo(sinceMs)` → `{count, newestTs, tickets}`):
+- Search `type:ticket assignee:{meId} updated>{day}` (1 cheap call) → candidates updated since `sinceMs`, capped at 40.
+- Per candidate: reuse the cached latest-public-comment when its `updated_at` is unchanged; otherwise fetch `/tickets/{id}/comments.json` and refresh the cache. **Only changed/new tickets hit the comments API** (verified: 14 comment calls cold, 0 on a no-change repeat). Author names resolved via one `/users/show_many.json` for ids not already cached.
+- "Qualifies" = newest PUBLIC comment is newer than `since` AND authored by someone other than me.
+- **Badge** calls it with `since = zendeskGetNotifLastSeen()` (unread count). **Drawer** calls it with `since = now − ZENDESK_LIST_WINDOW_MS` (7 days) for the persistent recent-replies list, and renders with `newSinceMs = lastSeen` so replies newer than last-seen get a red **New** pill. Sorted by reply time desc (new on top). `Clear all` re-renders from `notifZdTicketsCache` without New flags (keeps the list visible).
+
+**Right-click fullscreen reader** — `openCommentFullscreen({title, meta, bodyHtml, bodyText})`: read-only overlay reusing `.notesFullscreenOverlay` chrome at z-index 1400 (above the drawer). Wired on `contextmenu` for both `.notifZdItem` (Zendesk, full reply body) and Rocketlane notif items (`notifCommentHtmlFor(n)` / `notifCommentTextFor(n)`). Esc / × / backdrop close; the drawer's own Esc (`notifEscKey`) defers while `activeCommentFullscreenContext` is set.
+
+**Rocketlane fetch** (`fetchAllNotifGroups`): merges `filter:All` + `filter:Mentions` (Mentions is NOT a subset of All), dedupes notifications by id, sorts groups+notifications desc. A short in-memory TTL (~10s, `notifGroupsRaw`/`notifGroupsRawAt`) dedupes the badge-poll + an immediate drawer-open so it doesn't fetch twice back-to-back.
 
 ### Auto-find buttons (🔎)
 

@@ -53,6 +53,16 @@ Stored locally as `t.privateNote`, kept separate from the description so the two
 - **Right-click anywhere on a ticket card** → fullscreen overlay (portal-mounted to `<body>` to escape `contain: layout` clipping). Full conversation rendered from sanitized `html_body` (signatures, inline images, attachments), with a Public reply / Internal note toggle and Ctrl+Enter shortcut.
 - **Auto session renewal** on 401 via the documented `X-Zendesk-Renew-Session: true` header — and the same auto-retry pattern is now in place for Oneflow, HubSpot, and Younium too.
 
+### Notifications bell (Rocketlane + Zendesk)
+
+The 🔔 in the project-list toolbar shows a combined **unread count** and opens a left-side drawer.
+
+- **Unread badge** = unread Rocketlane notifications (chat, mentions, status changes) **plus** Zendesk tickets assigned to you with a new public reply. Hover the bell for a per-source breakdown. Refreshes every 2 min while the tab is visible, and on focus.
+- **Clicking the bell resets the count and it stays cleared.** Rocketlane's server-side "mark seen" API currently rejects the call, so the tracker keeps its own per-source last-seen timestamps (`rocketlane_notif_last_seen_v1`, `zendesk_notif_last_seen_v1`) and counts unread against `max(serverLastSeen, localLastSeen)` — the count clears reliably on click, and genuinely-new items re-raise it.
+- **Zendesk "recent replies" list** at the top of the drawer: your assigned tickets whose latest public reply is someone else's, from the **last 7 days**, newest on top. Replies arriving since your last click are flagged **New**. The list **persists across opens** — opening only resets the count, it never empties the list. Left-click a row to open the ticket in Zendesk; **right-click to read the full reply in a centered fullscreen popup**.
+- **Rocketlane notifications** below: actor, action, chat-message preview, and a relative time ("8m ago"). Left-click opens it in Rocketlane; **right-click reads the full message fullscreen** (Esc / × / backdrop closes).
+- **Incremental fetch cache — only changed/new data loads.** Each Zendesk ticket's latest-public-comment is cached keyed by the ticket's `updated_at` (`zendesk_ticket_cache_v1`, capped, localStorage). A repeat fetch still runs the one cheap search to learn what changed, but only tickets whose `updated_at` actually changed re-hit the comments API — verified live: 14 comment calls on a cold fetch, **0** on the next when nothing changed. Author names are cached by id (`zendesk_author_cache_v1`); Rocketlane group fetches are de-duped for ~10s so the badge poll and a drawer-open don't double-fetch.
+
 ### Auto-find buttons (🔎)
 The Edit project dialog has a **🔎 Find** button next to the Oneflow / HubSpot / Younium link fields. Each one extracts the plant ID prefix from the project name and searches the corresponding system:
 
@@ -172,7 +182,7 @@ The Rocketlane key auto-renews; Zendesk & Oneflow re-capture their CSRF every 60
 - **Send a chat message**: type in the compose box; Enter sends, Shift+Enter for newline. Paste an image with Ctrl+V or click 📎. Type `@` to mention.
 - **Expand chat fullscreen**: click ⤢ in the chat header or right-click the chat area.
 - **Project files**: 📁 Files in the toolbar.
-- **Notifications**: 🔔 in the toolbar.
+- **Notifications**: 🔔 in the toolbar — a combined Rocketlane + Zendesk unread count. Click to open the drawer (resets the count but keeps the list); right-click any comment/reply to read it fullscreen.
 - **Add a task**: scroll to a category → **+ Add task**. Created locally AND in Rocketlane in the same phase.
 - **Remove a task**: **Remove** next to the task. If linked, ⚠ confirms upstream delete.
 
