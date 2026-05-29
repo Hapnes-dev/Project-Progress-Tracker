@@ -2043,6 +2043,14 @@
         color: var(--muted);
         margin-right: 6px;
         flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+        opacity: 0.7;
+      }
+      .task.subtask .subtaskLabel svg {
+        width: 14px;
+        height: 14px;
+        display: block;
       }
       .task.subtask .label {
         color: var(--text);
@@ -24201,7 +24209,9 @@
               if (isSubtask) {
                 const stLabel = document.createElement("span");
                 stLabel.className = "subtaskLabel";
-                stLabel.textContent = "->";
+                stLabel.title = "Subtask";
+                stLabel.innerHTML =
+                  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 10 20 15 15 20"></polyline><path d="M4 4v7a4 4 0 0 0 4 4h12"></path></svg>';
                 topLine.appendChild(stLabel);
               }
 
