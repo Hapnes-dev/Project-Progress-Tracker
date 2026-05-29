@@ -16130,7 +16130,10 @@
         if (!pid || !name) throw new Error("Project id and task name required.");
         const parentTaskIdRaw = String(parentTaskId ?? "").trim();
         const phaseIdRaw = rocketlanePhaseId(phase);
-        if (!phaseIdRaw) throw new Error("Phase id required to create task.");
+        // A subtask (parentTaskId present) may be created phase-less: Rocketlane
+        // nests it under the parent and the child inherits the parent's phase
+        // (including "no phase"). Only a top-level task strictly needs a phase.
+        if (!phaseIdRaw && !parentTaskIdRaw) throw new Error("Phase id required to create task.");
         
         // Try to use phase dates or default to today/tomorrow
         const today = new Date().toISOString().slice(0, 10);
@@ -16253,22 +16256,39 @@
             { parentTask: { id: parentTaskIdV } },
             { parentTask: { value: parentTaskIdV } },
           ];
-          const baseForParent = [
-            // Verified working base — projectPhase shape + type "TASK"
-            { taskName: name, project: { projectId: pidV }, projectPhase: { projectPhaseId: phaseIdV }, startDate, dueDate, type: "TASK" },
-            // Legacy fallbacks (kept for older tenants)
-            { taskName: name, project: projectRef, phase: phaseRef, startDate, dueDate, type: "Task" },
-            { taskName: name, project: projectRef, phase: phaseRef, startDate, dueDate },
-            { taskName: name, projectId: pidV, phaseId: phaseIdV, startDate, dueDate, type: "Task" },
-            { taskName: name, project: pidV, phase: phaseIdV, startDate, dueDate, type: "Task" },
-          ];
+          const baseForParent = phaseIdRaw
+            ? [
+                // Verified working base — projectPhase shape + type "TASK"
+                { taskName: name, project: { projectId: pidV }, projectPhase: { projectPhaseId: phaseIdV }, startDate, dueDate, type: "TASK" },
+                // Legacy fallbacks (kept for older tenants)
+                { taskName: name, project: projectRef, phase: phaseRef, startDate, dueDate, type: "Task" },
+                { taskName: name, project: projectRef, phase: phaseRef, startDate, dueDate },
+                { taskName: name, projectId: pidV, phaseId: phaseIdV, startDate, dueDate, type: "Task" },
+                { taskName: name, project: pidV, phase: phaseIdV, startDate, dueDate, type: "Task" },
+              ]
+            : [
+                // Parent has NO phase: create the subtask phase-less so it inherits
+                // the parent's (absent) phase. VERIFIED 2026-05-29 (Playwright probe,
+                // project 1113681 / phase-less parent 33759043): POST /tasks
+                //   { taskName, project:{projectId}, parentTask:<id>, type:"TASK" }
+                // returns 201 and nests under the parent. Passing an empty/bogus
+                // projectPhase here instead 500s on this tenant, so we omit phase.
+                // Exact verified shape FIRST (no dates), then dated/legacy variants.
+                { taskName: name, project: { projectId: pidV }, type: "TASK" },
+                { taskName: name, project: { projectId: pidV }, startDate, dueDate, type: "TASK" },
+                { taskName: name, project: projectRef, type: "TASK" },
+                { taskName: name, projectId: pidV, type: "TASK" },
+              ];
           const parentBodies = [];
           for (const ref of parentRefs) {
             for (const baseBody of baseForParent) {
               parentBodies.push({ ...baseBody, ...ref });
             }
           }
-          bodies = [...parentBodies, ...bodies];
+          // When the parent is phase-less we only want the phase-less parent-nesting
+          // shapes above — never fall back to the phase-bearing parentless `bodies`
+          // (those would either fail or, worse, create an orphan top-level task).
+          bodies = phaseIdRaw ? [...parentBodies, ...bodies] : [...parentBodies];
         }
         const candidates = [...bodies, ...bodies.map((b) => ({ data: b }))];
         let lastErr = /** @type {any} */ (null);
@@ -25246,14 +25266,41 @@
                   console.warn("Rocketlane parent task resolve by name failed", e);
                 }
               }
+              // A subtask must live in its PARENT's phase — never derive a phase
+              // from the area label here. labelForArea can yield a phase that does
+              // not exist in this Rocketlane project (e.g. "Service"), and
+              // rocketlaneGetOrCreatePhase would then POST /phases, which some
+              // tenants reject with HTTP 500 — silently aborting the whole subtask
+              // create (this was the "first subtask never appears" bug). Instead,
+              // read the parent task's own phase and pass it through. If the parent
+              // has no phase, create the subtask phase-less; Rocketlane nests it
+              // under the parent and the child inherits the parent's (absent) phase.
+              // Verified via Playwright 2026-05-29 on project 1113681 / phase-less
+              // parent 33759043.
               let phase = null;
-              try {
-                phase = await rocketlaneGetOrCreatePhase(rlProjectId, phaseName);
-              } catch (e) {
-                const msg =
-                  e instanceof TypeError ? "Network/CORS error." : String(e?.message ?? e ?? "Unknown error.");
-                rocketlaneShowMessage("Rocketlane: could not create category. " + msg, "error");
-                return;
+              let parentPhaseResolved = false;
+              if (parentRlTaskId) {
+                try {
+                  const parentRlTask = await rocketlaneGetTaskById(parentRlTaskId, true);
+                  const parentPhaseId = rocketlanePhaseId(
+                    parentRlTask?.projectPhase ?? parentRlTask?.phase ?? parentRlTask,
+                  );
+                  if (parentPhaseId) phase = { projectPhaseId: parentPhaseId };
+                  parentPhaseResolved = true;
+                } catch (e) {
+                  console.warn("Rocketlane: could not resolve parent phase; falling back to area phase", e);
+                }
+              }
+              if (!parentPhaseResolved) {
+                // No resolvable parent link — fall back to the area phase as before.
+                try {
+                  phase = await rocketlaneGetOrCreatePhase(rlProjectId, phaseName);
+                } catch (e) {
+                  const msg =
+                    e instanceof TypeError ? "Network/CORS error." : String(e?.message ?? e ?? "Unknown error.");
+                  rocketlaneShowMessage("Rocketlane: could not create category. " + msg, "error");
+                  return;
+                }
               }
 
               let created = null;
