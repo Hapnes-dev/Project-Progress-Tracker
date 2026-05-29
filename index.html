@@ -8603,6 +8603,46 @@
         return zendeskNotifMeIdCache;
       }
 
+      // ── Notification fetch cache (Zendesk) ──────────────────────────────
+      // So only CHANGED/NEW data loads: cached latest-public-comment data is
+      // keyed by the ticket's `updated_at` (Zendesk bumps it on every reply).
+      // If a ticket's updated_at is unchanged since the last fetch, we reuse
+      // the cache instead of calling the comments API. Author names are cached
+      // by id (they rarely change). Persisted in localStorage so the cache
+      // survives reloads; capped to bound storage.
+      const ZENDESK_TICKET_CACHE_KEY = "zendesk_ticket_cache_v1";
+      const ZENDESK_AUTHOR_CACHE_KEY = "zendesk_author_cache_v1";
+      const ZENDESK_TICKET_CACHE_MAX = 80;
+      function zendeskLoadJson(key) {
+        try {
+          return JSON.parse(localStorage.getItem(key) || "{}") || {};
+        } catch (_) {
+          return {};
+        }
+      }
+      function zendeskSaveTicketCache(cache) {
+        try {
+          let obj = cache;
+          const keys = Object.keys(obj);
+          if (keys.length > ZENDESK_TICKET_CACHE_MAX) {
+            // Keep the most recently-updated tickets.
+            const keep = keys
+              .map((k) => [k, Date.parse(String(obj[k]?.updatedAt ?? "")) || 0])
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, ZENDESK_TICKET_CACHE_MAX)
+              .map((e) => e[0]);
+            obj = {};
+            for (const k of keep) obj[k] = cache[k];
+          }
+          localStorage.setItem(ZENDESK_TICKET_CACHE_KEY, JSON.stringify(obj));
+        } catch (_) {}
+      }
+      function zendeskSaveAuthorCache(cache) {
+        try {
+          localStorage.setItem(ZENDESK_AUTHOR_CACHE_KEY, JSON.stringify(cache));
+        } catch (_) {}
+      }
+
       /**
        * Find Zendesk tickets assigned to me with a NEW public reply (written
        * by someone else) since `sinceMs`. Returns a count (for the bell badge)
@@ -8649,6 +8689,10 @@
         }
         if (!candidates.length) return empty;
 
+        // Cached comment data — reuse the latest-public-comment for any ticket
+        // whose updated_at is unchanged; only changed/new tickets hit the API.
+        const cache = zendeskLoadJson(ZENDESK_TICKET_CACHE_KEY);
+        let cacheDirty = false;
         const found = [];
         let idx = 0;
         const worker = async () => {
@@ -8656,65 +8700,80 @@
             const i = idx++;
             if (i >= candidates.length) return;
             const t = candidates[i];
-            try {
-              const cj = await bridge.apiRequest(
-                "GET",
-                "/tickets/" + encodeURIComponent(t.id) + "/comments.json?sort_order=desc&per_page=20",
-              );
-              const comments = Array.isArray(cj?.comments) ? cj.comments : [];
-              const sorted = comments
-                .slice()
-                .sort(
-                  (a, b) =>
-                    (Date.parse(String(b?.created_at ?? "")) || 0) - (Date.parse(String(a?.created_at ?? "")) || 0),
+            const tid = String(t.id);
+            const updatedAt = String(t?.updated_at ?? "");
+            let entry = cache[tid];
+            if (!entry || entry.updatedAt !== updatedAt) {
+              // Changed or not yet cached → fetch comments, refresh cache entry.
+              try {
+                const cj = await bridge.apiRequest(
+                  "GET",
+                  "/tickets/" + encodeURIComponent(tid) + "/comments.json?sort_order=desc&per_page=20",
                 );
-              const latestPublic = sorted.find((c) => c?.public === true);
-              if (!latestPublic) continue;
-              const ts = Date.parse(String(latestPublic.created_at ?? "")) || 0;
-              const byMe = Number(latestPublic.author_id) === meId;
-              if (ts > since && !byMe) {
-                const rawBody = String(latestPublic.body ?? "").trim();
-                const collapsed = rawBody.replace(/\s+/g, " ");
-                found.push({
-                  id: t.id,
-                  subject: String(t.subject ?? "").trim() || "Ticket #" + t.id,
-                  status: String(t.status ?? "").toLowerCase(),
-                  replyAt: String(latestPublic.created_at ?? ""),
-                  replyTs: ts,
-                  authorId: Number(latestPublic.author_id) || 0,
-                  snippet: collapsed.length > 160 ? collapsed.slice(0, 160) + "…" : collapsed,
-                  fullBody: rawBody,
-                });
+                const comments = Array.isArray(cj?.comments) ? cj.comments : [];
+                const sorted = comments
+                  .slice()
+                  .sort(
+                    (a, b) =>
+                      (Date.parse(String(b?.created_at ?? "")) || 0) - (Date.parse(String(a?.created_at ?? "")) || 0),
+                  );
+                const lp = sorted.find((c) => c?.public === true);
+                entry = {
+                  updatedAt,
+                  latestPublic: lp
+                    ? {
+                        created_at: String(lp.created_at ?? ""),
+                        author_id: Number(lp.author_id) || 0,
+                        body: String(lp.body ?? "").slice(0, 4000),
+                      }
+                    : null,
+                };
+                cache[tid] = entry;
+                cacheDirty = true;
+              } catch (_) {
+                continue; // skip this ticket on error
               }
-            } catch (_) {
-              /* skip this ticket */
+            }
+            const lp = entry.latestPublic;
+            if (!lp) continue;
+            const ts = Date.parse(String(lp.created_at ?? "")) || 0;
+            const byMe = Number(lp.author_id) === meId;
+            if (ts > since && !byMe) {
+              const rawBody = String(lp.body ?? "").trim();
+              const collapsed = rawBody.replace(/\s+/g, " ");
+              found.push({
+                id: t.id,
+                subject: String(t.subject ?? "").trim() || "Ticket #" + t.id,
+                status: String(t.status ?? "").toLowerCase(),
+                replyAt: String(lp.created_at ?? ""),
+                replyTs: ts,
+                authorId: Number(lp.author_id) || 0,
+                snippet: collapsed.length > 160 ? collapsed.slice(0, 160) + "…" : collapsed,
+                fullBody: rawBody,
+              });
             }
           }
         };
         await Promise.all(Array.from({ length: Math.min(6, candidates.length) }, worker));
+        if (cacheDirty) zendeskSaveTicketCache(cache);
 
-        // Resolve comment-author names in ONE batched call.
-        const authorIds = Array.from(new Set(found.map((f) => f.authorId).filter(Boolean)));
-        if (authorIds.length) {
+        // Resolve comment-author names — only the ones not already cached.
+        const authorCache = zendeskLoadJson(ZENDESK_AUTHOR_CACHE_KEY);
+        const need = Array.from(new Set(found.map((f) => f.authorId).filter(Boolean))).filter(
+          (id) => !authorCache[id],
+        );
+        if (need.length) {
           try {
-            const uj = await bridge.apiRequest("GET", "/users/show_many.json?ids=" + authorIds.join(","));
-            const nameById = new Map();
+            const uj = await bridge.apiRequest("GET", "/users/show_many.json?ids=" + need.join(","));
             for (const u of Array.isArray(uj?.users) ? uj.users : []) {
-              nameById.set(Number(u?.id), String(u?.name ?? "").trim());
+              authorCache[Number(u?.id)] = String(u?.name ?? "").trim();
             }
-            found.forEach((f) => {
-              f.authorName = nameById.get(f.authorId) || "Someone";
-            });
-          } catch (_) {
-            found.forEach((f) => {
-              f.authorName = "Someone";
-            });
-          }
-        } else {
-          found.forEach((f) => {
-            f.authorName = "Someone";
-          });
+            zendeskSaveAuthorCache(authorCache);
+          } catch (_) {}
         }
+        found.forEach((f) => {
+          f.authorName = authorCache[f.authorId] || "Someone";
+        });
 
         found.sort((a, b) => b.replyTs - a.replyTs);
         const newestTs = found.reduce((m, f) => Math.max(m, f.replyTs), 0);
@@ -27812,7 +27871,15 @@
         // Rocketlane's server-side filter is not a superset — chat mention
         // events only come back with filter=Mentions — so we merge them and
         // dedupe by id to get the full picture in one cache.
+        // Short in-memory dedupe so the badge poll and a near-simultaneous
+        // drawer-open don't fetch Rocketlane's groups twice back-to-back.
+        // (Rocketlane exposes no delta API, so this only avoids redundant
+        // near-simultaneous fetches; fresh data still loads after ~10s.)
+        let notifGroupsRaw = null;
+        let notifGroupsRawAt = 0;
         const fetchAllNotifGroups = async (bridge) => {
+          const nowMs = Date.now();
+          if (notifGroupsRaw && nowMs - notifGroupsRawAt < 10000) return notifGroupsRaw;
           const calls = [
             bridge.fetchNotificationGroups({ filter: "All",      status: "New", count: 30, groupSize: 10 }),
             bridge.fetchNotificationGroups({ filter: "Mentions", status: "New", count: 30, groupSize: 10 }),
@@ -27841,11 +27908,14 @@
             );
           }
           // Sort groups by newest notification desc
-          return Array.from(byKey.values()).sort((x, y) => {
+          const result = Array.from(byKey.values()).sort((x, y) => {
             const xt = Math.max(0, ...(x.notifications || []).map((n) => Date.parse(String(n?.timestamp ?? "")) || 0));
             const yt = Math.max(0, ...(y.notifications || []).map((n) => Date.parse(String(n?.timestamp ?? "")) || 0));
             return yt - xt;
           });
+          notifGroupsRaw = result;
+          notifGroupsRawAt = nowMs;
+          return result;
         };
 
         const refreshNotifBadge = async () => {
