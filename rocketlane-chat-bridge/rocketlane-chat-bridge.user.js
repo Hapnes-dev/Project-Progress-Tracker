@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.9.12
+// @version      1.9.13
 // @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.9.12: also injects on http://127.0.0.1:8102 / localhost:8102 local dev servers, meta-tag gated like file://.)
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
@@ -1609,19 +1609,31 @@
         offset,
         requestOptions: {
           properties: props,
-          includeAllProperties: false,
+          // When the caller asks for it, return EVERY property on the
+          // object instead of just the listed ones. Used by searchDeals
+          // so matching can read plant_id / deal_partner / org-nr /
+          // contact / Younium-quote without enumerating (and risking a
+          // 400 on) every tenant-specific property name.
+          includeAllProperties: opts?.includeAllProperties === true,
         },
       });
     },
     /**
      * Convenience: search deals by free text. Returns the standard
-     * { results, total, hasMore, offset } shape. `requestProperties`
-     * lets the caller customize which properties come back (default:
-     * the common set used for matching + display).
+     * { results, total, hasMore, offset } shape.
+     *
+     * Defaults to includeAllProperties:true so EVERY deal property comes
+     * back — the tracker's matcher reads tenant-specific custom props
+     * (plant_id, deal_partner, deal_organization_nr_younium,
+     * deal_contact / contact_email / deal_contact_tlf_nr,
+     * deal_younium_quote_number, plant_name, …) and enumerating them
+     * risks a 400 on any name that doesn't exist. Pass
+     * { includeAllProperties: false } to opt back into the minimal list.
      */
     async searchDeals(query, opts) {
       return await this.searchCrm("0-3", query, {
         count: opts?.count ?? 10,
+        includeAllProperties: opts?.includeAllProperties ?? true,
         properties: opts?.properties ?? [
           "dealname", "dealstage", "amount", "closedate",
           "hs_lastmodifieddate", "pipeline",
