@@ -15726,6 +15726,11 @@
         const id = String(rocketlaneTaskId ?? "").trim();
         if (!id) throw new Error("Missing Rocketlane taskId.");
         const text = String(descriptionText ?? "");
+        // Rocketlane's task description is a rich-text (HTML) field. Convert the
+        // plain-text input to HTML so single/multi-line breaks render correctly in
+        // Rocketlane's description view (mirrors the private-note path). Empty
+        // input clears the description.
+        const html = text.trim() ? rocketlanePlainTextToHtml(text) : "";
 
         const currentTask = await rocketlaneGetTaskById(id);
         const curName = String(currentTask?.taskName ?? currentTask?.name ?? "").trim();
@@ -15743,15 +15748,20 @@
               ? currentTask.task_info
               : {};
         const bodies = [
-          { ...base, description: text },
+          // Canonical tenant field first (verified live): taskDescription as HTML
+          // so line breaks/paragraphs render in Rocketlane's rich-text view.
+          { ...base, taskDescription: html },
+          { ...base, description: html },
+          { ...base, task_description: html },
+          { ...base, taskInfo: { ...taskInfo, taskDescription: html } },
+          { ...base, taskInfo: { ...taskInfo, description: html } },
+          { ...base, taskInfo: { ...taskInfo, task_description: html } },
+          { ...base, task_info: { ...taskInfo, taskDescription: html } },
+          { ...base, task_info: { ...taskInfo, description: html } },
+          { ...base, task_info: { ...taskInfo, task_description: html } },
+          // Plain-text fallbacks for older API shapes.
           { ...base, taskDescription: text },
-          { ...base, task_description: text },
-          { ...base, taskInfo: { ...taskInfo, description: text } },
-          { ...base, taskInfo: { ...taskInfo, taskDescription: text } },
-          { ...base, taskInfo: { ...taskInfo, task_description: text } },
-          { ...base, task_info: { ...taskInfo, description: text } },
-          { ...base, task_info: { ...taskInfo, taskDescription: text } },
-          { ...base, task_info: { ...taskInfo, task_description: text } },
+          { ...base, description: text },
         ];
         const candidates = [...bodies, ...bodies.map((b) => ({ data: b }))];
 
