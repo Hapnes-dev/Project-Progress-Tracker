@@ -30107,61 +30107,65 @@
           '</dl>';
 
         // ── Lazy detail for "Other orders for this plant" rows ──────────
-        // Pull product names off whatever array shape Younium used for
-        // this order (mirrors findIwmacSubscriptionItem's candidate list).
-        const extractRelatedProducts = (o) => {
-          const arrays = [o?.bookings, o?.products, o?.charges, o?.orderProducts,
-            o?.subscriptions, o?.subscriptionProducts, o?.lineItems, o?.items];
-          const seen = new Set();
-          const list = [];
-          for (const arr of arrays) {
-            if (!Array.isArray(arr)) continue;
-            for (const it of arr) {
-              if (!it || typeof it !== "object") continue;
-              const name = it.productName || it.name || it.subscriptionName ||
-                it.product?.name || it.product?.productName ||
-                it.subscriptionProduct?.name || it.subscriptionProduct?.productName ||
-                it.subscription_product_name || "";
-              if (!name) continue;
-              const qty = it.quantity ?? it.units ?? it.count ?? it.numberOfUnits ?? null;
-              const key = String(name) + "|" + String(qty);
-              if (seen.has(key)) continue;
-              seen.add(key);
-              list.push({ name: String(name), qty: (qty != null && qty !== "" ? qty : null) });
-            }
-          }
-          return list;
-        };
-
-        // Build the expanded detail HTML for a fully-fetched order. Uses
-        // renderKV (escape-by-default) so all values stay XSS-safe.
-        const renderRelatedDetail = (o, invoices) => {
-          const amt = o?.tcv?.amount ?? o?.acv?.amount ?? o?.fmrr?.amount ?? null;
-          const ccy = o?.tcv?.currencyCode || o?.acv?.currencyCode ||
-            o?.fmrr?.currencyCode || o?.currency || "";
-          const amountStr = (amt != null && amt !== "")
-            ? (amt + (ccy ? " " + ccy : "")) : "—";
+        // Render the SAME row set + styling as the main "Order / offer"
+        // section above (via renderKV, escape-by-default), computed for the
+        // fetched order. The order-status label + color mirror
+        // computeYouniumStatus so the panel reads identically.
+        const renderRelatedDetail = (o, invoices, events) => {
           const inv = Array.isArray(invoices) ? invoices : [];
-          const posted = inv.filter((i) => i && (i.status === 3 || i.posted)).length;
-          const invStr = !inv.length ? "No invoices yet"
-            : (posted ? "Posted/paid (" + inv.length + ")" : "Drafted (" + inv.length + ")");
-          const products = extractRelatedProducts(o);
-          const productsHtml = products.length
-            ? '<div class="youniumRelatedProducts"><div class="youniumRelatedProductsTitle">Products</div><ul>' +
-              products.map((p) => '<li>' + escHtml(p.name) +
-                (p.qty ? ' <span class="youniumRelatedQty">× ' + escHtml(String(p.qty)) + '</span>' : '') +
-                '</li>').join("") + '</ul></div>'
-            : '<div class="youniumRelatedProducts youniumRelatedProductsEmpty">No product lines returned</div>';
+          // posted-invoice test mirrors computeYouniumStatus (status 2/3 or .posted).
+          const postedInvoices = inv.filter((i) => i && (i.status === 3 || i.status === 2 || i.posted));
+          // Order-status derivation — same logic + vocabulary as the verdict.
+          const now = Date.now();
+          const tsStart     = o.effectiveStartDate ? Date.parse(o.effectiveStartDate) : NaN;
+          const tsEnd       = o.effectiveEndDate   ? Date.parse(o.effectiveEndDate)   : NaN;
+          const tsCancelled = o.cancellationDate   ? Date.parse(o.cancellationDate)   : NaN;
+          const isCancelled    = Number.isFinite(tsCancelled) && tsCancelled <= now;
+          const isExpired      = Number.isFinite(tsEnd) && tsEnd <= now && !o.isAutoRenewed && !o.isRenewed;
+          const startsInFuture = Number.isFinite(tsStart) && tsStart > now;
+          const isRawDraft   = o.status === 5;
+          const isRawCreated = o.status === 1;
+          let statusLbl;
+          if      (isCancelled)           statusLbl = "Cancelled";
+          else if (isExpired)             statusLbl = "Expired";
+          else if (isRawDraft)            statusLbl = "Draft";
+          else if (isRawCreated)          statusLbl = "Created (not finalized)";
+          else if (postedInvoices.length) statusLbl = "Invoiced";
+          else if (startsInFuture)        statusLbl = "Order (pending start)";
+          else if (o.isLastVersion)       statusLbl = "Order (not invoiced)";
+          else                            statusLbl = "Draft (outdated version)";
+          const isInvoiced = statusLbl === "Invoiced";
+          const isBad = ["Cancelled", "Expired"].includes(statusLbl) ||
+            statusLbl.startsWith("Draft") || statusLbl.startsWith("Created");
+          const statusColor = isInvoiced ? "var(--good)" : (isBad ? "var(--bad)" : "var(--warn)");
+
+          const total = o?.tcv?.amount ?? o?.acv?.amount ?? o?.fmrr?.amount ?? null;
+          const ccy   = o?.tcv?.currencyCode || o?.acv?.currencyCode ||
+            o?.fmrr?.currencyCode || o?.currency || "—";
+          const orderName = o.description || o.orderNumber || "—";
+          const link = o.id ? "https://eu.younium.com/orders/" + o.id : "";
+
+          // Same rows, order, and styling as the main orderKV above.
           return renderKV([
-            ["Order type",     o?.orderType || "—"],
-            ["Account",        o?.accountname || o?.account?.name || "—"],
-            ["Total (TCV)",    amountStr],
-            ["Invoice status", invStr],
-            ["Auto-renew",     o?.isAutoRenewed ? "Yes" : "No"],
-            ["Term (months)",  o?.term ?? "—"],
-            ["Created",        fmtDate(o?.created)],
-            ["Updated",        fmtDate(o?.modified || o?.modifiedWithDependencies)],
-          ]) + productsHtml;
+            ["Younium link",    RAW(link
+              ? '<a href="' + escHtml(toHttpUrl(link) || "#") + '" target="_blank" rel="noopener noreferrer">' + escHtml(link) + '</a>'
+              : '<em style="color: var(--muted);">none</em>')],
+            ["Order ID",        o.id || "—"],
+            ["Order number",    o.orderNumber || "Draft"],
+            ["Order name",      orderName],
+            ["Order status",    RAW('<strong style="color: ' + statusColor + ';">' +
+                                (isInvoiced ? "✓ " : "") + escHtml(statusLbl) + '</strong>')],
+            ["Invoice status",  isBad ? null : RAW(inv.length
+              ? '<strong style="color: ' + (postedInvoices.length ? "var(--good)" : "var(--warn)") + ';">' +
+                (postedInvoices.length ? "✓ Posted/paid (" + inv.length + ")" : "Drafted (" + inv.length + ")") + '</strong>'
+              : '<strong style="color: var(--bad);">No invoices yet</strong>')],
+            ["Total amount",    (total != null && total !== "") ? total + " " + ccy : "—"],
+            ["Currency",        ccy],
+            ["Created date",    fmtDate(o?.created)],
+            ["Updated date",    fmtDate(o?.modified || o?.modifiedWithDependencies)],
+            ["Created by",      renderEvent(extractFirstEvent(events))],
+            ["Last updated by", renderEvent(extractLatestEvent(events))],
+          ]);
         };
 
         // Toggle one row's detail panel; fetch on first open and cache via
@@ -30182,11 +30186,15 @@
           detail.innerHTML = '<div class="youniumRelatedLoading">Loading order details…</div>';
           try {
             const full = await youniumFetchOrderDetails(id);
-            let invoices = [];
-            if (orderNumber) {
-              try { invoices = await youniumFetchInvoicesForOrder(orderNumber); } catch (_) {}
-            }
-            detail.innerHTML = renderRelatedDetail(full || {}, invoices);
+            const onum = orderNumber || (full && full.orderNumber) || "";
+            // Invoices (Invoice status) + event log (Created/Last updated
+            // by) — fetched in parallel, each defensive so one failing
+            // doesn't lose the other.
+            const [invoices, events] = await Promise.all([
+              onum ? youniumFetchInvoicesForOrder(onum).catch(() => []) : Promise.resolve([]),
+              youniumFetchOrderEventLog(id).catch(() => []),
+            ]);
+            detail.innerHTML = renderRelatedDetail(full || {}, invoices, events);
             detail.dataset.loaded = "1";
           } catch (e) {
             detail.innerHTML = '<div class="youniumRelatedError">Could not load details: ' +
