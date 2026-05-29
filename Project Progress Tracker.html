@@ -4809,6 +4809,36 @@
       }
       body.notesFullscreenOpen { overflow: hidden; }
 
+      /* Read-only fullscreen reader for a notification / Zendesk comment.
+         Reuses the .notesFullscreenOverlay chrome (backdrop, head, close). */
+      .notesFullscreenOverlay .notifCommentFullscreenBody {
+        flex: 1;
+        max-width: 1100px;
+        width: 100%;
+        align-self: center;
+        min-height: 0;
+        overflow: auto;
+        padding: 20px 24px;
+        font-size: 15px;
+        line-height: 1.6;
+        background: #0f1424;
+        border: 1px solid var(--hairline);
+        border-radius: var(--radius-lg);
+        box-sizing: border-box;
+        overflow-wrap: anywhere;
+        color: var(--text);
+      }
+      @media (prefers-color-scheme: light) {
+        .notesFullscreenOverlay .notifCommentFullscreenBody { background: #ffffff; }
+      }
+      .notifCommentFullscreenBody img { max-width: 100%; height: auto; }
+      .notesFullscreenSubtitle {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--muted2);
+        margin-top: 2px;
+      }
+
       /* First-run install prompt — shown when the Tampermonkey bridge
          isn't detected. Walks the user through installing the userscript
          that enables Rocketlane integration. */
@@ -8602,7 +8632,8 @@
               const ts = Date.parse(String(latestPublic.created_at ?? "")) || 0;
               const byMe = Number(latestPublic.author_id) === meId;
               if (ts > since && !byMe) {
-                const bodyText = String(latestPublic.body ?? "").replace(/\s+/g, " ").trim();
+                const rawBody = String(latestPublic.body ?? "").trim();
+                const collapsed = rawBody.replace(/\s+/g, " ");
                 found.push({
                   id: t.id,
                   subject: String(t.subject ?? "").trim() || "Ticket #" + t.id,
@@ -8610,7 +8641,8 @@
                   replyAt: String(latestPublic.created_at ?? ""),
                   replyTs: ts,
                   authorId: Number(latestPublic.author_id) || 0,
-                  snippet: bodyText.length > 160 ? bodyText.slice(0, 160) + "…" : bodyText,
+                  snippet: collapsed.length > 160 ? collapsed.slice(0, 160) + "…" : collapsed,
+                  fullBody: rawBody,
                 });
               }
             } catch (_) {
@@ -26973,6 +27005,8 @@
         let notifLastSeenAt = 0; // epoch ms
         let notifGroupsCache = null;
         let notifMyUserId = null;
+        // Right-click fullscreen reader for a comment (Zendesk reply / RL chat).
+        let activeCommentFullscreenContext = null;
         // Cache project names by Rocketlane projectId so we can replace
         // "Chat: project #1234" with "Chat: Real Project Name" without
         // re-fetching on every render.
@@ -26985,7 +27019,13 @@
           notifDrawerEl = null;
           document.removeEventListener("keydown", notifEscKey, true);
         };
-        const notifEscKey = (e) => { if (e.key === "Escape") closeNotifDrawer(); };
+        const notifEscKey = (e) => {
+          if (e.key !== "Escape") return;
+          // If a comment is open fullscreen on top of the drawer, let its own
+          // Esc handler close that first — don't close the whole drawer.
+          if (activeCommentFullscreenContext) return;
+          closeNotifDrawer();
+        };
 
         const notifFormatRelative = (ts) => {
           // Timestamps are ISO strings ("2026-…"); Number() of those is NaN.
@@ -27361,6 +27401,86 @@
           } catch { return ""; }
         };
 
+        // Read-only centered fullscreen reader for a comment. Opened by
+        // right-clicking a Zendesk reply card or a Rocketlane notification.
+        // Reuses the .notesFullscreenOverlay chrome for visual consistency.
+        // opts: { title, meta, bodyHtml, bodyText }. bodyHtml (already
+        // sanitized by notifCommentHtmlFor) wins; otherwise bodyText is shown
+        // as pre-wrapped plain text.
+        const openCommentFullscreen = (opts) => {
+          const o = opts || {};
+          if (activeCommentFullscreenContext) activeCommentFullscreenContext.close();
+
+          const overlay = document.createElement("div");
+          overlay.className = "notesFullscreenOverlay";
+          overlay.style.zIndex = "1400"; // above the notifications drawer (1100)
+
+          const head = document.createElement("div");
+          head.className = "notesFullscreenHead";
+          const titleWrap = document.createElement("div");
+          titleWrap.style.flex = "1";
+          titleWrap.style.minWidth = "0";
+          const title = document.createElement("div");
+          title.className = "notesFullscreenTitle";
+          title.style.textTransform = "none";
+          title.style.letterSpacing = "0";
+          title.style.fontSize = "16px";
+          title.textContent = String(o.title || "Comment").trim() || "Comment";
+          titleWrap.appendChild(title);
+          if (o.meta) {
+            const sub = document.createElement("div");
+            sub.className = "notesFullscreenSubtitle";
+            sub.textContent = String(o.meta);
+            titleWrap.appendChild(sub);
+          }
+          const closeBtn = document.createElement("button");
+          closeBtn.type = "button";
+          closeBtn.className = "notesFullscreenCloseBtn";
+          closeBtn.setAttribute("aria-label", "Close");
+          closeBtn.title = "Close (Esc)";
+          closeBtn.textContent = "×";
+          closeBtn.style.fontSize = "22px";
+          closeBtn.style.lineHeight = "1";
+          head.appendChild(titleWrap);
+          head.appendChild(closeBtn);
+          overlay.appendChild(head);
+
+          const bodyEl = document.createElement("div");
+          bodyEl.className = "notifCommentFullscreenBody";
+          const html = String(o.bodyHtml || "").trim();
+          const textBody = String(o.bodyText || "").trim();
+          if (html) {
+            bodyEl.style.whiteSpace = "normal";
+            bodyEl.innerHTML = html; // already sanitized upstream
+          } else {
+            bodyEl.style.whiteSpace = "pre-wrap";
+            bodyEl.textContent = textBody || "(no message body)";
+          }
+          overlay.appendChild(bodyEl);
+
+          document.body.appendChild(overlay);
+          document.body.classList.add("notesFullscreenOpen");
+
+          const close = () => {
+            if (!activeCommentFullscreenContext) return;
+            activeCommentFullscreenContext = null;
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            // Keep the scroll-lock if a task fullscreen is also open.
+            if (!activeTaskFullscreenContext) document.body.classList.remove("notesFullscreenOpen");
+            document.removeEventListener("keydown", onEsc, true);
+          };
+          const onEsc = (ev) => {
+            if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); close(); }
+          };
+
+          closeBtn.addEventListener("click", (ev) => { ev.stopPropagation(); close(); });
+          overlay.addEventListener("click", (ev) => { if (ev.target === overlay) close(); });
+          // Capture phase so we run after the drawer's Esc (which defers to us).
+          document.addEventListener("keydown", onEsc, true);
+
+          activeCommentFullscreenContext = { close };
+        };
+
         // Render the Zendesk "new replies" section at the top of the drawer.
         // `tickets` come from zendeskFetchUnreadInfo (assigned to me, newest
         // public reply by someone else since last-seen).
@@ -27419,6 +27539,18 @@
                 "_blank",
                 "noopener,noreferrer",
               );
+            });
+            // Right-click → read the full reply in a centered fullscreen popup.
+            item.title = "Left-click: open in Zendesk · Right-click: read fullscreen";
+            item.addEventListener("contextmenu", (ev) => {
+              ev.preventDefault();
+              ev.stopPropagation();
+              const rel = notifFormatRelative(t.replyAt);
+              openCommentFullscreen({
+                title: t.subject || "Ticket #" + t.id,
+                meta: (t.authorName || "Someone") + " replied" + (rel ? " · " + rel : ""),
+                bodyText: t.fullBody || t.snippet || "",
+              });
             });
             sectionEl.appendChild(item);
           }
@@ -27575,6 +27707,21 @@
                 const uri = String(group?.key?.uri ?? "");
                 if (!uri) return;
                 window.open("https://kiona.rocketlane.com" + uri, "_blank", "noopener,noreferrer");
+              });
+              // Right-click → read the full comment/message in a fullscreen popup.
+              item.title = "Left-click: open in Rocketlane · Right-click: read fullscreen";
+              item.addEventListener("contextmenu", (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                const commentHtml = notifCommentHtmlFor(n);
+                const commentText = notifCommentTextFor(n);
+                const rel = notifFormatRelative(n.timestamp);
+                openCommentFullscreen({
+                  title: notifGroupTitle(group) || "Notification",
+                  meta: rel,
+                  bodyHtml: commentHtml || "",
+                  bodyText: commentText || (text ? text.textContent : ""),
+                });
               });
               items.appendChild(item);
             }
