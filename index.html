@@ -23728,8 +23728,7 @@
               "Select parent task number for new subtask in " +
                 labelForArea(area, p) +
                 ":\n\n" +
-                lines.join("\n") +
-                "\n\nFor subtask->subtask, open that task and use '+ Add subtask to this task'.",
+                lines.join("\n"),
               "1",
             );
             if (picked === null) return;
@@ -25000,7 +24999,9 @@
               rowActions.className = "taskRowActions";
               // Compact "+ Add subtask" button (only visible when row is expanded — see CSS).
               addNestedSubtaskBtn.classList.add("taskAddSubtaskBtn");
-              rowActions.appendChild(addNestedSubtaskBtn);
+              // A subtask can't have its own subtasks (single level of nesting):
+              // only offer "+ Add subtask to this task" on top-level task rows.
+              if (!isSubtask) rowActions.appendChild(addNestedSubtaskBtn);
               rowActions.appendChild(del);
 
               row.appendChild(st);
@@ -25215,6 +25216,14 @@
         const parent = (p.tasksByArea[area] ?? []).find((t) => String(t?.id ?? "") === String(parentTaskId ?? ""));
         if (!parent) {
           alert("Parent task not found.");
+          return;
+        }
+        // Enforce a single level of nesting: a subtask can't have its own subtasks.
+        if (
+          String(parent?.meta?.parentLocalTaskId ?? "").trim() !== "" ||
+          String(parent?.meta?.parentTaskId ?? "").trim() !== ""
+        ) {
+          alert("You can't add a subtask to a subtask.");
           return;
         }
         const trimmed = String(text ?? "").trim();
