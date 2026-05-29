@@ -686,15 +686,19 @@ By design, these are local-only — they modify your browser's copy without touc
 
 ## Security model
 
-- **Zero hardcoded secrets** in the HTML — credentials live only in Tampermonkey GM storage and the browser's cookie jar.
-- **`file:///*` is gated** by a meta-tag marker so the bridges only publish on the legitimate tracker.
+- **Zero hardcoded secrets** in the HTML — the Rocketlane api-key lives ONLY in `localStorage` (`progress_tracker_rl_api_key_v1`) and the userscript's GM storage, never in the committed file. (Storing it locally is acceptable; the public HTML must stay secret-free.)
+- **Every bridge-exposing origin is meta-gated** (bridge v1.9.14+): `file://`, `localhost:8102`, **and `hapnes-dev.github.io`** only publish `window.*Bridge` when the page carries `<meta name="rocketlane-tracker" content="hapnes-dev/Project-Progress-Tracker">`. github.io is a shared host, so it's gated too — not just local dev. (Capture-only platform pages like rocketlane.com are NOT gated; that's where token capture runs.)
+- **Credentials are origin-scoped in the bridge** (v1.9.14+): `gmRequest`/`gmYouniumRequest` refuse to attach the Rocketlane api-key / Younium Bearer JWT unless the resolved request origin IS the platform API origin. A caller passing an absolute URL to another `@connect` host (e.g. an S3 bucket) can't carry the secret header. `YouniumBridge.refreshToken()` returns a status object, not the raw JWT.
 - **Untrusted HTML** is sanitised through allowlists before any `innerHTML =` write:
   - `sanitizeHtmlForChatMessage` for Rocketlane chat
   - `sanitizeZendeskHtml` for Zendesk comments
   - `sanitizeHtmlForEditor` for general rich-text content
-- **All interpolated values in `innerHTML` template strings** go through `escapeHtml()` / `escapeForHtml()`.
+- **All interpolated values in `innerHTML` template strings** go through `escapeHtml()` / `escapeForHtml()` / `escHtml()`. `escHtml()` escapes `< > & " '` (quotes included → safe in `href="…"` attribute contexts, not just text).
+- **`renderKV` (Younium status modal) is escape-by-default**: every value is HTML-escaped unless explicitly wrapped in the local `RAW()` marker (code-built HTML only). This replaced an unsafe `.includes("<")` heuristic that injected any attacker value containing a `<` (e.g. `order.description`) raw → stored XSS. Fail-safe: a missing `RAW()` over-escapes (cosmetic) rather than opening XSS.
+- **URL sinks are scheme-guarded**: link/button `href` and window-navigation assignments fed by stored or API data (Younium links, Rocketlane attachment URLs) go through `toHttpUrl()`, which strips `javascript:`/other non-`http(s)` schemes.
 - **Console logs never expose credentials** — only presence + length.
 - **Internal-API diagnostic logs** use `console.debug` so they're filtered by default.
+- **Trust boundary**: any script on the tracker origin is fully trusted (it can read `localStorage` + call the bridge). Therefore keep the tracker origin free of third-party/external `<script>` includes, and treat all five platforms' API response data as untrusted input to the DOM.
 
 When adding new code that calls Rocketlane / Zendesk / Oneflow / HubSpot / Younium:
 - Route through `rocketlaneRequestJson` / `zendeskApiRequest` / `oneflowApiRequest` / `hubspotApiRequest` / `youniumApiRequest`. Never call `fetch()` directly.
