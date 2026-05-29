@@ -5259,6 +5259,31 @@
         from { transform: translateX(-100%); opacity: 0; }
         to   { transform: translateX(0);     opacity: 1; }
       }
+      /* Drag handle on the drawer's right edge — straddles the edge so it's
+         easy to grab without sitting on top of the inner scrollbar. */
+      .notifDrawerResizer {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        right: -4px;
+        width: 9px;
+        cursor: ew-resize;
+        z-index: 3;
+        touch-action: none;
+      }
+      .notifDrawerResizer::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        right: 4px;
+        width: 2px;
+        background: transparent;
+        transition: background 120ms ease;
+      }
+      .notifDrawerResizer:hover::after,
+      body.notifResizing .notifDrawerResizer::after { background: var(--accent, #60a5fa); }
+      body.notifResizing { cursor: ew-resize; user-select: none; }
       .notifDrawerHead {
         display: flex;
         align-items: center;
@@ -27178,6 +27203,21 @@
         // Track in-flight fetches so we don't fire duplicates per project
         const notifProjectNameInFlight = new Set();
 
+        // User-resizable drawer width (drag the right edge). Persisted so it
+        // sticks across opens. Clamped to [MIN, viewport-40] up to 1000px.
+        const NOTIF_DRAWER_WIDTH_KEY = "notif_drawer_width_v1";
+        const NOTIF_DRAWER_MIN_W = 360;
+        const notifDrawerMaxW = () => Math.min(window.innerWidth - 40, 1000);
+        const notifGetDrawerWidth = () => {
+          try {
+            const n = parseInt(localStorage.getItem(NOTIF_DRAWER_WIDTH_KEY), 10);
+            return Number.isFinite(n) && n >= NOTIF_DRAWER_MIN_W ? n : 0;
+          } catch (_) { return 0; }
+        };
+        const notifSetDrawerWidth = (w) => {
+          try { localStorage.setItem(NOTIF_DRAWER_WIDTH_KEY, String(Math.round(w))); } catch (_) {}
+        };
+
         const closeNotifDrawer = () => {
           if (notifDrawerEl && notifDrawerEl.parentNode) notifDrawerEl.parentNode.removeChild(notifDrawerEl);
           notifDrawerEl = null;
@@ -28205,6 +28245,31 @@
           scrollWrap.appendChild(zdSection);
           scrollWrap.appendChild(list);
           notifDrawerEl.appendChild(scrollWrap);
+
+          // Apply any saved width, then add a right-edge drag handle to resize.
+          const savedW = notifGetDrawerWidth();
+          if (savedW) notifDrawerEl.style.width = Math.min(savedW, notifDrawerMaxW()) + "px";
+          const resizer = document.createElement("div");
+          resizer.className = "notifDrawerResizer";
+          resizer.title = "Drag to resize";
+          resizer.addEventListener("pointerdown", (e) => {
+            e.preventDefault();
+            document.body.classList.add("notifResizing");
+            const move = (ev) => {
+              const w = Math.max(NOTIF_DRAWER_MIN_W, Math.min(notifDrawerMaxW(), ev.clientX));
+              notifDrawerEl.style.width = w + "px";
+            };
+            const up = () => {
+              window.removeEventListener("pointermove", move);
+              window.removeEventListener("pointerup", up);
+              document.body.classList.remove("notifResizing");
+              notifSetDrawerWidth(notifDrawerEl.getBoundingClientRect().width);
+            };
+            window.addEventListener("pointermove", move);
+            window.addEventListener("pointerup", up);
+          });
+          notifDrawerEl.appendChild(resizer);
+
           document.body.appendChild(notifDrawerEl);
           document.addEventListener("keydown", notifEscKey, true);
 
