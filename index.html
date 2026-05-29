@@ -3448,6 +3448,61 @@
         font-size: 11px;
         margin-top: 3px;
       }
+      /* Click-to-expand: the row header toggles an inline detail panel
+         lazy-loaded from getOrderById on first open. */
+      .youniumRelatedHead {
+        display: flex;
+        align-items: baseline;
+        flex-wrap: wrap;
+        gap: 6px;
+        cursor: pointer;
+        user-select: none;
+      }
+      .youniumRelatedToggle {
+        appearance: none;
+        background: none;
+        border: none;
+        color: var(--muted2);
+        cursor: pointer;
+        font-size: 11px;
+        line-height: 1;
+        padding: 0;
+        width: 12px;
+        flex: 0 0 auto;
+        transition: transform 0.12s ease;
+      }
+      .youniumRelatedRow[data-expanded="1"] .youniumRelatedToggle { transform: rotate(90deg); }
+      .youniumRelatedHead:hover .youniumRelatedToggle { color: var(--text); }
+      .youniumRelatedDetail {
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px dashed var(--hairline);
+      }
+      .youniumRelatedDetail .youniumKV { margin: 0; }
+      .youniumRelatedLoading,
+      .youniumRelatedError {
+        font-size: 11.5px;
+        color: var(--muted2);
+        padding: 2px 0;
+      }
+      .youniumRelatedError { color: var(--bad); }
+      .youniumRelatedProducts { margin-top: 8px; }
+      .youniumRelatedProductsTitle {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 3px;
+      }
+      .youniumRelatedProducts ul {
+        margin: 0;
+        padding-left: 16px;
+        font-size: 12px;
+      }
+      .youniumRelatedProducts li { margin: 1px 0; }
+      .youniumRelatedQty { color: var(--muted2); }
+      .youniumRelatedProductsEmpty { color: var(--muted2); font-size: 11.5px; font-style: italic; }
 
       /* Status badge next to the "Subscription" section title.
          Green = Active subscription, red = anything else, gray = no
@@ -30050,6 +30105,94 @@
             .join("") +
           '</dl>';
 
+        // ── Lazy detail for "Other orders for this plant" rows ──────────
+        // Pull product names off whatever array shape Younium used for
+        // this order (mirrors findIwmacSubscriptionItem's candidate list).
+        const extractRelatedProducts = (o) => {
+          const arrays = [o?.bookings, o?.products, o?.charges, o?.orderProducts,
+            o?.subscriptions, o?.subscriptionProducts, o?.lineItems, o?.items];
+          const seen = new Set();
+          const list = [];
+          for (const arr of arrays) {
+            if (!Array.isArray(arr)) continue;
+            for (const it of arr) {
+              if (!it || typeof it !== "object") continue;
+              const name = it.productName || it.name || it.subscriptionName ||
+                it.product?.name || it.product?.productName ||
+                it.subscriptionProduct?.name || it.subscriptionProduct?.productName ||
+                it.subscription_product_name || "";
+              if (!name) continue;
+              const qty = it.quantity ?? it.units ?? it.count ?? it.numberOfUnits ?? null;
+              const key = String(name) + "|" + String(qty);
+              if (seen.has(key)) continue;
+              seen.add(key);
+              list.push({ name: String(name), qty: (qty != null && qty !== "" ? qty : null) });
+            }
+          }
+          return list;
+        };
+
+        // Build the expanded detail HTML for a fully-fetched order. Uses
+        // renderKV (escape-by-default) so all values stay XSS-safe.
+        const renderRelatedDetail = (o, invoices) => {
+          const amt = o?.tcv?.amount ?? o?.acv?.amount ?? o?.fmrr?.amount ?? null;
+          const ccy = o?.tcv?.currencyCode || o?.acv?.currencyCode ||
+            o?.fmrr?.currencyCode || o?.currency || "";
+          const amountStr = (amt != null && amt !== "")
+            ? (amt + (ccy ? " " + ccy : "")) : "—";
+          const inv = Array.isArray(invoices) ? invoices : [];
+          const posted = inv.filter((i) => i && (i.status === 3 || i.posted)).length;
+          const invStr = !inv.length ? "No invoices yet"
+            : (posted ? "Posted/paid (" + inv.length + ")" : "Drafted (" + inv.length + ")");
+          const products = extractRelatedProducts(o);
+          const productsHtml = products.length
+            ? '<div class="youniumRelatedProducts"><div class="youniumRelatedProductsTitle">Products</div><ul>' +
+              products.map((p) => '<li>' + escHtml(p.name) +
+                (p.qty ? ' <span class="youniumRelatedQty">× ' + escHtml(String(p.qty)) + '</span>' : '') +
+                '</li>').join("") + '</ul></div>'
+            : '<div class="youniumRelatedProducts youniumRelatedProductsEmpty">No product lines returned</div>';
+          return renderKV([
+            ["Order type",     o?.orderType || "—"],
+            ["Account",        o?.accountname || o?.account?.name || "—"],
+            ["Total (TCV)",    amountStr],
+            ["Invoice status", invStr],
+            ["Auto-renew",     o?.isAutoRenewed ? "Yes" : "No"],
+            ["Term (months)",  o?.term ?? "—"],
+            ["Created",        fmtDate(o?.created)],
+            ["Updated",        fmtDate(o?.modified || o?.modifiedWithDependencies)],
+          ]) + productsHtml;
+        };
+
+        // Toggle one row's detail panel; fetch on first open and cache via
+        // the detail node's dataset.loaded flag (errors leave it unset so
+        // a later open retries). Never throws — failure shows inline.
+        const toggleRelatedRow = async (rowEl) => {
+          const detail = rowEl.querySelector(".youniumRelatedDetail");
+          const toggle = rowEl.querySelector(".youniumRelatedToggle");
+          if (!detail) return;
+          const opening = detail.hidden;
+          detail.hidden = !opening;
+          rowEl.setAttribute("data-expanded", opening ? "1" : "0");
+          if (toggle) toggle.setAttribute("aria-expanded", String(opening));
+          if (!opening || detail.dataset.loaded === "1") return;
+          const id = rowEl.getAttribute("data-order-id");
+          const orderNumber = rowEl.getAttribute("data-order-number");
+          if (!id) { detail.innerHTML = '<div class="youniumRelatedError">No order id available.</div>'; return; }
+          detail.innerHTML = '<div class="youniumRelatedLoading">Loading order details…</div>';
+          try {
+            const full = await youniumFetchOrderDetails(id);
+            let invoices = [];
+            if (orderNumber) {
+              try { invoices = await youniumFetchInvoicesForOrder(orderNumber); } catch (_) {}
+            }
+            detail.innerHTML = renderRelatedDetail(full || {}, invoices);
+            detail.dataset.loaded = "1";
+          } catch (e) {
+            detail.innerHTML = '<div class="youniumRelatedError">Could not load details: ' +
+              escHtml(String(e?.message ?? e)) + '</div>';
+          }
+        };
+
         els.dlgYouniumStatusBody.innerHTML =
           '<div class="youniumSummary youniumStatus-' + verdict.color + '">' +
             escHtml(summaryText) +
@@ -30122,11 +30265,18 @@
               const desc = o.description ? " — " + escHtml(o.description) : "";
               const start = o.effectiveStartDate ? fmtDateOnly(o.effectiveStartDate) : "—";
               const end = o.effectiveEndDate ? fmtDateOnly(o.effectiveEndDate) : "—";
-              return '<div class="youniumRelatedRow">' +
-                '<a href="' + escHtml(url) + '" target="_blank" rel="noopener noreferrer">' + escHtml(num) + '</a>' +
-                ' <span class="youniumSubBadge ' + statusBadgeClass(o.status) + '">' + escHtml(statusLabel(o.status)) + '</span>' +
-                desc +
+              // The header is clickable to toggle an inline detail panel
+              // (lazy-loaded via getOrderById). The Younium link inside it
+              // stops propagation so it still opens the order in a new tab.
+              return '<div class="youniumRelatedRow" data-order-id="' + escHtml(String(o.id || "")) + '" data-order-number="' + escHtml(String(o.orderNumber || "")) + '">' +
+                '<div class="youniumRelatedHead" title="Click for full order details">' +
+                  '<button type="button" class="youniumRelatedToggle" aria-label="Toggle order details" aria-expanded="false">▸</button>' +
+                  '<a href="' + escHtml(toHttpUrl(url) || "#") + '" target="_blank" rel="noopener noreferrer">' + escHtml(num) + '</a>' +
+                  ' <span class="youniumSubBadge ' + statusBadgeClass(o.status) + '">' + escHtml(statusLabel(o.status)) + '</span>' +
+                  desc +
+                '</div>' +
                 '<div class="youniumRelatedMeta">Start ' + escHtml(start) + ' · End ' + escHtml(end) + '</div>' +
+                '<div class="youniumRelatedDetail" hidden></div>' +
               '</div>';
             }).join("");
             return '<div class="youniumSection">' +
@@ -30136,6 +30286,18 @@
               rows +
             '</div>';
           })();
+
+        // Wire click-to-expand on each "Other orders for this plant" row.
+        // The header toggles the detail panel; the inner Younium link
+        // stops propagation so it still opens the order in a new tab.
+        els.dlgYouniumStatusBody
+          .querySelectorAll(".youniumRelatedRow[data-order-id]")
+          .forEach((rowEl) => {
+            const head = rowEl.querySelector(".youniumRelatedHead");
+            const link = rowEl.querySelector(".youniumRelatedHead a");
+            if (link) link.addEventListener("click", (ev) => ev.stopPropagation());
+            if (head) head.addEventListener("click", () => { void toggleRelatedRow(rowEl); });
+          });
 
         // Footer action buttons — show/hide based on what's available
         if (orderLink) {
