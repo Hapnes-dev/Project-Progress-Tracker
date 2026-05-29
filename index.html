@@ -14414,6 +14414,38 @@
         return state.projects.find((p) => String(p.rocketlaneProjectId ?? "").trim() === s) ?? null;
       }
 
+      // Rocketlane project IDs the user explicitly removed from THIS tracker.
+      // Persisted so neither an in-flight sync (which captured the project list
+      // before the removal) nor a future auto-sync silently re-imports them —
+      // which would otherwise re-create the project under an empty "Unknown
+      // user" owner. Cleared when the user re-adds a project via "+ RL Project".
+      const REMOVED_RL_IDS_KEY = "progress_tracker_removed_rl_ids_v1";
+      function getRemovedRocketlaneIds() {
+        try {
+          const arr = JSON.parse(localStorage.getItem(REMOVED_RL_IDS_KEY) || "[]");
+          return new Set(Array.isArray(arr) ? arr.map((x) => String(x)) : []);
+        } catch (_) {
+          return new Set();
+        }
+      }
+      function addRemovedRocketlaneId(rlId) {
+        const s = String(rlId ?? "").trim();
+        if (!s) return;
+        try {
+          const set = getRemovedRocketlaneIds();
+          set.add(s);
+          localStorage.setItem(REMOVED_RL_IDS_KEY, JSON.stringify(Array.from(set)));
+        } catch (_) {}
+      }
+      function clearRemovedRocketlaneId(rlId) {
+        const s = String(rlId ?? "").trim();
+        if (!s) return;
+        try {
+          const set = getRemovedRocketlaneIds();
+          if (set.delete(s)) localStorage.setItem(REMOVED_RL_IDS_KEY, JSON.stringify(Array.from(set)));
+        } catch (_) {}
+      }
+
       /** @param {string} ownerKey */
       function openRocketlaneSearchDialog(ownerKey) {
         rocketlaneOwnerContext = ownerKey;
@@ -17151,6 +17183,8 @@
           let anyProjectChanged = false;
 
           const importedAt = nowISO();
+          // Projects the user removed from this tracker — never silently re-create them.
+          const removedRlIds = getRemovedRocketlaneIds();
           for (let i = 0; i < mine.length; i++) {
             if (manageSeq && seq !== rocketlaneImportSeq) {
               return {
@@ -17180,6 +17214,10 @@
 
             /** @type {Project | null} */
             let local = findLocalProjectByRocketlaneId(rlPid);
+            // Don't re-create a project the user removed from this tracker
+            // (durable against in-flight + auto syncs). "+ RL Project" clears
+            // the id first, so this only blocks SILENT re-import, not re-adds.
+            if (!local && removedRlIds.has(String(rlPid))) continue;
             const isNew = !local;
             if (!local) {
               /** @type {Record<string, Task[]>} */
@@ -26478,6 +26516,10 @@
           "the actual project in Rocketlane is NOT touched and can " +
           "be re-imported anytime via '+ RL Project'.";
         if (!confirm(msg)) return;
+        // Remember the removal so a sync — even one already in flight when the
+        // user clicks Remove — never re-imports this project under an empty
+        // "Unknown user" owner. Re-adding via "+ RL Project" clears this.
+        if (p.rocketlaneProjectId) addRemovedRocketlaneId(p.rocketlaneProjectId);
         // Local state filter only. Never deletes from Rocketlane.
         state.projects = state.projects.filter((x) => x.id !== p.id);
         if (state.selectedProjectId === p.id) state.selectedProjectId = undefined;
@@ -30206,6 +30248,8 @@
         const ids = Array.from(rocketlaneProjectPickerSelectedIds);
         if (!ids.length) return;
         const selected = rocketlaneProjectPickerAll.filter((pr) => ids.includes(rocketlaneProjectId(pr)));
+        // Explicit re-add un-blocks anything previously removed from the tracker.
+        for (const pr of selected) clearRemovedRocketlaneId(rocketlaneProjectId(pr));
         const btn = els.btnRocketlaneImportSelected;
         const originalLabel = btn.textContent;
         btn.disabled = true;
