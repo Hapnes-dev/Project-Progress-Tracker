@@ -5116,6 +5116,56 @@
         width: 18px;
       }
 
+      /* Zendesk "new replies" section at the top of the notifications drawer */
+      .notifZdSection {
+        border-bottom: 1px solid var(--border);
+        padding: 10px 12px;
+        display: grid;
+        gap: 8px;
+      }
+      .notifZdHeader {
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .notifZdEmpty { font-size: 12px; color: var(--muted2); }
+      .notifZdItem {
+        border: 1px solid var(--border);
+        border-left: 3px solid var(--accent, #60a5fa);
+        border-radius: 10px;
+        padding: 8px 10px;
+        background: rgba(255, 255, 255, 0.03);
+        cursor: pointer;
+        display: grid;
+        gap: 4px;
+      }
+      .notifZdItem:hover { background: var(--accent-soft, rgba(96, 165, 250, 0.08)); }
+      .notifZdTop {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        justify-content: space-between;
+      }
+      .notifZdSubject {
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--text);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .notifZdMeta { font-size: 11.5px; color: var(--muted); }
+      .notifZdSnippet {
+        font-size: 12px;
+        color: var(--muted2);
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+
       /* Left-side notifications drawer (Rocketlane-style) */
       .notifDrawer {
         position: fixed;
@@ -8484,17 +8534,19 @@
       }
 
       /**
-       * Count Zendesk tickets assigned to me with a NEW public reply (written
-       * by someone else) since `sinceMs`. Best-effort: any failure returns
-       * { count: 0 } so the notification bell never breaks.
+       * Find Zendesk tickets assigned to me with a NEW public reply (written
+       * by someone else) since `sinceMs`. Returns a count (for the bell badge)
+       * plus per-ticket detail (for the drawer list). Best-effort: any failure
+       * returns { count: 0, tickets: [] } so the notification bell never breaks.
        * @param {number} sinceMs epoch ms
-       * @returns {Promise<{count:number, newestTs:number}>}
+       * @returns {Promise<{count:number, newestTs:number, tickets:Array}>}
        */
       async function zendeskFetchUnreadInfo(sinceMs) {
+        const empty = { count: 0, newestTs: 0, tickets: [] };
         const bridge = typeof window !== "undefined" ? window.ZendeskBridge : null;
-        if (!bridge || typeof bridge.apiRequest !== "function") return { count: 0, newestTs: 0 };
+        if (!bridge || typeof bridge.apiRequest !== "function") return empty;
         const meId = await zendeskResolveMyId();
-        if (!meId) return { count: 0, newestTs: 0 };
+        if (!meId) return empty;
 
         const since = Number(sinceMs) || 0;
         // Zendesk search `updated>` takes a date (YYYY-MM-DD). Use the day
@@ -8504,7 +8556,7 @@
         dayDate.setDate(dayDate.getDate() - 1);
         const day = dayDate.toISOString().slice(0, 10);
 
-        let tickets = [];
+        let candidates = [];
         try {
           const params = new URLSearchParams({
             query: "type:ticket assignee:" + meId + " updated>" + day,
@@ -8517,23 +8569,22 @@
           // Narrow to tickets actually updated since last-seen (ms precision)
           // so we only deep-fetch comments for the few that changed — keeps
           // the 2-min poll cheap.
-          tickets = results
+          candidates = results
             .filter((r) => r?.result_type === "ticket")
             .filter((t) => (Date.parse(String(t?.updated_at ?? "")) || 0) > since);
         } catch (e) {
           console.debug("[ZendeskNotif] search failed:", e?.message ?? e);
-          return { count: 0, newestTs: 0 };
+          return empty;
         }
-        if (!tickets.length) return { count: 0, newestTs: 0 };
+        if (!candidates.length) return empty;
 
-        let count = 0;
-        let newestTs = 0;
+        const found = [];
         let idx = 0;
         const worker = async () => {
           while (true) {
             const i = idx++;
-            if (i >= tickets.length) return;
-            const t = tickets[i];
+            if (i >= candidates.length) return;
+            const t = candidates[i];
             try {
               const cj = await bridge.apiRequest(
                 "GET",
@@ -8551,16 +8602,50 @@
               const ts = Date.parse(String(latestPublic.created_at ?? "")) || 0;
               const byMe = Number(latestPublic.author_id) === meId;
               if (ts > since && !byMe) {
-                count += 1;
-                if (ts > newestTs) newestTs = ts;
+                const bodyText = String(latestPublic.body ?? "").replace(/\s+/g, " ").trim();
+                found.push({
+                  id: t.id,
+                  subject: String(t.subject ?? "").trim() || "Ticket #" + t.id,
+                  status: String(t.status ?? "").toLowerCase(),
+                  replyAt: String(latestPublic.created_at ?? ""),
+                  replyTs: ts,
+                  authorId: Number(latestPublic.author_id) || 0,
+                  snippet: bodyText.length > 160 ? bodyText.slice(0, 160) + "…" : bodyText,
+                });
               }
             } catch (_) {
               /* skip this ticket */
             }
           }
         };
-        await Promise.all(Array.from({ length: Math.min(6, tickets.length) }, worker));
-        return { count, newestTs };
+        await Promise.all(Array.from({ length: Math.min(6, candidates.length) }, worker));
+
+        // Resolve comment-author names in ONE batched call.
+        const authorIds = Array.from(new Set(found.map((f) => f.authorId).filter(Boolean)));
+        if (authorIds.length) {
+          try {
+            const uj = await bridge.apiRequest("GET", "/users/show_many.json?ids=" + authorIds.join(","));
+            const nameById = new Map();
+            for (const u of Array.isArray(uj?.users) ? uj.users : []) {
+              nameById.set(Number(u?.id), String(u?.name ?? "").trim());
+            }
+            found.forEach((f) => {
+              f.authorName = nameById.get(f.authorId) || "Someone";
+            });
+          } catch (_) {
+            found.forEach((f) => {
+              f.authorName = "Someone";
+            });
+          }
+        } else {
+          found.forEach((f) => {
+            f.authorName = "Someone";
+          });
+        }
+
+        found.sort((a, b) => b.replyTs - a.replyTs);
+        const newestTs = found.reduce((m, f) => Math.max(m, f.replyTs), 0);
+        return { count: found.length, newestTs, tickets: found };
       }
 
       // ──────────────────────────────────────────────────────────────────
@@ -26903,7 +26988,9 @@
         const notifEscKey = (e) => { if (e.key === "Escape") closeNotifDrawer(); };
 
         const notifFormatRelative = (ts) => {
-          const n = Number(ts);
+          // Timestamps are ISO strings ("2026-…"); Number() of those is NaN.
+          // Accept both ISO strings and epoch-ms numbers.
+          const n = typeof ts === "number" ? ts : Date.parse(String(ts ?? "")) || 0;
           if (!n) return "";
           const diffMs = Date.now() - n;
           if (diffMs < 60000) return "just now";
@@ -27274,6 +27361,69 @@
           } catch { return ""; }
         };
 
+        // Render the Zendesk "new replies" section at the top of the drawer.
+        // `tickets` come from zendeskFetchUnreadInfo (assigned to me, newest
+        // public reply by someone else since last-seen).
+        const renderZdSection = (sectionEl, tickets) => {
+          if (!sectionEl) return;
+          sectionEl.textContent = "";
+          const header = document.createElement("div");
+          header.className = "notifZdHeader";
+          header.textContent = "Zendesk · new replies";
+          sectionEl.appendChild(header);
+
+          const items = Array.isArray(tickets) ? tickets : [];
+          if (!items.length) {
+            const empty = document.createElement("div");
+            empty.className = "notifZdEmpty";
+            empty.textContent = "No new Zendesk replies.";
+            sectionEl.appendChild(empty);
+            return;
+          }
+          for (const t of items) {
+            const item = document.createElement("div");
+            item.className = "notifZdItem";
+            item.setAttribute("data-ticket-id", String(t.id));
+
+            const top = document.createElement("div");
+            top.className = "notifZdTop";
+            const subj = document.createElement("span");
+            subj.className = "notifZdSubject";
+            subj.textContent = t.subject || "Ticket #" + t.id;
+            subj.title = t.subject || "";
+            const chip = document.createElement("span");
+            const st = String(t.status || "").toLowerCase();
+            chip.className = "zendeskTaskStatus zd-" + (st || "open");
+            chip.textContent = st || "open";
+            top.appendChild(subj);
+            top.appendChild(chip);
+            item.appendChild(top);
+
+            const meta = document.createElement("div");
+            meta.className = "notifZdMeta";
+            const rel = notifFormatRelative(t.replyAt);
+            meta.textContent = (t.authorName || "Someone") + " replied" + (rel ? " · " + rel : "");
+            item.appendChild(meta);
+
+            if (t.snippet) {
+              const snip = document.createElement("div");
+              snip.className = "notifZdSnippet";
+              snip.textContent = t.snippet;
+              item.appendChild(snip);
+            }
+
+            item.addEventListener("click", (ev) => {
+              ev.stopPropagation();
+              window.open(
+                "https://iwmac.zendesk.com/agent/tickets/" + encodeURIComponent(t.id),
+                "_blank",
+                "noopener,noreferrer",
+              );
+            });
+            sectionEl.appendChild(item);
+          }
+        };
+
         const renderNotifList = (listEl, groups, filter) => {
           listEl.textContent = "";
           const filtered = (groups || []).filter((g) => notifGroupMatches(g, filter));
@@ -27482,14 +27632,17 @@
               }
             }
           }
-          // Sort each group's notifications by timestamp desc
+          // Sort each group's notifications by timestamp desc (ISO strings —
+          // parse with Date.parse, not Number()).
           for (const g of byKey.values()) {
-            g.notifications.sort((x, y) => Number(y?.timestamp || 0) - Number(x?.timestamp || 0));
+            g.notifications.sort(
+              (x, y) => (Date.parse(String(y?.timestamp ?? "")) || 0) - (Date.parse(String(x?.timestamp ?? "")) || 0),
+            );
           }
           // Sort groups by newest notification desc
           return Array.from(byKey.values()).sort((x, y) => {
-            const xt = Math.max(0, ...(x.notifications || []).map((n) => Number(n?.timestamp || 0)));
-            const yt = Math.max(0, ...(y.notifications || []).map((n) => Number(n?.timestamp || 0)));
+            const xt = Math.max(0, ...(x.notifications || []).map((n) => Date.parse(String(n?.timestamp ?? "")) || 0));
+            const yt = Math.max(0, ...(y.notifications || []).map((n) => Date.parse(String(n?.timestamp ?? "")) || 0));
             return yt - xt;
           });
         };
@@ -27610,6 +27763,13 @@
           status.textContent = "Loading…";
           list.appendChild(status);
 
+          // Zendesk "new replies" section (filled after the async fetch below).
+          const zdSection = document.createElement("div");
+          zdSection.className = "notifZdSection";
+          renderZdSection(zdSection, null); // header + "Loading…" placeholder replaced on fetch
+          const zdLoading = zdSection.querySelector(".notifZdEmpty");
+          if (zdLoading) zdLoading.textContent = "Loading…";
+
           const filterChips = new Map();
           for (const def of filterDefs) {
             const chip = document.createElement("button");
@@ -27633,6 +27793,7 @@
             activeTab = tab;
             tabNew.classList.toggle("active", tab === "new");
             tabCleared.classList.toggle("active", tab === "cleared");
+            zdSection.style.display = tab === "new" ? "" : "none";
             if (tab === "cleared") {
               list.textContent = "";
               const empty = document.createElement("div");
@@ -27652,16 +27813,21 @@
             zendeskSetNotifLastSeen(Date.now());
             // Re-render with all unread markers removed
             if (notifGroupsCache) renderNotifList(list, notifGroupsCache, notifFilter);
+            renderZdSection(zdSection, []);
             if (els.notifBadge) els.notifBadge.style.display = "none";
           });
 
           notifDrawerEl.appendChild(head);
           notifDrawerEl.appendChild(filtersWrap);
           notifDrawerEl.appendChild(tabs);
+          notifDrawerEl.appendChild(zdSection);
           notifDrawerEl.appendChild(list);
           document.body.appendChild(notifDrawerEl);
           document.addEventListener("keydown", notifEscKey, true);
 
+          // Capture the Zendesk last-seen BEFORE we advance it on open, so the
+          // list shows the replies that were unread when the drawer opened.
+          const zdSince = zendeskGetNotifLastSeen();
           // Fetch + render
           try {
             await ensureMyUserId();
@@ -27679,6 +27845,16 @@
               if (els.notifBadge) els.notifBadge.style.display = "none";
               notifLastSeenAt = Date.now();
             } catch (_) { /* badge will catch up on next refresh */ }
+
+            // Load + list the Zendesk tickets with new replies (assigned to me).
+            try {
+              const zd = await zendeskFetchUnreadInfo(zdSince);
+              renderZdSection(zdSection, zd?.tickets || []);
+            } catch (_) {
+              renderZdSection(zdSection, []);
+            }
+            zdSection.style.display = activeTab === "new" ? "" : "none";
+
             // Opening the bell also clears the Zendesk count ("just the
             // number" for now) — advance the Zendesk last-seen marker.
             zendeskSetNotifLastSeen(Date.now());
