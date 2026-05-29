@@ -8442,6 +8442,128 @@
       } catch (_) {}
 
       // ──────────────────────────────────────────────────────────────────
+      // Zendesk unread — feeds the notification bell badge.
+      // Zendesk has no server-side "notification last seen", so we persist
+      // it client-side and advance it whenever the bell is opened. "Unread"
+      // = a ticket ASSIGNED TO ME whose newest PUBLIC comment is newer than
+      // last-seen and was written by someone other than me.
+      // ──────────────────────────────────────────────────────────────────
+      const ZENDESK_NOTIF_LAST_SEEN_KEY = "zendesk_notif_last_seen_v1";
+      let zendeskNotifMeIdCache = null;
+
+      function zendeskGetNotifLastSeen() {
+        try {
+          let raw = localStorage.getItem(ZENDESK_NOTIF_LAST_SEEN_KEY);
+          if (!raw) {
+            // First run: start from "now" so we only surface messages that
+            // arrive AFTER the feature is enabled (no historical backlog).
+            raw = new Date().toISOString();
+            localStorage.setItem(ZENDESK_NOTIF_LAST_SEEN_KEY, raw);
+          }
+          const t = Date.parse(raw);
+          return Number.isFinite(t) ? t : 0;
+        } catch (_) {
+          return 0;
+        }
+      }
+      function zendeskSetNotifLastSeen(ms) {
+        try {
+          localStorage.setItem(ZENDESK_NOTIF_LAST_SEEN_KEY, new Date(Number(ms) || Date.now()).toISOString());
+        } catch (_) {}
+      }
+
+      async function zendeskResolveMyId() {
+        if (zendeskNotifMeIdCache) return zendeskNotifMeIdCache;
+        try {
+          const me = await zendeskFetchCurrentUser();
+          zendeskNotifMeIdCache = Number(me?.id) || null;
+        } catch (_) {
+          zendeskNotifMeIdCache = null;
+        }
+        return zendeskNotifMeIdCache;
+      }
+
+      /**
+       * Count Zendesk tickets assigned to me with a NEW public reply (written
+       * by someone else) since `sinceMs`. Best-effort: any failure returns
+       * { count: 0 } so the notification bell never breaks.
+       * @param {number} sinceMs epoch ms
+       * @returns {Promise<{count:number, newestTs:number}>}
+       */
+      async function zendeskFetchUnreadInfo(sinceMs) {
+        const bridge = typeof window !== "undefined" ? window.ZendeskBridge : null;
+        if (!bridge || typeof bridge.apiRequest !== "function") return { count: 0, newestTs: 0 };
+        const meId = await zendeskResolveMyId();
+        if (!meId) return { count: 0, newestTs: 0 };
+
+        const since = Number(sinceMs) || 0;
+        // Zendesk search `updated>` takes a date (YYYY-MM-DD). Use the day
+        // BEFORE last-seen so a same-day reply is never filtered out by the
+        // coarse date; the precise comparison happens per-comment below.
+        const dayDate = new Date(since || Date.now());
+        dayDate.setDate(dayDate.getDate() - 1);
+        const day = dayDate.toISOString().slice(0, 10);
+
+        let tickets = [];
+        try {
+          const params = new URLSearchParams({
+            query: "type:ticket assignee:" + meId + " updated>" + day,
+            sort_by: "updated_at",
+            sort_order: "desc",
+            per_page: "50",
+          });
+          const json = await bridge.apiRequest("GET", "/search.json?" + params.toString());
+          const results = Array.isArray(json?.results) ? json.results : [];
+          // Narrow to tickets actually updated since last-seen (ms precision)
+          // so we only deep-fetch comments for the few that changed — keeps
+          // the 2-min poll cheap.
+          tickets = results
+            .filter((r) => r?.result_type === "ticket")
+            .filter((t) => (Date.parse(String(t?.updated_at ?? "")) || 0) > since);
+        } catch (e) {
+          console.debug("[ZendeskNotif] search failed:", e?.message ?? e);
+          return { count: 0, newestTs: 0 };
+        }
+        if (!tickets.length) return { count: 0, newestTs: 0 };
+
+        let count = 0;
+        let newestTs = 0;
+        let idx = 0;
+        const worker = async () => {
+          while (true) {
+            const i = idx++;
+            if (i >= tickets.length) return;
+            const t = tickets[i];
+            try {
+              const cj = await bridge.apiRequest(
+                "GET",
+                "/tickets/" + encodeURIComponent(t.id) + "/comments.json?sort_order=desc&per_page=20",
+              );
+              const comments = Array.isArray(cj?.comments) ? cj.comments : [];
+              const sorted = comments
+                .slice()
+                .sort(
+                  (a, b) =>
+                    (Date.parse(String(b?.created_at ?? "")) || 0) - (Date.parse(String(a?.created_at ?? "")) || 0),
+                );
+              const latestPublic = sorted.find((c) => c?.public === true);
+              if (!latestPublic) continue;
+              const ts = Date.parse(String(latestPublic.created_at ?? "")) || 0;
+              const byMe = Number(latestPublic.author_id) === meId;
+              if (ts > since && !byMe) {
+                count += 1;
+                if (ts > newestTs) newestTs = ts;
+              }
+            } catch (_) {
+              /* skip this ticket */
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(6, tickets.length) }, worker));
+        return { count, newestTs };
+      }
+
+      // ──────────────────────────────────────────────────────────────────
       // Shared Find-button matching framework (used by Oneflow / HubSpot /
       // Younium auto-find).
       //
@@ -27167,7 +27289,7 @@
           for (const group of filtered) {
             const card = document.createElement("div");
             card.className = "notifGroup";
-            const newestTs = Math.max(0, ...(group.notifications ?? []).map((n) => Number(n?.timestamp || 0)));
+            const newestTs = Math.max(0, ...(group.notifications ?? []).map((n) => Date.parse(String(n?.timestamp ?? "")) || 0));
             if (newestTs > notifLastSeenAt) card.classList.add("unread");
 
             // Group head: small icon + task name + project/phase meta + optional due date
@@ -27373,28 +27495,55 @@
         };
 
         const refreshNotifBadge = async () => {
-          const bridge = window.RocketlaneBridge;
-          if (!bridge?.fetchNotificationGroups || !bridge?.getNotificationLastSeen) return;
           try {
-            const [groups, seen] = await Promise.all([
-              fetchAllNotifGroups(bridge),
-              bridge.getNotificationLastSeen(),
-            ]);
-            notifGroupsCache = groups;
-            notifLastSeenAt = new Date(seen?.lastSeenAt ?? 0).getTime() || 0;
-            const unread = (groups || []).reduce((acc, g) => {
-              const newest = Math.max(0, ...(g.notifications ?? []).map((n) => Number(n?.timestamp || 0)));
-              return acc + (newest > notifLastSeenAt ? 1 : 0);
-            }, 0);
+            // Rocketlane unread groups (chat, mentions, status changes, …).
+            // NOTE: notification timestamps are ISO strings — parse with
+            // Date.parse, NOT Number() (Number("2026-…") is NaN, which made
+            // this count always 0 and the badge never appear).
+            let rlUnread = 0;
+            const bridge = window.RocketlaneBridge;
+            if (bridge?.fetchNotificationGroups && bridge?.getNotificationLastSeen) {
+              const [groups, seen] = await Promise.all([
+                fetchAllNotifGroups(bridge),
+                bridge.getNotificationLastSeen(),
+              ]);
+              notifGroupsCache = groups;
+              notifLastSeenAt = new Date(seen?.lastSeenAt ?? 0).getTime() || 0;
+              rlUnread = (groups || []).reduce((acc, g) => {
+                const newest = Math.max(
+                  0,
+                  ...(g.notifications ?? []).map((n) => Date.parse(String(n?.timestamp ?? "")) || 0),
+                );
+                return acc + (newest > notifLastSeenAt ? 1 : 0);
+              }, 0);
+            }
+
+            // Zendesk unread — tickets assigned to me with a new public reply
+            // (someone else's) since the client-side last-seen.
+            let zdUnread = 0;
+            try {
+              const info = await zendeskFetchUnreadInfo(zendeskGetNotifLastSeen());
+              zdUnread = Number(info?.count) || 0;
+            } catch (_) {}
+
+            const total = rlUnread + zdUnread;
             if (els.notifBadge) {
-              if (unread > 0) {
-                const label = unread > 99 ? "99+" : String(unread);
+              if (total > 0) {
+                const label = total > 99 ? "99+" : String(total);
                 els.notifBadge.style.display = "";
                 els.notifBadge.textContent = label;
                 els.notifBadge.dataset.len = String(label.length);
               } else {
                 els.notifBadge.style.display = "none";
               }
+            }
+            // Tooltip breaks the count down by source (badge itself can't show
+            // a tooltip — it has pointer-events:none).
+            if (els.btnNotifications) {
+              els.btnNotifications.title =
+                total > 0
+                  ? "Notifications — Rocketlane: " + rlUnread + ", Zendesk: " + zdUnread
+                  : "Notifications";
             }
           } catch (e) {
             console.warn("[Notifications] badge refresh failed:", e);
@@ -27500,6 +27649,7 @@
             // "Clear all" pushes last-seen-at forward + visually empties the list.
             try { await bridge.markNotificationsSeen?.(); } catch (_) {}
             notifLastSeenAt = Date.now();
+            zendeskSetNotifLastSeen(Date.now());
             // Re-render with all unread markers removed
             if (notifGroupsCache) renderNotifList(list, notifGroupsCache, notifFilter);
             if (els.notifBadge) els.notifBadge.style.display = "none";
@@ -27529,6 +27679,10 @@
               if (els.notifBadge) els.notifBadge.style.display = "none";
               notifLastSeenAt = Date.now();
             } catch (_) { /* badge will catch up on next refresh */ }
+            // Opening the bell also clears the Zendesk count ("just the
+            // number" for now) — advance the Zendesk last-seen marker.
+            zendeskSetNotifLastSeen(Date.now());
+            if (els.notifBadge) els.notifBadge.style.display = "none";
           } catch (e) {
             list.textContent = "";
             const err = document.createElement("div");
