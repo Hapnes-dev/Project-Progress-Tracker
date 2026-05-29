@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.9.11
-// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS.
+// @version      1.9.12
+// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.9.12: also injects on http://127.0.0.1:8102 / localhost:8102 local dev servers, meta-tag gated like file://.)
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
 // @supportURL   https://github.com/Hapnes-dev/Project-Progress-Tracker/issues
@@ -17,6 +17,8 @@
 // @match        https://us.younium.com/*
 // @match        https://app.younium.com/*
 // @match        file:///*
+// @match        http://127.0.0.1:8102/*
+// @match        http://localhost:8102/*
 // @match        https://hapnes-dev.github.io/Project-Progress-Tracker/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -275,8 +277,14 @@
   // dedicated meta tag — anything else gets nothing.
   //
   // GitHub Pages and any other https-served tracker copies match by
-  // @match URL alone (already narrowly scoped). file:// must opt-in.
-  if (location.protocol === "file:") {
+  // @match URL alone (already narrowly scoped). file:// AND localhost dev
+  // servers (127.0.0.1 / localhost) are broad origins that could host
+  // arbitrary pages, so they must opt-in via the tracker meta tag.
+  const isLocalDevOrigin =
+    location.protocol === "file:" ||
+    location.hostname === "127.0.0.1" ||
+    location.hostname === "localhost";
+  if (isLocalDevOrigin) {
     const marker = document.querySelector(
       'meta[name="rocketlane-tracker"][content="hapnes-dev/Project-Progress-Tracker"]'
     );

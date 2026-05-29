@@ -27151,6 +27151,10 @@
         // Last-rendered Zendesk replies, so "Clear all" can keep the list
         // visible (just drop the "New" flags) instead of emptying it.
         let notifZdTicketsCache = [];
+        // Re-fetch + re-render the open drawer's Zendesk list. Set while the
+        // drawer is open so the 2-min poll can refresh it in place; null when
+        // the drawer is closed.
+        let notifZdRefresh = null;
         // Right-click fullscreen reader for a comment (Zendesk reply / RL chat).
         let activeCommentFullscreenContext = null;
         // Cache project names by Rocketlane projectId so we can replace
@@ -27163,6 +27167,7 @@
         const closeNotifDrawer = () => {
           if (notifDrawerEl && notifDrawerEl.parentNode) notifDrawerEl.parentNode.removeChild(notifDrawerEl);
           notifDrawerEl = null;
+          notifZdRefresh = null;
           document.removeEventListener("keydown", notifEscKey, true);
         };
         const notifEscKey = (e) => {
@@ -28183,7 +28188,31 @@
           // Capture the Zendesk last-seen BEFORE we advance it on open, so the
           // list shows the replies that were unread when the drawer opened.
           const zdSince = zendeskGetNotifLastSeen();
-          // Fetch + render
+
+          // ── Zendesk: mark read + load recent replies — INDEPENDENT of the
+          // Rocketlane fetch below. Opening the bell marks ALL Zendesk replies
+          // read immediately (clears the count) and loads the list, even if the
+          // Rocketlane fetch errors. (Previously both lived inside the Rocketlane
+          // try, so a Rocketlane error left the Zendesk count stuck.)
+          zendeskSetNotifLastSeen(Date.now());
+          if (els.notifBadge) els.notifBadge.style.display = "none";
+          // Reusable refresh so the 2-min poll can update the list in place.
+          // Replies newer than the last-seen captured at open (zdSince) get the
+          // "New" flag — including ones that arrive while the drawer stays open.
+          notifZdRefresh = async () => {
+            try {
+              const zd = await zendeskFetchUnreadInfo(Date.now() - ZENDESK_LIST_WINDOW_MS);
+              notifZdTicketsCache = zd?.tickets || [];
+              renderZdSection(zdSection, notifZdTicketsCache, zdSince);
+            } catch (_) {
+              if (!notifZdTicketsCache.length) renderZdSection(zdSection, []);
+            }
+            zdSection.style.display = activeTab === "new" ? "" : "none";
+          };
+          void notifZdRefresh();
+
+          // ── Rocketlane: its own try so an error here can't block the Zendesk
+          // mark-read / list above.
           try {
             await ensureMyUserId();
             const [groups, seen] = await Promise.all([
@@ -28201,25 +28230,6 @@
             rocketlaneSetNotifLastSeen(Date.now());
             notifLastSeenAt = Date.now();
             if (els.notifBadge) els.notifBadge.style.display = "none";
-
-            // Load + list RECENT Zendesk replies (assigned to me) over a wider
-            // window than the unread count, so the list stays populated even
-            // after opening the bell resets the count. Replies newer than the
-            // last-seen captured above (zdSince) are flagged "New".
-            try {
-              const zd = await zendeskFetchUnreadInfo(Date.now() - ZENDESK_LIST_WINDOW_MS);
-              notifZdTicketsCache = zd?.tickets || [];
-              renderZdSection(zdSection, notifZdTicketsCache, zdSince);
-            } catch (_) {
-              notifZdTicketsCache = [];
-              renderZdSection(zdSection, []);
-            }
-            zdSection.style.display = activeTab === "new" ? "" : "none";
-
-            // Opening the bell also clears the Zendesk count ("just the
-            // number" for now) — advance the Zendesk last-seen marker.
-            zendeskSetNotifLastSeen(Date.now());
-            if (els.notifBadge) els.notifBadge.style.display = "none";
           } catch (e) {
             list.textContent = "";
             const err = document.createElement("div");
@@ -28233,12 +28243,18 @@
         els.btnNotifications.addEventListener("click", openNotifDrawer);
 
         // Initial badge load + refresh every 2 minutes when tab is visible.
+        // The tick re-checks BOTH Rocketlane and Zendesk for new replies (the
+        // badge count), and — if the drawer is open — refreshes its Zendesk
+        // recent-replies list in place so new comments show without reopening.
+        const notifTick = () => {
+          if (document.hidden) return;
+          void refreshNotifBadge();
+          if (notifDrawerEl && typeof notifZdRefresh === "function") void notifZdRefresh();
+        };
         void refreshNotifBadge();
-        setInterval(() => {
-          if (!document.hidden) void refreshNotifBadge();
-        }, 2 * 60 * 1000);
+        setInterval(notifTick, 2 * 60 * 1000);
         document.addEventListener("visibilitychange", () => {
-          if (!document.hidden) void refreshNotifBadge();
+          if (!document.hidden) notifTick();
         });
       }
 
