@@ -4912,6 +4912,18 @@
         .notesFullscreenOverlay .notifCommentFullscreenBody { background: #ffffff; }
       }
       .notifCommentFullscreenBody img { max-width: 100%; height: auto; }
+      .notifCommentFullscreenBody .notifFsCommentHead {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--muted);
+        margin: 2px 0 6px;
+      }
+      .notifCommentFullscreenBody .notifFsCommentHead.notifFsMine {
+        color: var(--accent, #60a5fa);
+        margin-top: 16px;
+        padding-top: 12px;
+        border-top: 1px solid var(--hairline);
+      }
       .notesFullscreenSubtitle {
         font-size: 12px;
         font-weight: 600;
@@ -8918,6 +8930,87 @@
           }
         }
         return raw;
+      }
+
+      // Sanitize a Zendesk comment's html_body so the notification fullscreen
+      // reader renders it "exactly like Zendesk" (bold, lists, links, embedded
+      // images, signatures). Allowlist tags/attrs, images only from Zendesk/CDN
+      // hosts, strip inline colors + legacy presentation attrs. Mirrors the
+      // per-project Zendesk Tasks sanitizer (kept separate so this module-scope
+      // helper doesn't depend on that renderer's closure).
+      const ZD_NOTIF_IMG_HOST_RE = [
+        /(?:^|\.)zendesk\.com$/i,
+        /(?:^|\.)zdusercontent\.com$/i,
+        /(?:^|\.)zdassets\.com$/i,
+        /(?:^|\.)cloudfront\.net$/i,
+        /(?:^|\.)amazonaws\.com$/i,
+      ];
+      function zendeskSanitizeHtml(rawHtml) {
+        const ALLOWED_TAGS = new Set(["p","br","div","span","b","strong","i","em","u","s","strike","del","ul","ol","li","a","img","code","pre","blockquote","h1","h2","h3","h4","h5","h6","table","thead","tbody","tr","td","th","hr"]);
+        const ALLOWED_ATTRS = new Set(["href","target","rel","src","alt","title","width","height","class","style","colspan","rowspan"]);
+        const STRIP_PRESENTATION_ATTRS = new Set(["border","cellpadding","cellspacing","bgcolor","color","align","valign"]);
+        const SAFE_URL = /^(?:https?:|mailto:|tel:)/i;
+        const isAllowedImg = (raw) => {
+          const s = String(raw || "").trim();
+          if (!s) return false;
+          if (s.startsWith("data:image/")) return true;
+          try {
+            const u = new URL(s, "https://iwmac.zendesk.com");
+            if (!/^https?:$/i.test(u.protocol)) return false;
+            return ZD_NOTIF_IMG_HOST_RE.some((rx) => rx.test(u.host));
+          } catch {
+            return false;
+          }
+        };
+        const SAFE_STYLE_PROPS = new Set(["font-weight","font-style","text-align","text-decoration","margin","margin-left","padding-left","list-style-type"]);
+        const sanitizeStyle = (raw) =>
+          String(raw || "")
+            .split(";")
+            .map((p) => p.trim())
+            .filter(Boolean)
+            .filter((p) => {
+              const [k, v] = p.split(":").map((s) => s.trim().toLowerCase());
+              if (!SAFE_STYLE_PROPS.has(k)) return false;
+              if (/url\s*\(|expression\s*\(|javascript:/i.test(v)) return false;
+              return true;
+            })
+            .join("; ");
+        const doc = new DOMParser().parseFromString(String(rawHtml ?? ""), "text/html");
+        const clean = (node) => {
+          for (const child of Array.from(node.childNodes)) {
+            if (child.nodeType !== 1) continue;
+            const tag = String(child.tagName || "").toLowerCase();
+            if (!ALLOWED_TAGS.has(tag)) {
+              node.replaceChild(doc.createTextNode(child.textContent || ""), child);
+              continue;
+            }
+            if (tag === "img") {
+              const src = child.getAttribute("src") || "";
+              if (!isAllowedImg(src)) { node.removeChild(child); continue; }
+              child.classList.add("zendeskMsgInlineImg");
+              child.setAttribute("loading", "lazy");
+              child.setAttribute("referrerpolicy", "no-referrer");
+            }
+            for (const attr of Array.from(child.attributes)) {
+              const name = String(attr.name || "").toLowerCase();
+              if (STRIP_PRESENTATION_ATTRS.has(name)) { child.removeAttribute(attr.name); continue; }
+              if (!ALLOWED_ATTRS.has(name)) { child.removeAttribute(attr.name); continue; }
+              if (name === "href") {
+                const v = String(attr.value || "").trim();
+                if (!SAFE_URL.test(v)) child.removeAttribute("href");
+                else if (tag === "a") { child.setAttribute("target", "_blank"); child.setAttribute("rel", "noopener noreferrer"); }
+              }
+              if (name === "style") {
+                const cleaned = sanitizeStyle(attr.value);
+                if (cleaned) child.setAttribute("style", cleaned);
+                else child.removeAttribute("style");
+              }
+            }
+            clean(child);
+          }
+        };
+        clean(doc.body);
+        return doc.body.innerHTML;
       }
 
       /**
@@ -28141,16 +28234,31 @@
 
           const bodyEl = document.createElement("div");
           bodyEl.className = "notifCommentFullscreenBody";
-          const html = String(o.bodyHtml || "").trim();
-          const textBody = String(o.bodyText || "").trim();
-          if (html) {
-            bodyEl.style.whiteSpace = "normal";
-            bodyEl.innerHTML = html; // already sanitized upstream
-          } else {
+          const renderBody = (res) => {
+            const h = String(res?.bodyHtml || "").trim();
+            if (h) {
+              bodyEl.style.whiteSpace = "normal";
+              bodyEl.innerHTML = h; // already sanitized upstream
+            } else {
+              bodyEl.style.whiteSpace = "pre-wrap";
+              bodyEl.textContent = String(res?.bodyText || "").trim() || "(no message body)";
+            }
+          };
+          // With an async `load`, show "Loading…" then render the result (e.g.
+          // the sanitized Zendesk html_body). Without it, render immediately.
+          if (typeof o.load === "function") {
             bodyEl.style.whiteSpace = "pre-wrap";
-            bodyEl.textContent = textBody || "(no message body)";
+            bodyEl.textContent = "Loading…";
+          } else {
+            renderBody({ bodyHtml: o.bodyHtml, bodyText: o.bodyText });
           }
           overlay.appendChild(bodyEl);
+          if (typeof o.load === "function") {
+            Promise.resolve()
+              .then(() => o.load())
+              .then((res) => { if (bodyEl.isConnected) renderBody(res || {}); })
+              .catch(() => { if (bodyEl.isConnected) renderBody({ bodyText: o.bodyText }); });
+          }
 
           document.body.appendChild(overlay);
           document.body.classList.add("notesFullscreenOpen");
@@ -28353,15 +28461,60 @@
               ev.preventDefault();
               ev.stopPropagation();
               const rel = notifFormatRelative(t.replyAt);
-              let body = t.fullBody || t.snippet || "";
+              // Plain-text fallback (used only if the html fetch below fails).
+              let fallback = t.fullBody || t.snippet || "";
               if (t.myReplyFull) {
                 const myRel = notifFormatRelative(t.myReplyAt);
-                body += "\n\n──────────\nYou replied" + (myRel ? " · " + myRel : "") + ":\n" + t.myReplyFull;
+                fallback += "\n\n──────────\nYou replied" + (myRel ? " · " + myRel : "") + ":\n" + t.myReplyFull;
               }
               openCommentFullscreen({
                 title: t.subject || "Ticket #" + t.id,
                 meta: (t.authorName || "Someone") + " replied" + (rel ? " · " + rel : ""),
-                bodyText: body,
+                bodyText: fallback,
+                // Render the real Zendesk html_body so it looks exactly like
+                // Zendesk (formatting, embedded images, signature) — fetched on
+                // demand to keep the cache lean and the content un-truncated.
+                load: async () => {
+                  const meId = await zendeskResolveMyId();
+                  const cj = await window.ZendeskBridge.apiRequest(
+                    "GET",
+                    "/tickets/" + encodeURIComponent(t.id) + "/comments.json?sort_order=desc&per_page=30",
+                  );
+                  const comments = (Array.isArray(cj?.comments) ? cj.comments : [])
+                    .slice()
+                    .sort((a, b) => (Date.parse(String(b?.created_at ?? "")) || 0) - (Date.parse(String(a?.created_at ?? "")) || 0));
+                  const incoming = comments.find((c) => c?.public === true && Number(c?.author_id) !== meId);
+                  const mine = comments.find((c) => c?.public === true && Number(c?.author_id) === meId);
+                  const renderC = (c) => {
+                    const h = String(c?.html_body ?? "").trim();
+                    const inner = h
+                      ? zendeskSanitizeHtml(h)
+                      : escapeHtml(String(c?.body ?? "")).replace(/\n/g, "<br>");
+                    return '<div class="zendeskMsgBody">' + inner + "</div>";
+                  };
+                  let html = "";
+                  if (incoming) {
+                    html +=
+                      '<div class="notifFsCommentHead">' +
+                      escapeHtml(t.authorName || "Someone") +
+                      " replied" +
+                      (rel ? " · " + escapeHtml(rel) : "") +
+                      "</div>" +
+                      renderC(incoming);
+                  }
+                  const incomingTs = incoming ? Date.parse(String(incoming.created_at ?? "")) || 0 : 0;
+                  const mineTs = mine ? Date.parse(String(mine.created_at ?? "")) || 0 : 0;
+                  if (mine && mineTs > incomingTs) {
+                    const myRel = notifFormatRelative(mine.created_at);
+                    html +=
+                      '<div class="notifFsCommentHead notifFsMine">↩ You replied' +
+                      (myRel ? " · " + escapeHtml(myRel) : "") +
+                      "</div>" +
+                      renderC(mine);
+                  }
+                  if (!html) html = '<div class="zendeskMsgBody">' + escapeHtml(fallback) + "</div>";
+                  return { bodyHtml: html };
+                },
               });
             });
             body.appendChild(item);
