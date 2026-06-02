@@ -28624,6 +28624,9 @@
 
         const openNotifDrawer = async () => {
           if (notifDrawerEl) { closeNotifDrawer(); return; }
+          // Every fresh open starts at the last 1 month — "Show more" expansions
+          // don't carry over across opens (or page refreshes).
+          zdMonthsShown = 1;
           const bridge = window.RocketlaneBridge;
           if (!bridge?.fetchNotificationGroups) {
             alert("Rocketlane bridge needs to be updated (Tampermonkey userscript v1.2.0+).");
