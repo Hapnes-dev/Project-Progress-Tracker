@@ -5302,6 +5302,9 @@
         padding: 10px 12px;
         border-top: 1px solid var(--border);
       }
+      /* Filter chips now live inside the collapsible Rocketlane body, so they
+         collapse with the section (mirrors the Zendesk filters in their body). */
+      .notifRlFilters { padding: 6px 14px 2px; }
       /* "You replied" line + snippet — your reply back, under the incoming one. */
       .notifZdMyReply {
         font-size: 11.5px;
@@ -28951,7 +28954,7 @@
           head.appendChild(closeBtn);
 
           const filtersWrap = document.createElement("div");
-          filtersWrap.className = "notifFilters";
+          filtersWrap.className = "notifZdFilters notifRlFilters";
           const filterDefs = [
             { key: "all",          label: "All" },
             { key: "assignedToMe", label: "Tasks I'm assigned to" },
@@ -28996,7 +28999,7 @@
           for (const def of filterDefs) {
             const chip = document.createElement("button");
             chip.type = "button";
-            chip.className = "notifFilterChip" + (def.key === notifFilter ? " active" : "");
+            chip.className = "notifZdFilterChip" + (def.key === notifFilter ? " active" : "");
             chip.textContent = def.label;
             chip.addEventListener("click", () => {
               notifFilter = def.key;
@@ -29041,7 +29044,6 @@
           });
 
           notifDrawerEl.appendChild(head);
-          notifDrawerEl.appendChild(filtersWrap);
           notifDrawerEl.appendChild(tabs);
           // Zendesk section + Rocketlane list share ONE scroll region so a long
           // Zendesk list scrolls instead of pushing the list off the drawer.
@@ -29070,13 +29072,19 @@
           rlHeader.appendChild(rlCaret);
           rlHeader.appendChild(rlLabel);
           rlHeader.appendChild(rlCount);
-          list.style.display = rlCollapsed ? "none" : "";
+          // Body holds the filter chips + the list, so the WHOLE section
+          // (filters included) collapses under the header — like Zendesk.
+          const rlBody = document.createElement("div");
+          rlBody.className = "notifRlBody";
+          rlBody.appendChild(filtersWrap);
+          rlBody.appendChild(list);
+          rlBody.style.display = rlCollapsed ? "none" : "";
           const rlToggle = () => {
             const next = !rocketlaneGetNotifCollapsed();
             rocketlaneSetNotifCollapsed(next);
             rlHeader.classList.toggle("collapsed", next);
             rlHeader.setAttribute("aria-expanded", next ? "false" : "true");
-            list.style.display = next ? "none" : "";
+            rlBody.style.display = next ? "none" : "";
           };
           rlHeader.addEventListener("click", rlToggle);
           rlHeader.addEventListener("keydown", (e) => {
@@ -29093,7 +29101,7 @@
           updateRlCount();
 
           scrollWrap.appendChild(rlHeader);
-          scrollWrap.appendChild(list);
+          scrollWrap.appendChild(rlBody);
           notifDrawerEl.appendChild(scrollWrap);
 
           // Apply any saved width, then add a right-edge drag handle to resize.
