@@ -8895,6 +8895,31 @@
         } catch (_) {}
       }
 
+      // Strip a trailing email signature from a plain-text comment body so card
+      // PREVIEWS show the message, not the sign-off + name + title + footer.
+      // Cuts at the first standalone sign-off line (English/Norwegian) or the
+      // RFC "-- " delimiter. Conservative: only whole-line sign-offs match, so
+      // prose like "Best regards on the launch" is never eaten, and if the
+      // sign-off is the very first line (nothing precedes it) the body is left
+      // intact (avoids an empty preview). The full body is kept elsewhere for
+      // the fullscreen reader.
+      const ZENDESK_SIGNOFF_RE =
+        /^(med vennlig hilsen|vennlig hilsen|venlig hilsen|beste hilsen|best regards|kind regards|warm regards|regards|sincerely|mvh|m\.v\.h\.|hilsen)[\s,.!–—-]*$/i;
+      function zendeskStripSignature(text) {
+        const raw = String(text ?? "");
+        if (!raw) return raw;
+        const lines = raw.split(/\r?\n/);
+        for (let i = 0; i < lines.length; i++) {
+          const t = lines[i].trim();
+          if (!t) continue;
+          if (t === "--" || ZENDESK_SIGNOFF_RE.test(t)) {
+            const before = lines.slice(0, i).join("\n").trim();
+            return before || raw; // don't strip if nothing meaningful precedes
+          }
+        }
+        return raw;
+      }
+
       /**
        * Find Zendesk tickets assigned to me with a NEW public reply (written
        * by someone else) since `sinceMs`. Returns a count (for the bell badge)
@@ -9030,9 +9055,10 @@
               // (e.g. "Sendt fra Outlook for iOS"), so they arrive already
               // corrupted and unrecoverable — drop them rather than show "◊◊".
               const rawBody = String(lp.body ?? "").replace(/�/g, "").trim();
-              const collapsed = rawBody.replace(/\s+/g, " ");
+              // Snippet = signature stripped; fullBody = the complete message.
+              const collapsed = zendeskStripSignature(rawBody).replace(/\s+/g, " ");
               const myRaw = entry.myReply ? String(entry.myReply.body ?? "").replace(/�/g, "").trim() : "";
-              const myCollapsed = myRaw.replace(/\s+/g, " ");
+              const myCollapsed = zendeskStripSignature(myRaw).replace(/\s+/g, " ");
               found.push({
                 id: t.id,
                 subject: String(t.subject ?? "").trim() || "Ticket #" + t.id,
