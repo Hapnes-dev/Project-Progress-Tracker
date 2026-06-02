@@ -746,6 +746,13 @@ Every code change ships through this verification flow before being declared don
 
 ## Recent significant changes (chronological)
 
+- **Subtasks: single-level nesting + parent-phase sync**
+  - A subtask can't have its own subtask. The `+ Add subtask` affordance is omitted on subtask rows (`isSubtask = depthByTask > 0`), and `addSubtask` hard-guards (alerts) when the parent already has `meta.parentLocalTaskId`/`parentTaskId`.
+  - On create, a subtask syncs to Rocketlane **in its parent's phase** — read the parent task's `projectPhase` and pass it through; never derive a phase from the area label (that could POST a non-existent phase and 500, silently aborting the create). Falls back to the area phase only when the parent has no resolvable phase.
+- **Task status → Rocketlane: dead-link resilience**
+  - When a task is linked to a Rocketlane task that's been deleted/restricted, a status change used to throw 403/404 and `setTaskStatus` reverted the local status (looked like "can't change subtask status"). Now `rocketlaneIsTaskGoneError(e)` (403 ACCESS_RESTRICTED / 404) is detected: the local status is **kept**, the dead `meta.rocketlaneTaskId`/`rocketlaneProjectId` link is cleared, and a clear toast shows — instead of reverting. Healthy links sync unchanged (`rocketlaneUpdateTaskStatus` → `PUT /tasks/{id}` with `{ fields:[{fieldId,fieldValue}] }`).
+- **Task-notes overview cards (top of the detail panel)**
+  - The "Task notes" summary now shows each task's **name** (not just its category), so notes are traceable to their task. Subtasks get a `↳` marker + an "under &lt;parent&gt;" line. Inclusion rule unchanged: a task shows when it's not completed AND (has a note OR a non-todo/in-progress status).
 - **Matcher accuracy: 6 audit gaps closed (calibrated weights kept)**
   - `detectExistingLinkMismatch`: same-id-shape guard — FK-compare only when the saved URL's recordId and the RL field are both-UUID or both-not-UUID, so a correct Younium `/orders/<uuid>` link is no longer falsely flagged vs the `O-xxxx` order-number field.
   - `decideMatchOutcome`: the "beats #2 by ≥15" lead is measured on the RAW uncapped `score`, not `percent` (which clamps at 100 and faked ties / hid real gaps).

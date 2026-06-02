@@ -14,7 +14,7 @@ Prefer a local copy? Download `Project Progress Tracker.html` and open it from y
 
 ### Project management
 - **Project list with status pills**, team-group workload sections (Team kulde + Others), sorting & filtering, plant ID quick-link to PANG.
-- **Per-project detail view**: notes, status, due dates, custom links (Oneflow / Younium / HubSpot), task categories with sub-tasks, expandable task notes & descriptions, in-progress / blocked / waiting-on-partner / need-assistance status.
+- **Per-project detail view**: notes, status, due dates, custom links (Oneflow / Younium / HubSpot), task categories with **one-level sub-tasks** (a subtask can't have its own subtask; created subtasks sync to Rocketlane in the parent's phase), expandable task notes & descriptions, in-progress / blocked / waiting-on-partner / need-assistance status.
 - **Per-project toolbar shortcuts**: 🚀 Rocketlane, 📁 Files, 📦 Order info, ☄️ PANG (plant control), 👥 BAF (user database), Edit, Remove.
 - **📁 Files popover** has a **⬇ Download all (N)** button — picks a destination folder once via the File System Access API (`showDirectoryPicker`) and writes every project attachment straight into it. Filename collisions auto-resolve as `name (1).ext`, `name (2).ext`. Falls back to per-file `<a download>` on browsers without the API.
 
@@ -33,7 +33,7 @@ Prefer a local copy? Download `Project Progress Tracker.html` and open it from y
 ### Rocketlane integration
 - **Sync (bidirectional)**: 5-min pull when tab is visible (resumes on focus), push-on-change within 2.5s, manual single-project sync via the "RL sync" chip.
 - **Click any project → instant single-project sync** of just that one (no fan-out).
-- **Tasks**: add / remove with upstream propagation (delete is gated by ⚠ confirm).
+- **Tasks**: add / remove with upstream propagation (delete is gated by ⚠ confirm). **Task status** changes push to Rocketlane; if a task's Rocketlane counterpart was deleted or made access-restricted, the tracker keeps your local status and clears the dead link instead of reverting.
 - **Chat history viewer** for project conversations: Private + General tabs, file attachments, inline image previews, lightbox, @-mention picker (diacritic-insensitive), notifications drawer with filter chips and rich previews.
 - **Hubspot Deal Description writer**: when you save a project, the Rocketlane custom field "Hubspot Deal Description" is updated with a plain `Links:` block listing the project's Oneflow / Younium / HubSpot URLs. Field is discovered via the tenant `/fields` endpoint when it doesn't yet exist on the project.
 
@@ -45,6 +45,8 @@ Expand any task to edit two independent notes that mirror Rocketlane's task draw
 - **Private note** — hidden behind a **+ Add a private note** link (matching Rocketlane's own affordance); click it to reveal a cream editor. For linked tasks this syncs to Rocketlane's task-level **`privateTaskDescription`** field — the same private note shown in the task drawer — via `PUT /projects/<projectId>/tasks/<taskId>/mini`. **Clearing** the note in the tracker also clears it in Rocketlane, and notes authored **in** Rocketlane pull back into the tracker on every sync.
 
 Stored locally as `t.privateNote`, kept separate from the description so the two never collide. Saved on Enter or click-away.
+
+A **Task notes overview** at the top of the project detail surfaces every task that needs attention — any task that isn't completed and either has a note or a non-"To do"/"In progress" status — as a card showing the category, **task name**, status, and note. Subtasks are marked with a `↳` and their parent ("under &lt;parent&gt;"). Click a card to jump to that task in its category.
 
 ### Zendesk Tasks (per project)
 - **Section** under "Chat history" in the project detail panel, sorted by **last public reply** (not generic `updated_at`).
