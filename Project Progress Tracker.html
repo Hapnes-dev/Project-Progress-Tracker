@@ -23752,18 +23752,14 @@
                 const htmlBody = String(c?.html_body ?? "").trim();
                 if (htmlBody) {
                   body.innerHTML = sanitizeZendeskHtml(htmlBody);
-                  // Hook image errors → graceful file-link fallback.
+                  // Hide images that fail to load (deleted/cross-origin Zendesk
+                  // attachments, e.g. a stale signature image) so the thread
+                  // reads exactly like Zendesk — no broken-image icon or
+                  // "📎 image" placeholder.
                   for (const img of body.querySelectorAll("img")) {
-                    img.addEventListener("error", () => {
-                      const link = document.createElement("a");
-                      link.href = img.src;
-                      link.target = "_blank";
-                      link.rel = "noopener noreferrer";
-                      link.className = "zendeskMsgFile";
-                      link.innerHTML = "📎 <span class=\"zendeskMsgFileName\"></span>";
-                      link.querySelector(".zendeskMsgFileName").textContent = img.alt || "image";
-                      img.replaceWith(link);
-                    });
+                    const hide = () => { img.style.display = "none"; };
+                    img.addEventListener("error", hide, { once: true });
+                    if (img.complete && img.naturalWidth === 0) hide();
                   }
                 } else {
                   body.appendChild(renderCommentBodyPlain(c?.body));
