@@ -74,7 +74,7 @@ The single userscript handles all five platforms:
 
 ### State persistence
 - `state` is the in-memory app state; persisted to `localStorage` under `progress_tracker_state_v1` via `saveState(state)`.
-- UI-only state (sort/filter/search prefs, chat scroll positions, expanded task IDs, expanded categories per project, team-group collapse state, Zendesk-section collapse state) lives in separate `localStorage` keys or in-memory Sets.
+- UI-only state (sort/filter/search prefs, chat scroll positions, expanded task IDs, expanded categories per project, team-group collapse state, Zendesk- and Rocketlane-section collapse state) lives in separate `localStorage` keys or in-memory Sets.
 - `touchProject(id)` updates `updatedAt` AND queues a Rocketlane sync.
 - `touchProjectLocal(id)` updates `updatedAt` ONLY — does not sync. Used for owner renames, category removal, task removal of unlinked tasks.
 
@@ -201,6 +201,7 @@ The 🔔 (`#btnNotifications` + `#notifBadge`) lives in the project-list header;
 | Zendesk ticket comment cache — keyed by ticket `updated_at`, capped at 80 (v4: latest INCOMING reply + a `repliedByMe` flag + my own latest reply `myReply` when I replied last) | `zendesk_ticket_cache_v4` |
 | Zendesk author-name cache — by user id | `zendesk_author_cache_v1` |
 | Zendesk list filters — Hide-solved/closed (default ON) + reply-state (`all`/`awaiting`/`replied`) | `zendesk_notif_hide_solved_v1`, `zendesk_notif_reply_filter_v1` |
+| Rocketlane drawer list collapse state — default expanded; toggled via the "Rocketlane · notifications" header (`.notifRlHeader`, reuses `.notifZdHeader` look) | `rocketlane_notif_collapsed_v1` |
 
 `getNotificationLastSeen()` is still read and `max()`'d in, so marking seen in the Rocketlane app (a newer server value) is also respected. The server `markNotificationsSeen()` is still attempted best-effort so it self-heals if the bridge is ever fixed.
 
