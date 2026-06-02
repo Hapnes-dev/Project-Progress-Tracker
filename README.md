@@ -49,7 +49,7 @@ Stored locally as `t.privateNote`, kept separate from the description so the two
 A **Task notes overview** at the top of the project detail surfaces every task that needs attention — any task that isn't completed and either has a note or a non-"To do"/"In progress" status — as a card showing the category, **task name**, status, and note. Subtasks are marked with a `↳` and their parent ("under &lt;parent&gt;"). Click a card to jump to that task in its category.
 
 ### Zendesk Tasks (per project)
-- **Section** under "Chat history" in the project detail panel, sorted by **last public reply** (not generic `updated_at`).
+- **Section** under "Chat history" in the project detail panel, sorted by **last public reply** (not generic `updated_at`). Matches tickets by **plant ID and store name** (merged), so tickets that name the store but not the plant number still show.
 - Each row shows status pill + subject + "Last reply 25.05 14:17 (i dag)" (24-h Oslo timezone, Norwegian locale).
 - **Inline preview** shows the newest comment + a "Right-click to open fullscreen — read full thread & reply" hint.
 - **Right-click anywhere on a ticket card** → fullscreen overlay (portal-mounted to `<body>` to escape `contain: layout` clipping). Full conversation rendered from sanitized `html_body` (signatures, inline images, attachments), with a Public reply / Internal note toggle and Ctrl+Enter shortcut.

@@ -176,7 +176,7 @@ Zendesk + Rocketlane links are intentionally excluded — Zendesk lives in the p
 
 - Lives in `picWrap` right under "Chat history" (so it inherits the chat-collapse animations).
 - Renders only when the project name starts with a numeric plant ID (extracted via `/^\s*(\d+)\b/`).
-- Search endpoint: `GET /api/v2/search.json?query=type:ticket+<plantId>` (browser auto-sends Zendesk session cookie via the bridge).
+- Search endpoint: `GET /api/v2/search.json` (browser auto-sends Zendesk session cookie via the bridge). Runs **two** queries and merges deduped by id: `type:ticket <plantId>` AND `type:ticket "<store name>"` (the descriptive part of the project name, ≥4 chars). The name query catches tickets that reference the store but not the plant number (e.g. "Fwd: Holdbart Molde. Modbus liste Cubo" on 10228). Two queries, not one `(A OR B)` — Zendesk's parenthesized boolean returns 0 for `type:` + a quoted phrase.
 - Hydrates each ticket with `lastReplyAt` by fetching `/api/v2/tickets/<id>/comments.json?include=users&sort_order=desc&per_page=20` per ticket. Concurrency capped at 8 via `mapWithConcurrency`.
 - Sorts by `lastReplyAt desc` (newest reply first) — NOT by generic `updated_at` which fires on tag/status changes too.
 - Inline preview shows only the newest comment + hint pill. Right-click anywhere on the card → fullscreen overlay (portal-mounted to `<body>` to escape `.chatHistoryBody { contain: layout paint style }` clipping).
