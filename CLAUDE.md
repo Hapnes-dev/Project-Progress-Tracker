@@ -216,6 +216,8 @@ The 🔔 (`#btnNotifications` + `#notifBadge`) lives in the project-list header;
 
 **Rocketlane fetch** (`fetchAllNotifGroups`): merges `filter:All` + `filter:Mentions` (Mentions is NOT a subset of All), dedupes notifications by id, sorts groups+notifications desc. A short in-memory TTL (~10s, `notifGroupsRaw`/`notifGroupsRawAt`) dedupes the badge-poll + an immediate drawer-open so it doesn't fetch twice back-to-back.
 
+**Rocketlane drawer layout**: the source filter chips (*All / Tasks I'm assigned to / Mentions / Assigned to the team*, in-memory `notifFilter`, client-side via `renderNotifList(list, notifGroupsCache, notifFilter)`) live **inside** the collapsible Rocketlane section body (`.notifRlBody`) — `.notifRlHeader` toggles `rlBody` (chips + list together), and the chips reuse the Zendesk `.notifZdFilters`/`.notifZdFilterChip` styling. The New/Cleared tabs + "Clear all" stay above the scroll region.
+
 ### Auto-find buttons (🔎)
 
 Each link field in the Edit dialog has a 🔎 Find button. They use **document delegation** for the click handler:
