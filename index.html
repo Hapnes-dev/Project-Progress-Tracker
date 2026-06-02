@@ -8769,7 +8769,7 @@
       // the cache instead of calling the comments API. Author names are cached
       // by id (they rarely change). Persisted in localStorage so the cache
       // survives reloads; capped to bound storage.
-      const ZENDESK_TICKET_CACHE_KEY = "zendesk_ticket_cache_v1";
+      const ZENDESK_TICKET_CACHE_KEY = "zendesk_ticket_cache_v2"; // v2: stores latest INCOMING reply
       const ZENDESK_AUTHOR_CACHE_KEY = "zendesk_author_cache_v1";
       const ZENDESK_TICKET_CACHE_MAX = 80;
       function zendeskLoadJson(key) {
@@ -8876,10 +8876,14 @@
                     (a, b) =>
                       (Date.parse(String(b?.created_at ?? "")) || 0) - (Date.parse(String(a?.created_at ?? "")) || 0),
                   );
-                const lp = sorted.find((c) => c?.public === true);
+                // The latest INCOMING public comment (someone else's). We key
+                // on the incoming reply — NOT the newest public comment overall
+                // — so a case stays listed even after I reply to it (my reply
+                // becoming the newest comment must not make it disappear).
+                const lp = sorted.find((c) => c?.public === true && Number(c?.author_id) !== meId);
                 entry = {
                   updatedAt,
-                  latestPublic: lp
+                  latestIncoming: lp
                     ? {
                         created_at: String(lp.created_at ?? ""),
                         author_id: Number(lp.author_id) || 0,
@@ -8893,11 +8897,13 @@
                 continue; // skip this ticket on error
               }
             }
-            const lp = entry.latestPublic;
+            const lp = entry.latestIncoming;
             if (!lp) continue;
             const ts = Date.parse(String(lp.created_at ?? "")) || 0;
-            const byMe = Number(lp.author_id) === meId;
-            if (ts > since && !byMe) {
+            // No by-me check: lp is already the latest reply from someone else,
+            // so a case I've replied to stays listed (until its incoming reply
+            // ages out of the window or a newer incoming reply replaces it).
+            if (ts > since) {
               // Strip U+FFFD replacement chars: Zendesk degrades emoji to
               // U+FFFD in BOTH body and html_body when ingesting some emails
               // (e.g. "Sendt fra Outlook for iOS"), so they arrive already
