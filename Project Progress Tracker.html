@@ -28239,6 +28239,14 @@
             if (h) {
               bodyEl.style.whiteSpace = "normal";
               bodyEl.innerHTML = h; // already sanitized upstream
+              // Hide images that fail to load (deleted/cross-origin Zendesk
+              // attachments, e.g. a stale signature image) so the reader shows
+              // no broken-image icons.
+              bodyEl.querySelectorAll("img").forEach((img) => {
+                const hide = () => { img.style.display = "none"; };
+                img.addEventListener("error", hide, { once: true });
+                if (img.complete && img.naturalWidth === 0) hide();
+              });
             } else {
               bodyEl.style.whiteSpace = "pre-wrap";
               bodyEl.textContent = String(res?.bodyText || "").trim() || "(no message body)";
