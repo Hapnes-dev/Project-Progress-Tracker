@@ -5267,6 +5267,51 @@
       }
       .notifZdBody { display: grid; gap: 8px; }
       .notifZdEmpty { font-size: 12px; color: var(--muted2); }
+      /* Filter row (reply-state segmented + Hide solved/closed toggle). */
+      .notifZdFilters {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+      }
+      .notifZdFilterChip {
+        appearance: none;
+        font: inherit;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0;
+        text-transform: none;
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 2px 9px;
+        cursor: pointer;
+        line-height: 1.5;
+      }
+      .notifZdFilterChip:hover { color: var(--text); border-color: var(--hairline-strong); }
+      .notifZdFilterChip.active {
+        color: #fff;
+        background: var(--accent, #60a5fa);
+        border-color: var(--accent, #60a5fa);
+      }
+      .notifZdFilterGap { flex: 1 1 auto; }
+      .notifZdShowMore {
+        appearance: none;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--accent, #60a5fa);
+        background: transparent;
+        border: 1px dashed var(--hairline-strong);
+        border-radius: 8px;
+        padding: 7px 10px;
+        cursor: pointer;
+        text-align: center;
+      }
+      .notifZdShowMore:hover { background: var(--accent-soft, rgba(96, 165, 250, 0.08)); }
+      .notifZdShowMore[disabled] { opacity: 0.6; cursor: default; }
+      .notifZdMaxNote { font-size: 11px; color: var(--muted2); text-align: center; }
       .notifZdItem {
         border: 1px solid var(--border);
         /* Neutral left edge by default (already-read replies). The blue accent
@@ -8751,6 +8796,36 @@
         } catch (_) {}
       }
 
+      // Zendesk recent-replies list filters (persisted, UI-only).
+      // hideSolved default = ON (solved/closed hidden); replyFilter default "all".
+      const ZENDESK_NOTIF_HIDE_SOLVED_KEY = "zendesk_notif_hide_solved_v1";
+      const ZENDESK_NOTIF_REPLY_FILTER_KEY = "zendesk_notif_reply_filter_v1";
+      function zendeskGetHideSolved() {
+        try {
+          return localStorage.getItem(ZENDESK_NOTIF_HIDE_SOLVED_KEY) !== "0"; // default ON
+        } catch (_) {
+          return true;
+        }
+      }
+      function zendeskSetHideSolved(v) {
+        try {
+          localStorage.setItem(ZENDESK_NOTIF_HIDE_SOLVED_KEY, v ? "1" : "0");
+        } catch (_) {}
+      }
+      function zendeskGetReplyFilter() {
+        try {
+          const v = localStorage.getItem(ZENDESK_NOTIF_REPLY_FILTER_KEY);
+          return v === "awaiting" || v === "replied" ? v : "all";
+        } catch (_) {
+          return "all";
+        }
+      }
+      function zendeskSetReplyFilter(v) {
+        try {
+          localStorage.setItem(ZENDESK_NOTIF_REPLY_FILTER_KEY, v);
+        } catch (_) {}
+      }
+
       async function zendeskResolveMyId() {
         if (zendeskNotifMeIdCache) return zendeskNotifMeIdCache;
         try {
@@ -8769,7 +8844,7 @@
       // the cache instead of calling the comments API. Author names are cached
       // by id (they rarely change). Persisted in localStorage so the cache
       // survives reloads; capped to bound storage.
-      const ZENDESK_TICKET_CACHE_KEY = "zendesk_ticket_cache_v2"; // v2: stores latest INCOMING reply
+      const ZENDESK_TICKET_CACHE_KEY = "zendesk_ticket_cache_v3"; // v3: + repliedByMe flag
       const ZENDESK_AUTHOR_CACHE_KEY = "zendesk_author_cache_v1";
       const ZENDESK_TICKET_CACHE_MAX = 80;
       function zendeskLoadJson(key) {
@@ -8810,7 +8885,7 @@
        * @param {number} sinceMs epoch ms
        * @returns {Promise<{count:number, newestTs:number, tickets:Array}>}
        */
-      async function zendeskFetchUnreadInfo(sinceMs) {
+      async function zendeskFetchUnreadInfo(sinceMs, opts) {
         const empty = { count: 0, newestTs: 0, tickets: [] };
         const bridge = typeof window !== "undefined" ? window.ZendeskBridge : null;
         if (!bridge || typeof bridge.apiRequest !== "function") return empty;
@@ -8818,6 +8893,8 @@
         if (!meId) return empty;
 
         const since = Number(sinceMs) || 0;
+        const maxCandidates = Math.max(1, Number(opts?.maxCandidates) || 50);
+        const maxPages = Math.max(1, Number(opts?.maxPages) || 1);
         // Zendesk search `updated>` takes a date (YYYY-MM-DD). Use the day
         // BEFORE last-seen so a same-day reply is never filtered out by the
         // coarse date; the precise comparison happens per-comment below.
@@ -8827,21 +8904,34 @@
 
         let candidates = [];
         try {
-          const params = new URLSearchParams({
-            query: "type:ticket assignee:" + meId + " updated>" + day,
-            sort_by: "updated_at",
-            sort_order: "desc",
-            per_page: "100",
-          });
-          const json = await bridge.apiRequest("GET", "/search.json?" + params.toString());
-          const results = Array.isArray(json?.results) ? json.results : [];
-          // Narrow to tickets actually updated since last-seen (ms precision)
-          // so we only deep-fetch comments for the few that changed — keeps
-          // the 2-min poll cheap.
+          // Page through search results (sorted updated_at desc) until we've
+          // covered the window (oldest result older than `since`), a page comes
+          // back short, or we hit the page cap. maxPages > 1 is what lets the
+          // "Show more months" button reach tickets beyond the first 100.
+          const perPage = 100;
+          let results = [];
+          for (let page = 1; page <= maxPages; page++) {
+            const params = new URLSearchParams({
+              query: "type:ticket assignee:" + meId + " updated>" + day,
+              sort_by: "updated_at",
+              sort_order: "desc",
+              per_page: String(perPage),
+              page: String(page),
+            });
+            const json = await bridge.apiRequest("GET", "/search.json?" + params.toString());
+            const pageResults = (Array.isArray(json?.results) ? json.results : []).filter(
+              (r) => r?.result_type === "ticket",
+            );
+            results = results.concat(pageResults);
+            if (pageResults.length < perPage) break;
+            const oldest = pageResults[pageResults.length - 1];
+            if ((Date.parse(String(oldest?.updated_at ?? "")) || 0) <= since) break;
+          }
+          // Narrow to tickets actually updated since `since` (ms precision) so
+          // we only deep-fetch comments for the ones in-window.
           candidates = results
-            .filter((r) => r?.result_type === "ticket")
             .filter((t) => (Date.parse(String(t?.updated_at ?? "")) || 0) > since)
-            .slice(0, 50); // bound comment fetches (results are updated_at desc)
+            .slice(0, maxCandidates);
         } catch (e) {
           console.debug("[ZendeskNotif] search failed:", e?.message ?? e);
           return empty;
@@ -8881,8 +8971,12 @@
                 // — so a case stays listed even after I reply to it (my reply
                 // becoming the newest comment must not make it disappear).
                 const lp = sorted.find((c) => c?.public === true && Number(c?.author_id) !== meId);
+                // Whether MY reply is the newest public comment (I've responded
+                // since the incoming reply) — drives the Awaiting/Replied filter.
+                const newestPublic = sorted.find((c) => c?.public === true);
                 entry = {
                   updatedAt,
+                  repliedByMe: !!(newestPublic && Number(newestPublic.author_id) === meId),
                   latestIncoming: lp
                     ? {
                         created_at: String(lp.created_at ?? ""),
@@ -8917,6 +9011,7 @@
                 replyAt: String(lp.created_at ?? ""),
                 replyTs: ts,
                 authorId: Number(lp.author_id) || 0,
+                repliedByMe: !!entry.repliedByMe,
                 snippet: collapsed.length > 160 ? collapsed.slice(0, 160) + "…" : collapsed,
                 fullBody: rawBody,
               });
@@ -27525,6 +27620,10 @@
         // drawer is open so the 2-min poll can refresh it in place; null when
         // the drawer is closed.
         let notifZdRefresh = null;
+        // How many months of Zendesk replies the list currently spans. Starts at
+        // 1 (last month); the "Show more" button bumps it up to ZD_MAX_MONTHS.
+        let zdMonthsShown = 1;
+        const ZD_MAX_MONTHS = 6;
         // Right-click fullscreen reader for a comment (Zendesk reply / RL chat).
         let activeCommentFullscreenContext = null;
         // Cache project names by Rocketlane projectId so we can replace
@@ -28027,8 +28126,17 @@
           if (!sectionEl) return;
           sectionEl.textContent = "";
           const newSince = Number(newSinceMs) || 0;
-          const items = Array.isArray(tickets) ? tickets : [];
           const collapsed = zendeskGetNotifCollapsed();
+          const hideSolved = zendeskGetHideSolved();
+          const replyFilter = zendeskGetReplyFilter(); // "all" | "awaiting" | "replied"
+          const all = Array.isArray(tickets) ? tickets : [];
+          const items = all.filter((t) => {
+            const st = String(t.status || "").toLowerCase();
+            if (hideSolved && (st === "solved" || st === "closed")) return false;
+            if (replyFilter === "awaiting" && t.repliedByMe) return false;
+            if (replyFilter === "replied" && !t.repliedByMe) return false;
+            return true;
+          });
 
           // Clickable header → collapses the list (state persisted in localStorage).
           const header = document.createElement("div");
@@ -28073,12 +28181,47 @@
             }
           });
 
+          // Re-render with the same data after a filter toggle (no re-fetch —
+          // filters are just a view over the already-fetched list).
+          const rerender = () => renderZdSection(sectionEl, tickets, newSinceMs);
+
+          // Filter row: reply-state segmented (All / Awaiting / Replied) +
+          // a Hide solved/closed toggle.
+          const filters = document.createElement("div");
+          filters.className = "notifZdFilters";
+          const mkChip = (text, active, onClick, title) => {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "notifZdFilterChip" + (active ? " active" : "");
+            b.textContent = text;
+            if (title) b.title = title;
+            b.addEventListener("click", (ev) => {
+              ev.stopPropagation();
+              onClick();
+              rerender();
+            });
+            return b;
+          };
+          [
+            { key: "all", label: "All", title: "Show all replies" },
+            { key: "awaiting", label: "Awaiting", title: "Show only tickets awaiting your reply" },
+            { key: "replied", label: "Replied", title: "Show only tickets you've replied to" },
+          ].forEach((opt) => {
+            filters.appendChild(mkChip(opt.label, replyFilter === opt.key, () => zendeskSetReplyFilter(opt.key), opt.title));
+          });
+          const gap = document.createElement("span");
+          gap.className = "notifZdFilterGap";
+          filters.appendChild(gap);
+          filters.appendChild(
+            mkChip("Hide solved/closed", hideSolved, () => zendeskSetHideSolved(!hideSolved), "Toggle showing solved & closed tickets"),
+          );
+          body.appendChild(filters);
+
           if (!items.length) {
             const empty = document.createElement("div");
             empty.className = "notifZdEmpty";
-            empty.textContent = "No recent Zendesk replies.";
+            empty.textContent = all.length ? "No replies match these filters." : "No recent Zendesk replies.";
             body.appendChild(empty);
-            return;
           }
           for (const t of items) {
             const item = document.createElement("div");
@@ -28143,6 +28286,29 @@
               });
             });
             body.appendChild(item);
+          }
+
+          // "Show more" — widen the window by one month and re-fetch. Hidden at
+          // the cap; lives in the body so it collapses with the list.
+          if (zdMonthsShown < ZD_MAX_MONTHS) {
+            const more = document.createElement("button");
+            more.type = "button";
+            more.className = "notifZdShowMore";
+            more.textContent = "Show more — +1 month (showing " + zdMonthsShown + " mo)";
+            more.addEventListener("click", (ev) => {
+              ev.stopPropagation();
+              if (zdMonthsShown >= ZD_MAX_MONTHS || typeof notifZdRefresh !== "function") return;
+              zdMonthsShown += 1;
+              more.disabled = true;
+              more.textContent = "Loading…";
+              void notifZdRefresh();
+            });
+            body.appendChild(more);
+          } else {
+            const note = document.createElement("div");
+            note.className = "notifZdMaxNote";
+            note.textContent = "Showing the last " + ZD_MAX_MONTHS + " months (max).";
+            body.appendChild(note);
           }
         };
 
@@ -28420,11 +28586,16 @@
             }
 
             // Zendesk unread — tickets assigned to me with a new public reply
-            // (someone else's) since the client-side last-seen.
+            // (someone else's) since the client-side last-seen. Respect the
+            // "Hide solved/closed" filter so the badge matches the list.
             let zdUnread = 0;
             try {
               const info = await zendeskFetchUnreadInfo(zendeskGetNotifLastSeen());
-              zdUnread = Number(info?.count) || 0;
+              const hideSolved = zendeskGetHideSolved();
+              const zt = (info?.tickets || []).filter(
+                (t) => !hideSolved || !["solved", "closed"].includes(String(t.status || "").toLowerCase()),
+              );
+              zdUnread = zt.length;
             } catch (_) {}
 
             const total = rlUnread + zdUnread;
@@ -28620,7 +28791,14 @@
           // "New" flag — including ones that arrive while the drawer stays open.
           notifZdRefresh = async () => {
             try {
-              const zd = await zendeskFetchUnreadInfo(Date.now() - ZENDESK_LIST_WINDOW_MS);
+              // Window spans `zdMonthsShown` months (Show-more bumps it). Page
+              // the search enough to reach older tickets, and raise the
+              // candidate cap so a multi-month window isn't truncated.
+              const windowMs = zdMonthsShown * ZENDESK_LIST_WINDOW_MS;
+              const zd = await zendeskFetchUnreadInfo(Date.now() - windowMs, {
+                maxCandidates: 300,
+                maxPages: Math.min(10, zdMonthsShown + 2),
+              });
               notifZdTicketsCache = zd?.tickets || [];
               renderZdSection(zdSection, notifZdTicketsCache, zdSince);
             } catch (_) {
