@@ -198,16 +198,16 @@ The 🔔 (`#btnNotifications` + `#notifBadge`) lives in the project-list header;
 |---|---|
 | Rocketlane last-seen — advanced on bell open / Clear all | `rocketlane_notif_last_seen_v1` |
 | Zendesk last-seen — badge count cutoff; advanced on bell open / Clear all | `zendesk_notif_last_seen_v1` |
-| Zendesk ticket comment cache — keyed by ticket `updated_at`, capped at 80 | `zendesk_ticket_cache_v1` |
+| Zendesk ticket comment cache — keyed by ticket `updated_at`, capped at 80 (v2 stores the latest INCOMING reply) | `zendesk_ticket_cache_v2` |
 | Zendesk author-name cache — by user id | `zendesk_author_cache_v1` |
 
 `getNotificationLastSeen()` is still read and `max()`'d in, so marking seen in the Rocketlane app (a newer server value) is also respected. The server `markNotificationsSeen()` is still attempted best-effort so it self-heals if the bridge is ever fixed.
 
 **Zendesk** (`zendeskFetchUnreadInfo(sinceMs)` → `{count, newestTs, tickets}`):
 - Search `type:ticket assignee:{meId} updated>{day}` (1 cheap call) → candidates updated since `sinceMs`, capped at 40.
-- Per candidate: reuse the cached latest-public-comment when its `updated_at` is unchanged; otherwise fetch `/tickets/{id}/comments.json` and refresh the cache. **Only changed/new tickets hit the comments API** (verified: 14 comment calls cold, 0 on a no-change repeat). Author names resolved via one `/users/show_many.json` for ids not already cached.
-- "Qualifies" = newest PUBLIC comment is newer than `since` AND authored by someone other than me.
-- **Badge** calls it with `since = zendeskGetNotifLastSeen()` (unread count). **Drawer** calls it with `since = now − ZENDESK_LIST_WINDOW_MS` (7 days) for the persistent recent-replies list, and renders with `newSinceMs = lastSeen` so replies newer than last-seen get a red **New** pill. Sorted by reply time desc (new on top). `Clear all` re-renders from `notifZdTicketsCache` without New flags (keeps the list visible).
+- Per candidate: reuse the cached **latest incoming reply** (`entry.latestIncoming` = newest PUBLIC comment **not** authored by me) when its `updated_at` is unchanged; otherwise fetch `/tickets/{id}/comments.json` and refresh the cache. **Only changed/new tickets hit the comments API** (verified: 14 comment calls cold, 0 on a no-change repeat). Author names resolved via one `/users/show_many.json` for ids not already cached.
+- "Qualifies" = the latest **incoming** public reply (someone else's) is newer than `since`. It deliberately keys on the latest incoming reply, NOT the newest public comment overall, so **a case stays listed after I reply** (my reply becoming the newest comment must not drop it off). It leaves only when that incoming reply ages out of the window or a newer incoming reply replaces it.
+- **Badge** calls it with `since = zendeskGetNotifLastSeen()` (unread count). **Drawer** calls it with `since = now − ZENDESK_LIST_WINDOW_MS` (30 days / 1 month) for the persistent recent-replies list, and renders with `newSinceMs = lastSeen` so replies newer than last-seen get a red **New** pill. Sorted by reply time desc (new on top). `Clear all` re-renders from `notifZdTicketsCache` without New flags (keeps the list visible).
 
 **Right-click fullscreen reader** — `openCommentFullscreen({title, meta, bodyHtml, bodyText})`: read-only overlay reusing `.notesFullscreenOverlay` chrome at z-index 1400 (above the drawer). Wired on `contextmenu` for both `.notifZdItem` (Zendesk, full reply body) and Rocketlane notif items (`notifCommentHtmlFor(n)` / `notifCommentTextFor(n)`). Esc / × / backdrop close; the drawer's own Esc (`notifEscKey`) defers while `activeCommentFullscreenContext` is set.
 
