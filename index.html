@@ -759,6 +759,9 @@
       }
       /* Drop empty quote wrappers Outlook leaves behind (no text, no image). */
       .zendeskMsgBody blockquote:empty { display: none; }
+      /* Consecutive quote blocks (a forward is often split into several sibling
+         blockquotes) join into ONE continuous left-rule instead of several. */
+      .zendeskMsgBody blockquote + blockquote { margin-top: 0; }
       .zendeskMsgBody a {
         color: var(--accent);
         text-decoration: underline;
