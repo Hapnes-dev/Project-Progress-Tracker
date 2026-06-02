@@ -34,7 +34,7 @@ Prefer a local copy? Download `Project Progress Tracker.html` and open it from y
 - **Sync (bidirectional)**: 5-min pull when tab is visible (resumes on focus), push-on-change within 2.5s, manual single-project sync via the "RL sync" chip.
 - **Click any project → instant single-project sync** of just that one (no fan-out).
 - **Tasks**: add / remove with upstream propagation (delete is gated by ⚠ confirm). **Task status** changes push to Rocketlane; if a task's Rocketlane counterpart was deleted or made access-restricted, the tracker keeps your local status and clears the dead link instead of reverting.
-- **Chat history viewer** for project conversations: Private + General tabs, file attachments, inline image previews, lightbox, @-mention picker (diacritic-insensitive), notifications drawer with filter chips and rich previews.
+- **Chat history viewer** for project conversations: Private + General tabs, file attachments, inline image previews, lightbox, @-mention picker (diacritic-insensitive), notifications drawer with filter chips and rich previews. Image previews auto-refresh Rocketlane's expiring signed links (so they no longer go blank after the panel sits open — previously needed a page refresh).
 - **Hubspot Deal Description writer**: when you save a project, the Rocketlane custom field "Hubspot Deal Description" is updated with a plain `Links:` block listing the project's Oneflow / Younium / HubSpot URLs. Field is discovered via the tenant `/fields` endpoint when it doesn't yet exist on the project.
 
 ### Task notes & private notes (synced to Rocketlane)

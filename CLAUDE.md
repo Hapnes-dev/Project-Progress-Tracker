@@ -172,6 +172,14 @@ The HTML format from `buildProjectLinksHtml`:
 
 Zendesk + Rocketlane links are intentionally excluded — Zendesk lives in the per-project Zendesk Tasks section, and a Rocketlane self-link inside Rocketlane's own field is noise.
 
+### Chat history images (expiring signed S3 URLs)
+
+Rocketlane serves chat attachment + inline images as AWS S3 **pre-signed URLs that expire in ~5 min** (`X-Amz-Expires=299`, host `s3.us-east-1.amazonaws.com`). Chat messages are cached in-memory per project (`getRlChatCache` → `cache.msgs[kind]`) and replayed on tab-switch AND on every detail re-render (panel rebuild), so a chat rendered from cache more than ~5 min after the fetch used to show **blank images** (S3 returns 403) until a full page refresh refetched fresh URLs.
+
+Fix has two layers:
+- **Staleness refetch (primary):** both render-from-cache paths — `loadKind` and the panel-rebuild restore block — compare `cache.fetchedAtByKind[kind]` against `SIGNED_URL_TTL_MS` (4 min) and refetch fresh signed URLs (`fetchChatComments`) when stale. Fresh caches are NOT refetched, so there's no over-fetch on rapid tab-switches.
+- **Per-image error recovery (fallback):** each chat `<img>` gets an `error` handler (`onChatImgError`) that, debounced + rate-limited (8 s), refetches the conversation once and remaps every broken image by its stable **S3 object key** (the URL pathname survives re-signing — only the query string changes). A per-image retry cap of 2 prevents loops on a genuinely deleted file. This covers URLs that expire while the panel stays open (e.g. a `loading="lazy"` image scrolled into view after 5 min).
+
 ### Zendesk Tasks section (per project)
 
 - Lives in `picWrap` right under "Chat history" (so it inherits the chat-collapse animations).
