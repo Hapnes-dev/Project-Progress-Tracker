@@ -23028,6 +23028,15 @@
         {
           const zdPlantMatch = String(p?.name ?? "").match(/^\s*(\d+)\b/);
           const zdPlantId = zdPlantMatch ? zdPlantMatch[1] : "";
+          // Plant/store name = the descriptive part of the project name (minus
+          // the leading plant-id and the project-type suffix after ":" or " - ").
+          // Used as a SECOND Zendesk search term so tickets that name the store
+          // but not the plant number (e.g. "Fwd: Holdbart Molde. Modbus liste
+          // Cubo") are still found.
+          const zdPlantName = String(p?.name ?? "")
+            .replace(/^\s*\d+\s*[-–—]\s*/, "")
+            .split(/:|\s[-–—]\s/)[0]
+            .trim();
           if (zdPlantId) {
             const zdPanel = document.createElement("div");
             zdPanel.className = "chatPanel zendeskPanel";
@@ -23992,23 +24001,39 @@
                 return;
               }
               try {
-                // Step 1: search tickets matching the plant ID. We still
-                // ask the server to sort by updated_at as a sensible
-                // default — the client-side sort below will reorder by
-                // last-public-reply once we have that data.
-                const query = "type:ticket " + zdPlantId;
-                const params = new URLSearchParams({
-                  query,
-                  sort_by: "updated_at",
-                  sort_order: "desc",
-                  per_page: "50",
-                });
-                const json = await window.ZendeskBridge.apiRequest(
-                  "GET",
-                  "/search.json?" + params.toString()
-                );
-                const results = Array.isArray(json?.results) ? json.results : [];
-                const tickets = results.filter((r) => r?.result_type === "ticket");
+                // Step 1: find tickets for this plant. Search by plant ID AND
+                // (when available) the store name, then MERGE deduped by id.
+                // Zendesk's boolean OR doesn't combine `type:` + a quoted
+                // phrase reliably (returns 0), so two queries is the robust
+                // way. The name search catches tickets that reference the
+                // store but not the plant number, e.g. "Fwd: Holdbart Molde.
+                // Modbus liste Cubo". Server sorts by updated_at; the
+                // client-side sort below reorders by last-public-reply.
+                const queries = ["type:ticket " + zdPlantId];
+                if (zdPlantName && zdPlantName.length >= 4) {
+                  queries.push('type:ticket "' + zdPlantName.replace(/"/g, "") + '"');
+                }
+                const byId = new Map();
+                for (const query of queries) {
+                  const params = new URLSearchParams({
+                    query,
+                    sort_by: "updated_at",
+                    sort_order: "desc",
+                    per_page: "50",
+                  });
+                  let json;
+                  try {
+                    json = await window.ZendeskBridge.apiRequest("GET", "/search.json?" + params.toString());
+                  } catch (e) {
+                    // One failing query shouldn't kill the whole list.
+                    console.debug("[ZendeskTasks] search failed:", query, e?.message ?? e);
+                    continue;
+                  }
+                  for (const r of Array.isArray(json?.results) ? json.results : []) {
+                    if (r?.result_type === "ticket" && !byId.has(r.id)) byId.set(r.id, r);
+                  }
+                }
+                const tickets = Array.from(byId.values());
                 if (tickets.length === 0) {
                   renderZdTickets(tickets);
                   zdLoaded = true;
