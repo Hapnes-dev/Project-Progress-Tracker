@@ -5267,6 +5267,24 @@
       }
       .notifZdBody { display: grid; gap: 8px; }
       .notifZdEmpty { font-size: 12px; color: var(--muted2); }
+      /* "You replied" line + snippet — your reply back, under the incoming one. */
+      .notifZdMyReply {
+        font-size: 11.5px;
+        font-weight: 600;
+        color: var(--accent, #60a5fa);
+        margin-top: 5px;
+        padding-top: 5px;
+        border-top: 1px dashed var(--border);
+      }
+      .notifZdMySnippet {
+        font-size: 12px;
+        color: var(--muted2);
+        margin-top: 2px;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
       /* Filter row (reply-state segmented + Hide solved/closed toggle). */
       .notifZdFilters {
         display: flex;
@@ -8844,7 +8862,7 @@
       // the cache instead of calling the comments API. Author names are cached
       // by id (they rarely change). Persisted in localStorage so the cache
       // survives reloads; capped to bound storage.
-      const ZENDESK_TICKET_CACHE_KEY = "zendesk_ticket_cache_v3"; // v3: + repliedByMe flag
+      const ZENDESK_TICKET_CACHE_KEY = "zendesk_ticket_cache_v4"; // v4: + my reply (when I replied last)
       const ZENDESK_AUTHOR_CACHE_KEY = "zendesk_author_cache_v1";
       const ZENDESK_TICKET_CACHE_MAX = 80;
       function zendeskLoadJson(key) {
@@ -8974,14 +8992,23 @@
                 // Whether MY reply is the newest public comment (I've responded
                 // since the incoming reply) — drives the Awaiting/Replied filter.
                 const newestPublic = sorted.find((c) => c?.public === true);
+                const meRepliedLast = !!(newestPublic && Number(newestPublic.author_id) === meId);
                 entry = {
                   updatedAt,
-                  repliedByMe: !!(newestPublic && Number(newestPublic.author_id) === meId),
+                  repliedByMe: meRepliedLast,
                   latestIncoming: lp
                     ? {
                         created_at: String(lp.created_at ?? ""),
                         author_id: Number(lp.author_id) || 0,
                         body: String(lp.body ?? "").slice(0, 4000),
+                      }
+                    : null,
+                  // My latest reply, when it's the newest public comment — so the
+                  // card can show what I replied back.
+                  myReply: meRepliedLast
+                    ? {
+                        created_at: String(newestPublic.created_at ?? ""),
+                        body: String(newestPublic.body ?? "").slice(0, 4000),
                       }
                     : null,
                 };
@@ -9004,6 +9031,8 @@
               // corrupted and unrecoverable — drop them rather than show "◊◊".
               const rawBody = String(lp.body ?? "").replace(/�/g, "").trim();
               const collapsed = rawBody.replace(/\s+/g, " ");
+              const myRaw = entry.myReply ? String(entry.myReply.body ?? "").replace(/�/g, "").trim() : "";
+              const myCollapsed = myRaw.replace(/\s+/g, " ");
               found.push({
                 id: t.id,
                 subject: String(t.subject ?? "").trim() || "Ticket #" + t.id,
@@ -9014,6 +9043,10 @@
                 repliedByMe: !!entry.repliedByMe,
                 snippet: collapsed.length > 160 ? collapsed.slice(0, 160) + "…" : collapsed,
                 fullBody: rawBody,
+                // My reply back (present only when I replied last).
+                myReplyAt: entry.myReply ? String(entry.myReply.created_at ?? "") : "",
+                myReplySnippet: myCollapsed.length > 160 ? myCollapsed.slice(0, 160) + "…" : myCollapsed,
+                myReplyFull: myRaw,
               });
             }
           }
@@ -28265,6 +28298,21 @@
               item.appendChild(snip);
             }
 
+            // What I replied back — shown when my reply is the latest comment.
+            if (t.myReplyAt) {
+              const myMeta = document.createElement("div");
+              myMeta.className = "notifZdMyReply";
+              const myRel = notifFormatRelative(t.myReplyAt);
+              myMeta.textContent = "↩ You replied" + (myRel ? " · " + myRel : "");
+              item.appendChild(myMeta);
+              if (t.myReplySnippet) {
+                const mySnip = document.createElement("div");
+                mySnip.className = "notifZdMySnippet";
+                mySnip.textContent = t.myReplySnippet;
+                item.appendChild(mySnip);
+              }
+            }
+
             item.addEventListener("click", (ev) => {
               ev.stopPropagation();
               window.open(
@@ -28279,10 +28327,15 @@
               ev.preventDefault();
               ev.stopPropagation();
               const rel = notifFormatRelative(t.replyAt);
+              let body = t.fullBody || t.snippet || "";
+              if (t.myReplyFull) {
+                const myRel = notifFormatRelative(t.myReplyAt);
+                body += "\n\n──────────\nYou replied" + (myRel ? " · " + myRel : "") + ":\n" + t.myReplyFull;
+              }
               openCommentFullscreen({
                 title: t.subject || "Ticket #" + t.id,
                 meta: (t.authorName || "Someone") + " replied" + (rel ? " · " + rel : ""),
-                bodyText: t.fullBody || t.snippet || "",
+                bodyText: body,
               });
             });
             body.appendChild(item);
