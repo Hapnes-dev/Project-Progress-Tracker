@@ -5296,6 +5296,12 @@
       }
       .notifZdBody { display: grid; gap: 8px; }
       .notifZdEmpty { font-size: 12px; color: var(--muted2); }
+      /* Rocketlane list collapse header — reuses the Zendesk header look but
+         supplies its own padding (no wrapping .notifZdSection) + a separator. */
+      .notifRlHeader {
+        padding: 10px 12px;
+        border-top: 1px solid var(--border);
+      }
       /* "You replied" line + snippet — your reply back, under the incoming one. */
       .notifZdMyReply {
         font-size: 11.5px;
@@ -8802,6 +8808,22 @@
       function rocketlaneSetNotifLastSeen(ms) {
         try {
           localStorage.setItem(ROCKETLANE_NOTIF_LAST_SEEN_KEY, new Date(Number(ms) || Date.now()).toISOString());
+        } catch (_) {}
+      }
+
+      // Collapse state for the drawer's Rocketlane notifications list (UI-only,
+      // persisted) — mirrors the Zendesk section. Default = expanded.
+      const ROCKETLANE_NOTIF_COLLAPSED_KEY = "rocketlane_notif_collapsed_v1";
+      function rocketlaneGetNotifCollapsed() {
+        try {
+          return localStorage.getItem(ROCKETLANE_NOTIF_COLLAPSED_KEY) === "1";
+        } catch (_) {
+          return false;
+        }
+      }
+      function rocketlaneSetNotifCollapsed(collapsed) {
+        try {
+          localStorage.setItem(ROCKETLANE_NOTIF_COLLAPSED_KEY, collapsed ? "1" : "0");
         } catch (_) {}
       }
 
@@ -29026,6 +29048,51 @@
           const scrollWrap = document.createElement("div");
           scrollWrap.className = "notifScroll";
           scrollWrap.appendChild(zdSection);
+
+          // Collapsible "Rocketlane · notifications" header above the list —
+          // same style + behaviour as the Zendesk section header.
+          const rlCollapsed = rocketlaneGetNotifCollapsed();
+          const rlHeader = document.createElement("div");
+          rlHeader.className = "notifZdHeader notifRlHeader" + (rlCollapsed ? " collapsed" : "");
+          rlHeader.setAttribute("role", "button");
+          rlHeader.tabIndex = 0;
+          rlHeader.setAttribute("aria-expanded", rlCollapsed ? "false" : "true");
+          const rlCaret = document.createElement("span");
+          rlCaret.className = "notifZdCaret";
+          rlCaret.textContent = "▾";
+          rlCaret.setAttribute("aria-hidden", "true");
+          const rlLabel = document.createElement("span");
+          rlLabel.className = "notifZdHeaderLabel";
+          rlLabel.textContent = "Rocketlane · notifications";
+          const rlCount = document.createElement("span");
+          rlCount.className = "notifZdCount";
+          rlCount.style.display = "none";
+          rlHeader.appendChild(rlCaret);
+          rlHeader.appendChild(rlLabel);
+          rlHeader.appendChild(rlCount);
+          list.style.display = rlCollapsed ? "none" : "";
+          const rlToggle = () => {
+            const next = !rocketlaneGetNotifCollapsed();
+            rocketlaneSetNotifCollapsed(next);
+            rlHeader.classList.toggle("collapsed", next);
+            rlHeader.setAttribute("aria-expanded", next ? "false" : "true");
+            list.style.display = next ? "none" : "";
+          };
+          rlHeader.addEventListener("click", rlToggle);
+          rlHeader.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); rlToggle(); }
+          });
+          // Keep the header count in sync with however many groups are rendered
+          // (renders happen on filter/tab changes + project-name backfill).
+          const updateRlCount = () => {
+            const n = list.querySelectorAll(".notifGroup").length;
+            if (n > 0) { rlCount.textContent = String(n); rlCount.style.display = ""; }
+            else { rlCount.style.display = "none"; }
+          };
+          try { new MutationObserver(updateRlCount).observe(list, { childList: true }); } catch (_) {}
+          updateRlCount();
+
+          scrollWrap.appendChild(rlHeader);
           scrollWrap.appendChild(list);
           notifDrawerEl.appendChild(scrollWrap);
 
