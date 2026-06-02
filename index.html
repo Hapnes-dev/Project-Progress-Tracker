@@ -22024,6 +22024,63 @@
           // does not refetch. Stored at module scope via getRlChatCache().
           const cache = getRlChatCache(rlProjectIdForNotes);
 
+          // --- Expired signed-URL recovery for chat images ------------------
+          // Rocketlane serves attachment + inline images as AWS S3 PRE-SIGNED
+          // URLs that expire in ~5 min (X-Amz-Expires=299). Messages are cached
+          // in-memory and replayed on tab-switch / auto-sync, so a chat rendered
+          // from cache >5 min after the fetch shows BLANK images (S3 returns 403)
+          // until a full page refresh refetches fresh URLs. To fix that without a
+          // refresh: when an <img> fails to load, refetch the conversation ONCE
+          // (debounced + rate-limited) for fresh URLs, update the cache, and remap
+          // every broken image by its stable S3 object key (the pathname survives
+          // re-signing — only the query string changes). An already-decoded image
+          // stays visible after its URL expires, so this only bites at re-render.
+          const s3KeyOf = (raw) => { try { return new URL(String(raw || ""), location.origin).pathname; } catch { return ""; } };
+          let chatImgRefreshInFlight = false;
+          let chatImgRefreshAt = 0;
+          const refreshChatImageUrls = async (kind) => {
+            const convId = cache.convIdByKind && cache.convIdByKind[kind];
+            if (!convId || chatImgRefreshInFlight) return;
+            if (Date.now() - chatImgRefreshAt < 8000) return; // don't hammer on repeated errors
+            chatImgRefreshInFlight = true;
+            try {
+              const fresh = await window.RocketlaneBridge.fetchChatComments(rlProjectIdForNotes, convId);
+              chatImgRefreshAt = Date.now();
+              if (Array.isArray(fresh)) cache.msgs[kind] = fresh; // later renders use fresh URLs too
+              const map = new Map();
+              const add = (u) => { const k = s3KeyOf(u); if (k && u) map.set(k, String(u)); };
+              for (const m of (fresh || [])) {
+                for (const a of (m.commentMeta?.linkedAttachments || [])) {
+                  add(a?.downloadUrl ?? a?.url ?? a?.location);
+                  add(a?.thumbLocation ?? a?.thumbUrl ?? a?.thumbnailUrl);
+                }
+                const c = String(m.content || "");
+                if (/<img\b/i.test(c)) {
+                  new DOMParser().parseFromString(c, "text/html")
+                    .querySelectorAll("img").forEach((im) => add(im.getAttribute("src")));
+                }
+              }
+              chatBody.querySelectorAll("img").forEach((im) => {
+                if (im.complete && im.naturalWidth > 0) return; // already loaded fine
+                const freshFull = im.dataset.fullSrc ? map.get(s3KeyOf(im.dataset.fullSrc)) : null;
+                if (freshFull) im.dataset.fullSrc = freshFull;
+                const freshSrc = map.get(s3KeyOf(im.getAttribute("src")));
+                if (freshSrc && freshSrc !== im.getAttribute("src")) im.src = freshSrc;
+              });
+            } catch (_) {
+              /* leave the broken image as-is; a manual refresh still recovers it */
+            } finally {
+              chatImgRefreshInFlight = false;
+            }
+          };
+          const onChatImgError = (ev) => {
+            const im = ev.currentTarget;
+            const n = Number(im.dataset.urlRetry) || 0;
+            if (n >= 2) return; // cap per-image retries (e.g. a genuinely deleted file)
+            im.dataset.urlRetry = String(n + 1);
+            refreshChatImageUrls(cache.activeKind || "private");
+          };
+
           const renderMsgs = (msgs, kindLabel) => {
             chatBody.innerHTML = "";
             const userMsgs = (msgs || []).filter((c) => c?.messageType === "USER_MESSAGE");
@@ -22190,6 +22247,9 @@
                   body.appendChild(chip);
                 }
               }
+              // Auto-recover this message's images if their signed S3 URL has
+              // expired (blank preview) — see refreshChatImageUrls.
+              body.querySelectorAll("img").forEach((im) => im.addEventListener("error", onChatImgError));
               contentCol.appendChild(body);
               row.appendChild(contentCol);
               chatBody.appendChild(row);
@@ -22260,6 +22320,10 @@
               const wantPrivate = kind === "private";
               const conv = cache.convs.find((c) => Boolean(c?.private) === wantPrivate) || cache.convs[0];
               if (!conv) throw new Error("No " + kind + " conversation found");
+              // Remember this kind's conversation id so refreshChatImageUrls can
+              // refetch fresh signed image URLs when one expires.
+              if (!cache.convIdByKind) cache.convIdByKind = {};
+              cache.convIdByKind[kind] = conv.conversationId ?? conv.id;
               const fetchedFresh = !cache.msgs[kind];
               if (fetchedFresh) {
                 cache.msgs[kind] = await window.RocketlaneBridge.fetchChatComments(rlProjectIdForNotes, conv.conversationId ?? conv.id);
