@@ -739,12 +739,26 @@
         font-weight: 700;
       }
       .zendeskMsgBody blockquote {
-        margin: 4px 0;
-        padding: 4px 10px;
-        border-left: 3px solid var(--hairline-strong);
+        margin: 6px 0;
+        padding: 0 0 0 12px;
+        /* A single subtle quote line — NOT a filled box. Forwarded emails
+           (Outlook) nest blockquotes; the old bg fill made each nested level
+           read as its own stacked box (a forward showed as ~5 boxes). A
+           left-rule with no fill matches how Zendesk renders quoted content. */
+        border-left: 2px solid var(--hairline);
         color: var(--muted);
-        background: rgba(255, 255, 255, 0.02);
+        background: none;
       }
+      /* Nested quote levels don't re-add a border/fill, so the whole forwarded
+         block reads as ONE quote rather than several boxes. */
+      .zendeskMsgBody blockquote blockquote {
+        margin: 4px 0;
+        padding-left: 0;
+        border-left: none;
+        background: none;
+      }
+      /* Drop empty quote wrappers Outlook leaves behind (no text, no image). */
+      .zendeskMsgBody blockquote:empty { display: none; }
       .zendeskMsgBody a {
         color: var(--accent);
         text-decoration: underline;
