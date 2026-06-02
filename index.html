@@ -22024,6 +22024,14 @@
           // does not refetch. Stored at module scope via getRlChatCache().
           const cache = getRlChatCache(rlProjectIdForNotes);
 
+          // Signed S3 image URLs (Rocketlane attachments) expire in ~5 min, so
+          // any chat cache older than this is treated as stale and refetched
+          // before render — otherwise the images 403 and show blank until a
+          // manual page refresh. This is the primary fix; the per-image error
+          // recovery below is a fallback for URLs that expire while the panel
+          // sits open (e.g. a lazy image scrolled into view after 5 min).
+          const SIGNED_URL_TTL_MS = 4 * 60 * 1000;
+
           // --- Expired signed-URL recovery for chat images ------------------
           // Rocketlane serves attachment + inline images as AWS S3 PRE-SIGNED
           // URLs that expire in ~5 min (X-Amz-Expires=299). Messages are cached
@@ -22324,9 +22332,13 @@
               // refetch fresh signed image URLs when one expires.
               if (!cache.convIdByKind) cache.convIdByKind = {};
               cache.convIdByKind[kind] = conv.conversationId ?? conv.id;
-              const fetchedFresh = !cache.msgs[kind];
+              if (!cache.fetchedAtByKind) cache.fetchedAtByKind = {};
+              const cacheAgeMs = cache.fetchedAtByKind[kind] ? (Date.now() - cache.fetchedAtByKind[kind]) : Infinity;
+              // Refetch when missing OR when the cached signed image URLs may have expired.
+              const fetchedFresh = !cache.msgs[kind] || cacheAgeMs > SIGNED_URL_TTL_MS;
               if (fetchedFresh) {
                 cache.msgs[kind] = await window.RocketlaneBridge.fetchChatComments(rlProjectIdForNotes, conv.conversationId ?? conv.id);
+                cache.fetchedAtByKind[kind] = Date.now();
               }
               // Set justLoaded BEFORE renderMsgs so it can decide whether to
               // auto-scroll. Animation (cascade) AND auto-scroll both gate on
@@ -23111,12 +23123,15 @@
           // Restore the user's last-active tab and render from cache when
           // available — only fetches the first time the chat is opened.
           const startKind = cache.activeKind || "private";
-          if (cache.msgs[startKind]) {
-            // We already have data — render synchronously without refetching.
+          const startAgeMs = (cache.fetchedAtByKind && cache.fetchedAtByKind[startKind])
+            ? (Date.now() - cache.fetchedAtByKind[startKind]) : Infinity;
+          if (cache.msgs[startKind] && startAgeMs <= SIGNED_URL_TTL_MS) {
+            // Fresh cached data — render synchronously without refetching.
             tabPrivate.classList.toggle("active", startKind === "private");
             tabGeneral.classList.toggle("active", startKind === "general");
             renderMsgs(cache.msgs[startKind], startKind === "private" ? "Private" : "General");
           } else {
+            // No data, or the cached signed image URLs may have expired → (re)fetch fresh.
             wrappedLoadKind(startKind);
           }
         }
