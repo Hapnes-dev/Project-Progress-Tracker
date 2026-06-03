@@ -185,7 +185,7 @@ The Rocketlane key auto-renews; Zendesk & Oneflow re-capture their CSRF every 60
 - **Expand chat fullscreen**: click ⤢ in the chat header or right-click the chat area.
 - **Project files**: 📁 Files in the toolbar.
 - **Notifications**: 🔔 in the toolbar — a combined Rocketlane + Zendesk unread count. Click to open the drawer (resets the count but keeps the list); right-click any comment/reply to read it fullscreen.
-- **Add a task**: scroll to a category → **+ Add task**. Created locally AND in Rocketlane in the same phase.
+- **Add a task**: scroll to a category → **+ Add task** → a dialog asks for the task name + **Public/Private** visibility. Created locally AND in Rocketlane in the same phase, with the chosen visibility.
 - **Add / rename / remove a category**: **+ Add category** opens a dialog (name, **start/due dates** (default today, editable), **Shared/Private** type, optional **description** — like Rocketlane's Create-project-phase) and creates a matching Rocketlane **phase**. **Right-click a category header** → *Rename / Remove* — renaming also renames the phase; removing (after a **double confirm**) deletes the phase and its tasks. Applies only to Rocketlane-linked projects (otherwise local-only).
 - **Rename / remove a task**: **right-click the task name** → *Rename task / Open fullscreen / Remove task* (the **Remove** button next to the task still works too). If the task is linked to Rocketlane, removal ⚠ confirms the upstream delete.
 
