@@ -5305,6 +5305,48 @@
       /* Filter chips now live inside the collapsible Rocketlane body, so they
          collapse with the section (mirrors the Zendesk filters in their body). */
       .notifRlFilters { padding: 6px 14px 2px; }
+      /* "Add category" dialog — mirrors Rocketlane's Create project phase. */
+      .addCatOverlay {
+        position: fixed; inset: 0; z-index: 1500;
+        background: rgba(0, 0, 0, 0.55);
+        display: flex; align-items: center; justify-content: center;
+        animation: notifDrawerIn 140ms ease-out;
+      }
+      .addCatCard {
+        width: min(440px, 92vw);
+        background: var(--surface, #0f1424);
+        color: var(--text);
+        border: 1px solid var(--hairline-strong, var(--border));
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        display: grid; gap: 14px;
+      }
+      .addCatTitle { font-size: 16px; font-weight: 800; }
+      .addCatField { display: grid; gap: 6px; }
+      .addCatLabel { font-size: 12px; font-weight: 700; color: var(--muted); }
+      .addCatInput {
+        width: 100%; box-sizing: border-box;
+        font: inherit; font-size: 13px;
+        background: var(--surface-2, rgba(255, 255, 255, 0.05));
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 8px; padding: 8px 10px;
+      }
+      .addCatInput:focus { outline: none; border-color: var(--accent, #60a5fa); }
+      .addCatTextarea { resize: vertical; min-height: 60px; }
+      .addCatTypeRow { display: flex; gap: 8px; }
+      .addCatTypeBtn {
+        flex: 1; font: inherit; font-size: 13px; cursor: pointer;
+        background: transparent; color: var(--muted);
+        border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+      }
+      .addCatTypeBtn.active {
+        background: var(--accent-soft, rgba(96, 165, 250, 0.12));
+        color: var(--accent, #60a5fa);
+        border-color: var(--accent, #60a5fa);
+      }
+      .addCatBtnRow { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
       /* "You replied" line + snippet — your reply back, under the incoming one. */
       .notifZdMyReply {
         font-size: 11.5px;
@@ -17202,8 +17244,10 @@
         return list;
       }
 
-      /** Create a phase in a Rocketlane project. @param {string} projectId @param {string} phaseName */
-      async function rocketlaneCreatePhase(projectId, phaseName) {
+      /** Create a phase in a Rocketlane project.
+       * @param {string} projectId @param {string} phaseName
+       * @param {{private?:boolean, description?:string}} [opts] */
+      async function rocketlaneCreatePhase(projectId, phaseName, opts) {
         const pid = String(projectId ?? "").trim();
         const name = String(phaseName ?? "").trim();
         if (!pid || !name) throw new Error("Project id and phase name required.");
@@ -17218,7 +17262,16 @@
             "POST",
             "/projects/" + encodeURIComponent(pid) + "/phases",
             undefined,
-            { projectPhaseName: name, startDate: today, dueDate: nextYear },
+            {
+              projectPhaseName: name,
+              // Same-day as creation — matches Rocketlane's standard phases and
+              // renders correctly in the /plan timeline (a far-future dueDate
+              // made a giant bar that looked like nothing was created).
+              startDate: today,
+              dueDate: today,
+              private: !!(opts && opts.private),
+              phaseDescription: String((opts && opts.description) || ""),
+            },
           );
           const phase = json?.data ?? json;
           if (phase && (phase.projectPhaseId ?? phase.phaseId ?? phase.id) != null) return phase;
@@ -17257,15 +17310,16 @@
         throw new Error(errMsg + (errBody ? " " + errBody : ""));
       }
 
-      /** Get phase by name or create it. @param {string} projectId @param {string} phaseName */
-      async function rocketlaneGetOrCreatePhase(projectId, phaseName) {
+      /** Get phase by name or create it. @param {string} projectId @param {string} phaseName
+       * @param {{private?:boolean, description?:string}} [opts] applied only when creating */
+      async function rocketlaneGetOrCreatePhase(projectId, phaseName, opts) {
         const name = String(phaseName ?? "").trim();
         if (!name) throw new Error("Phase name required.");
         const phases = await rocketlaneFetchPhasesForProject(projectId);
         const low = name.toLowerCase();
         const found = phases.find((ph) => rocketlanePhaseName(ph).toLowerCase() === low);
         if (found) return found;
-        return await rocketlaneCreatePhase(projectId, name);
+        return await rocketlaneCreatePhase(projectId, name, opts);
       }
 
       /** Delete a phase from a Rocketlane project (cascades its tasks).
@@ -24780,52 +24834,7 @@
         addCatBtn.className = "btn";
         addCatBtn.type = "button";
         addCatBtn.textContent = "+ Add category";
-        addCatBtn.addEventListener("click", () => {
-          const presetLines = CATEGORY_PRESETS.map((pr, i) => (i + 1) + ") " + pr.label).join("\n");
-          const raw = prompt(
-            "Add category - select preset or type custom name:\n\n" +
-              presetLines +
-              "\n\nEnter number (1-" +
-              CATEGORY_PRESETS.length +
-              ") or type your own category name:",
-            "",
-          );
-          if (raw === null || !String(raw).trim()) return;
-          const trimmed = String(raw).trim();
-          const num = parseInt(trimmed, 10);
-          let label;
-          let preferredKey;
-          if (Number.isFinite(num) && num >= 1 && num <= CATEGORY_PRESETS.length) {
-            const preset = CATEGORY_PRESETS[num - 1];
-            label = preset.label;
-            preferredKey = preset.key;
-            const existing = new Set(Object.keys(p.tasksByArea ?? {}));
-            const key = ensureUniqueKey(existing, preferredKey);
-            p.tasksByArea[key] = p.tasksByArea[key] ?? [];
-            p.areaLabels = p.areaLabels ?? {};
-            p.areaLabels[key] = label;
-            for (const taskText of [preset.integrationTask, preset.designTask]) {
-              p.tasksByArea[key].push({ id: id(), text: taskText, status: "todo", notes: "" });
-            }
-            touchProject(p.id);
-            saveState(state);
-            void syncCreateCategoryPhase(p, key, label);
-            render();
-            return;
-          } else {
-            label = trimmed;
-            preferredKey = "custom_" + slugifyKey(label);
-          }
-          const existing = new Set(Object.keys(p.tasksByArea ?? {}));
-          const key = ensureUniqueKey(existing, preferredKey);
-          p.tasksByArea[key] = p.tasksByArea[key] ?? [];
-          p.areaLabels = p.areaLabels ?? {};
-          p.areaLabels[key] = label;
-          touchProject(p.id);
-          saveState(state);
-          void syncCreateCategoryPhase(p, key, label);
-          render();
-        });
+        addCatBtn.addEventListener("click", () => openAddCategoryDialog(p));
         catTools.appendChild(catH);
         const rightTools = document.createElement("div");
         rightTools.style.display = "flex";
@@ -27075,14 +27084,144 @@
         render();
       }
 
+      // "Add category" dialog — mirrors Rocketlane's "Create project phase"
+      // (name, Shared/Private type, optional description). The phase is dated to
+      // the creation day. Preserves the preset shortcut (adds preset tasks).
+      function openAddCategoryDialog(p) {
+        document.getElementById("addCatOverlay")?.remove();
+        const overlay = document.createElement("div");
+        overlay.id = "addCatOverlay";
+        overlay.className = "addCatOverlay";
+        const card = document.createElement("div");
+        card.className = "addCatCard";
+        card.addEventListener("click", (e) => e.stopPropagation());
+
+        const titleEl = document.createElement("div");
+        titleEl.className = "addCatTitle";
+        titleEl.textContent = "Add category";
+        card.appendChild(titleEl);
+
+        const mkField = (labelText) => {
+          const wrap = document.createElement("div");
+          wrap.className = "addCatField";
+          const lab = document.createElement("span");
+          lab.className = "addCatLabel";
+          lab.textContent = labelText;
+          wrap.appendChild(lab);
+          return wrap;
+        };
+
+        // Preset (optional)
+        const presetField = mkField("Preset (optional)");
+        const presetSel = document.createElement("select");
+        presetSel.className = "addCatInput";
+        const customOpt = document.createElement("option");
+        customOpt.value = ""; customOpt.textContent = "— Custom —";
+        presetSel.appendChild(customOpt);
+        CATEGORY_PRESETS.forEach((pr, i) => {
+          const o = document.createElement("option");
+          o.value = String(i); o.textContent = pr.label;
+          presetSel.appendChild(o);
+        });
+        presetField.appendChild(presetSel);
+        card.appendChild(presetField);
+
+        // Name
+        const nameField = mkField("Category name");
+        const nameInput = document.createElement("input");
+        nameInput.type = "text";
+        nameInput.className = "addCatInput";
+        nameInput.placeholder = "Category name";
+        nameField.appendChild(nameInput);
+        card.appendChild(nameField);
+        presetSel.addEventListener("change", () => {
+          const i = parseInt(presetSel.value, 10);
+          if (Number.isFinite(i) && CATEGORY_PRESETS[i]) nameInput.value = CATEGORY_PRESETS[i].label;
+        });
+
+        // Type (Shared / Private)
+        const typeField = mkField("Type");
+        const typeRow = document.createElement("div");
+        typeRow.className = "addCatTypeRow";
+        let isPrivate = false;
+        const sharedBtn = document.createElement("button");
+        sharedBtn.type = "button"; sharedBtn.className = "addCatTypeBtn active"; sharedBtn.textContent = "👁 Shared";
+        const privateBtn = document.createElement("button");
+        privateBtn.type = "button"; privateBtn.className = "addCatTypeBtn"; privateBtn.textContent = "🔒 Private";
+        const setType = (priv) => {
+          isPrivate = priv;
+          sharedBtn.classList.toggle("active", !priv);
+          privateBtn.classList.toggle("active", priv);
+        };
+        sharedBtn.addEventListener("click", () => setType(false));
+        privateBtn.addEventListener("click", () => setType(true));
+        typeRow.appendChild(sharedBtn); typeRow.appendChild(privateBtn);
+        typeField.appendChild(typeRow);
+        card.appendChild(typeField);
+
+        // Description (optional)
+        const descField = mkField("Description (optional)");
+        const descTa = document.createElement("textarea");
+        descTa.className = "addCatInput addCatTextarea";
+        descTa.rows = 3;
+        descTa.placeholder = "Category description";
+        descField.appendChild(descTa);
+        card.appendChild(descField);
+
+        // Buttons
+        const btnRow = document.createElement("div");
+        btnRow.className = "addCatBtnRow";
+        const cancelBtn = document.createElement("button");
+        cancelBtn.type = "button"; cancelBtn.className = "btn"; cancelBtn.textContent = "Cancel";
+        const createBtn = document.createElement("button");
+        createBtn.type = "button"; createBtn.className = "btn primary"; createBtn.textContent = "Create";
+        btnRow.appendChild(cancelBtn); btnRow.appendChild(createBtn);
+        card.appendChild(btnRow);
+
+        const close = () => { overlay.remove(); document.removeEventListener("keydown", onKey); };
+        const onKey = (e) => { if (e.key === "Escape") close(); };
+        cancelBtn.addEventListener("click", close);
+        overlay.addEventListener("click", close);
+        document.addEventListener("keydown", onKey);
+
+        const doCreate = () => {
+          const label = String(nameInput.value || "").trim();
+          if (!label) { nameInput.focus(); return; }
+          const presetIdx = parseInt(presetSel.value, 10);
+          const preset = (Number.isFinite(presetIdx) && CATEGORY_PRESETS[presetIdx]) ? CATEGORY_PRESETS[presetIdx] : null;
+          const preferredKey = preset ? preset.key : ("custom_" + slugifyKey(label));
+          const existing = new Set(Object.keys(p.tasksByArea ?? {}));
+          const key = ensureUniqueKey(existing, preferredKey);
+          p.tasksByArea[key] = p.tasksByArea[key] ?? [];
+          p.areaLabels = p.areaLabels ?? {};
+          p.areaLabels[key] = label;
+          if (preset) {
+            for (const taskText of [preset.integrationTask, preset.designTask]) {
+              p.tasksByArea[key].push({ id: id(), text: taskText, status: "todo", notes: "" });
+            }
+          }
+          touchProject(p.id);
+          saveState(state);
+          void syncCreateCategoryPhase(p, key, label, { private: isPrivate, description: String(descTa.value || "").trim() });
+          render();
+          close();
+        };
+        createBtn.addEventListener("click", doCreate);
+        nameInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doCreate(); } });
+
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+        setTimeout(() => nameInput.focus(), 30);
+      }
+
       // Mirror a category ADD to Rocketlane by creating the matching phase.
       // No-op for projects not linked to Rocketlane. Best-effort + async — the
       // local add already happened; this just mirrors it upstream.
-      async function syncCreateCategoryPhase(project, areaKey, label) {
+      async function syncCreateCategoryPhase(project, areaKey, label, opts) {
         const rlPid = String(project?.rocketlaneProjectId ?? "").trim();
         if (!rlPid) return;
         try {
-          const phase = await rocketlaneGetOrCreatePhase(rlPid, label);
+          const phase = await rocketlaneGetOrCreatePhase(rlPid, label, opts);
           const phaseId = rocketlanePhaseId(phase);
           if (phaseId) {
             project.areaPhaseIds = project.areaPhaseIds || {};
