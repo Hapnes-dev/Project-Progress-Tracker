@@ -5310,10 +5310,18 @@
         position: fixed; inset: 0; z-index: 1500;
         background: rgba(0, 0, 0, 0.55);
         display: flex; align-items: center; justify-content: center;
-        animation: notifDrawerIn 140ms ease-out;
+        animation: addCatOverlayIn 150ms ease-out;
+      }
+      @keyframes addCatOverlayIn { from { opacity: 0; } to { opacity: 1; } }
+      /* Card pops out from the center — scales up with a slight overshoot. */
+      @keyframes addCatCardPop {
+        0%   { transform: scale(0.78); opacity: 0; }
+        100% { transform: scale(1);    opacity: 1; }
       }
       .addCatCard {
         width: min(440px, 92vw);
+        transform-origin: center center;
+        animation: addCatCardPop 240ms cubic-bezier(0.34, 1.56, 0.64, 1);
         /* Let native controls (the date picker) match the page theme. */
         color-scheme: light dark;
         background: var(--surface, #0f1424);
