@@ -5314,6 +5314,8 @@
       }
       .addCatCard {
         width: min(440px, 92vw);
+        /* Let native controls (the date picker) match the page theme. */
+        color-scheme: light dark;
         background: var(--surface, #0f1424);
         color: var(--text);
         border: 1px solid var(--hairline-strong, var(--border));
@@ -17254,6 +17256,10 @@
         const today = new Date().toISOString().slice(0, 10);
         const nextYear = new Date(Date.now() + 366 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
         const pidV = rocketlaneCoerceId(pid);
+        // Dates: caller-chosen (opts.startDate/dueDate) or default to today.
+        const phaseStart = String((opts && opts.startDate) || "").slice(0, 10) || today;
+        let phaseDue = String((opts && opts.dueDate) || "").slice(0, 10) || phaseStart;
+        if (phaseDue < phaseStart) phaseDue = phaseStart;
         // Project-scoped endpoint is what this Rocketlane tenant actually accepts
         // (the generic POST /phases 500s here). Try it first; fall back to the
         // legacy shapes below for older tenants.
@@ -17264,11 +17270,10 @@
             undefined,
             {
               projectPhaseName: name,
-              // Same-day as creation — matches Rocketlane's standard phases and
-              // renders correctly in the /plan timeline (a far-future dueDate
-              // made a giant bar that looked like nothing was created).
-              startDate: today,
-              dueDate: today,
+              // Caller-chosen dates (default today). Avoid a far-future dueDate
+              // — it rendered as a giant bar in /plan.
+              startDate: phaseStart,
+              dueDate: phaseDue,
               private: !!(opts && opts.private),
               phaseDescription: String((opts && opts.description) || ""),
             },
@@ -27139,6 +27144,23 @@
           if (Number.isFinite(i) && CATEGORY_PRESETS[i]) nameInput.value = CATEGORY_PRESETS[i].label;
         });
 
+        // Date (start → due) — pre-filled with today; change if you want.
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const dateField = mkField("Date (start → due)");
+        const dateRow = document.createElement("div");
+        dateRow.className = "addCatTypeRow";
+        const startInput = document.createElement("input");
+        startInput.type = "date"; startInput.className = "addCatInput"; startInput.value = todayStr;
+        startInput.title = "Start date";
+        const dueInput = document.createElement("input");
+        dueInput.type = "date"; dueInput.className = "addCatInput"; dueInput.value = todayStr;
+        dueInput.title = "Due date";
+        // Keep due ≥ start as the user edits.
+        startInput.addEventListener("change", () => { if (dueInput.value && dueInput.value < startInput.value) dueInput.value = startInput.value; });
+        dateRow.appendChild(startInput); dateRow.appendChild(dueInput);
+        dateField.appendChild(dateRow);
+        card.appendChild(dateField);
+
         // Type (Shared / Private)
         const typeField = mkField("Type");
         const typeRow = document.createElement("div");
@@ -27202,7 +27224,12 @@
           }
           touchProject(p.id);
           saveState(state);
-          void syncCreateCategoryPhase(p, key, label, { private: isPrivate, description: String(descTa.value || "").trim() });
+          void syncCreateCategoryPhase(p, key, label, {
+            private: isPrivate,
+            description: String(descTa.value || "").trim(),
+            startDate: startInput.value || todayStr,
+            dueDate: dueInput.value || startInput.value || todayStr,
+          });
           render();
           close();
         };
