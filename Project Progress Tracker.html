@@ -17391,7 +17391,7 @@
        * @param {string} taskName
        * @param {string} [parentTaskId]
        */
-      async function rocketlaneCreateTaskInRocketlane(projectId, phase, taskName, parentTaskId) {
+      async function rocketlaneCreateTaskInRocketlane(projectId, phase, taskName, parentTaskId, opts) {
         const pid = String(projectId ?? "").trim();
         const name = String(taskName ?? "").trim();
         if (!pid || !name) throw new Error("Project id and task name required.");
@@ -17556,6 +17556,11 @@
           // shapes above — never fall back to the phase-bearing parentless `bodies`
           // (those would either fail or, worse, create an orphan top-level task).
           bodies = phaseIdRaw ? [...parentBodies, ...bodies] : [...parentBodies];
+        }
+        // Apply the chosen visibility (Public/Private) to every body shape —
+        // Rocketlane's task create accepts `private` (verified live).
+        if (opts && typeof opts.private === "boolean") {
+          bodies = bodies.map((b) => ({ ...b, private: opts.private }));
         }
         const candidates = [...bodies, ...bodies.map((b) => ({ data: b }))];
         let lastErr = /** @type {any} */ (null);
@@ -25058,11 +25063,7 @@
           addBtn.className = "btn";
           addBtn.type = "button";
           addBtn.textContent = "+ Add task";
-          addBtn.addEventListener("click", () => {
-            const text = prompt("New task for " + labelForArea(area, p) + ":");
-            if (!text || !text.trim()) return;
-            addTask(p.id, area, text.trim());
-          });
+          addBtn.addEventListener("click", () => openAddTaskDialog(p, area));
           const addSubtaskBtn = document.createElement("button");
           addSubtaskBtn.className = "btn";
           addSubtaskBtn.type = "button";
@@ -26511,7 +26512,7 @@
         p.updatedAt = nowISO();
       }
 
-      function addTask(projectId, area, text) {
+      function addTask(projectId, area, text, opts) {
         const p = state.projects.find((x) => x.id === projectId);
         if (!p) return;
         p.tasksByArea[area] = p.tasksByArea[area] ?? [];
@@ -26521,6 +26522,9 @@
         const textToUse = isQcChecklist ? QC_HANDOVER_CHECKLIST_TASK_TEXT : trimmed;
         /** @type {Task} */
         const task = { id: id(), text: textToUse, status: "todo", notes: "" };
+        // Visibility chosen in the Add-task dialog (Public/Private) — set locally
+        // for the immediate pill, then sent to Rocketlane on create.
+        if (opts && typeof opts.private === "boolean") task.private = opts.private;
         if (isQcChecklist) {
           task.meta = task.meta ?? {};
           if (isQcChecklist) task.meta.qcChecklist = defaultQcHandoverChecklist();
@@ -26548,7 +26552,7 @@
 
               let created = null;
               try {
-                created = await rocketlaneCreateTaskInRocketlane(rlProjectId, phase, textToUse);
+                created = await rocketlaneCreateTaskInRocketlane(rlProjectId, phase, textToUse, undefined, opts);
               } catch (e) {
                 const msg =
                   e instanceof TypeError ? "Network/CORS error." : String(e?.message ?? e ?? "Unknown error.");
@@ -27250,6 +27254,69 @@
             dueDate: dueInput.value || startInput.value || todayStr,
           });
           render();
+          close();
+        };
+        createBtn.addEventListener("click", doCreate);
+        nameInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doCreate(); } });
+
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+        setTimeout(() => nameInput.focus(), 30);
+      }
+
+      // "Add task" dialog — task name + Public/Private visibility. Reuses the
+      // add-category dialog's chrome (.addCat* classes).
+      function openAddTaskDialog(p, area) {
+        document.getElementById("addCatOverlay")?.remove();
+        const overlay = document.createElement("div");
+        overlay.id = "addCatOverlay";
+        overlay.className = "addCatOverlay";
+        const card = document.createElement("div");
+        card.className = "addCatCard";
+        card.addEventListener("click", (e) => e.stopPropagation());
+
+        const titleEl = document.createElement("div");
+        titleEl.className = "addCatTitle";
+        titleEl.textContent = "Add task — " + labelForArea(area, p);
+        card.appendChild(titleEl);
+
+        const nameField = document.createElement("div");
+        nameField.className = "addCatField";
+        const nameLab = document.createElement("span"); nameLab.className = "addCatLabel"; nameLab.textContent = "Task name";
+        const nameInput = document.createElement("input"); nameInput.type = "text"; nameInput.className = "addCatInput"; nameInput.placeholder = "Task name";
+        nameField.appendChild(nameLab); nameField.appendChild(nameInput);
+        card.appendChild(nameField);
+
+        const typeField = document.createElement("div");
+        typeField.className = "addCatField";
+        const typeLab = document.createElement("span"); typeLab.className = "addCatLabel"; typeLab.textContent = "Type";
+        const typeRow = document.createElement("div"); typeRow.className = "addCatTypeRow";
+        let isPrivate = false;
+        const publicBtn = document.createElement("button"); publicBtn.type = "button"; publicBtn.className = "addCatTypeBtn active"; publicBtn.textContent = "👁 Public";
+        const privateBtn = document.createElement("button"); privateBtn.type = "button"; privateBtn.className = "addCatTypeBtn"; privateBtn.textContent = "🔒 Private";
+        const setType = (priv) => { isPrivate = priv; publicBtn.classList.toggle("active", !priv); privateBtn.classList.toggle("active", priv); };
+        publicBtn.addEventListener("click", () => setType(false));
+        privateBtn.addEventListener("click", () => setType(true));
+        typeRow.appendChild(publicBtn); typeRow.appendChild(privateBtn);
+        typeField.appendChild(typeLab); typeField.appendChild(typeRow);
+        card.appendChild(typeField);
+
+        const btnRow = document.createElement("div"); btnRow.className = "addCatBtnRow";
+        const cancelBtn = document.createElement("button"); cancelBtn.type = "button"; cancelBtn.className = "btn"; cancelBtn.textContent = "Cancel";
+        const createBtn = document.createElement("button"); createBtn.type = "button"; createBtn.className = "btn primary"; createBtn.textContent = "Add task";
+        btnRow.appendChild(cancelBtn); btnRow.appendChild(createBtn);
+        card.appendChild(btnRow);
+
+        const close = () => { overlay.remove(); document.removeEventListener("keydown", onKey); };
+        const onKey = (e) => { if (e.key === "Escape") close(); };
+        cancelBtn.addEventListener("click", close);
+        overlay.addEventListener("click", close);
+        document.addEventListener("keydown", onKey);
+
+        const doCreate = () => {
+          const name = String(nameInput.value || "").trim();
+          if (!name) { nameInput.focus(); return; }
+          addTask(p.id, area, name, { private: isPrivate });
           close();
         };
         createBtn.addEventListener("click", doCreate);
