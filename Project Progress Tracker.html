@@ -8943,7 +8943,7 @@
       // by id (they rarely change). Persisted in localStorage so the cache
       // survives reloads; capped to bound storage.
       const ZENDESK_TICKET_CACHE_KEY = "zendesk_ticket_cache_v5"; // v5: incoming reply includes internal/private notes (isInternal)
-      const ZENDESK_AUTHOR_CACHE_KEY = "zendesk_author_cache_v1";
+      const ZENDESK_AUTHOR_CACHE_KEY = "zendesk_author_cache_v2"; // v2: { name, kiona } (kiona = author email @kiona.com)
       const ZENDESK_TICKET_CACHE_MAX = 80;
       function zendeskLoadJson(key) {
         try {
@@ -9231,7 +9231,9 @@
                 replyAt: String(lp.created_at ?? ""),
                 replyTs: ts,
                 authorId: Number(lp.author_id) || 0,
-                isInternal: !!lp.isInternal,
+                // Raw "private note" flag; the visible "Internal" tag is applied
+                // below ONLY for @kiona.com authors (resolved in the author pass).
+                isPrivate: !!lp.isInternal,
                 repliedByMe: !!entry.repliedByMe,
                 snippet: collapsed.length > 160 ? collapsed.slice(0, 160) + "…" : collapsed,
                 fullBody: rawBody,
@@ -9255,13 +9257,22 @@
           try {
             const uj = await bridge.apiRequest("GET", "/users/show_many.json?ids=" + need.join(","));
             for (const u of Array.isArray(uj?.users) ? uj.users : []) {
-              authorCache[Number(u?.id)] = String(u?.name ?? "").trim();
+              authorCache[Number(u?.id)] = {
+                name: String(u?.name ?? "").trim(),
+                // Only @kiona.com authors count as genuine INTERNAL notes. Private
+                // comments from external parties (e.g. a partner/supplier whose
+                // email lands as a private comment) are shown as normal replies.
+                kiona: /@kiona\.com\s*$/i.test(String(u?.email ?? "").trim()),
+              };
             }
             zendeskSaveAuthorCache(authorCache);
           } catch (_) {}
         }
         found.forEach((f) => {
-          f.authorName = authorCache[f.authorId] || "Someone";
+          const a = authorCache[f.authorId];
+          f.authorName = (a && a.name) || "Someone";
+          // Show the "Internal" tag only for a private note from a @kiona.com colleague.
+          f.isInternal = !!f.isPrivate && !!(a && a.kiona);
         });
 
         found.sort((a, b) => b.replyTs - a.replyTs);
@@ -28682,7 +28693,9 @@
                   };
                   let html = "";
                   if (incoming) {
-                    const incInternal = incoming.public === false;
+                    // Tag "Internal" only for @kiona.com private notes (same rule
+                    // as the card's t.isInternal), not every private comment.
+                    const incInternal = !!t.isInternal;
                     html +=
                       '<div class="notifFsCommentHead">' +
                       escapeHtml(t.authorName || "Someone") +
