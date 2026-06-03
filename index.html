@@ -25602,31 +25602,12 @@
                 if (!next || !next.trim()) return;
                 renameTask(p.id, area, t.id, next.trim());
               };
-              // Double-click rename intentionally disabled — too easy to
-              // trigger by accident. Right-click on the task name opens
-              // the fullscreen view (see handler below).
-              label.addEventListener("contextmenu", (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                openTaskFullscreen(t, notesBox);
-              });
-
-              const del = document.createElement("button");
-              del.className = "x";
-              del.type = "button";
-              del.textContent = "Remove";
-              del.addEventListener("click", () => {
+              // Remove this task — the confirm differs for Rocketlane-linked
+              // vs local-only tasks (linked deletes propagate upstream). Shared
+              // by the right-click menu and the Remove button below.
+              const removeThisTask = () => {
                 const rlTaskId = String(t?.meta?.rocketlaneTaskId ?? "").trim();
-                // Local task objects use `text` (not `name`) for the
-                // display label — same field the rename prompt seeds.
-                // Fall back through every known shape just in case.
-                const taskLabel = String(
-                  t?.text ?? t?.name ?? t?.taskName ?? "(unnamed)"
-                ).trim() || "(unnamed)";
-                // Two distinct prompts depending on whether the task is
-                // linked to Rocketlane. Linked tasks DO propagate the
-                // delete upstream (with a strong warning); local-only
-                // tasks just drop the row.
+                const taskLabel = String(t?.text ?? t?.name ?? t?.taskName ?? "(unnamed)").trim() || "(unnamed)";
                 const msg = rlTaskId
                   ? "⚠ DELETE task '" + taskLabel + "' from Rocketlane?\n\n" +
                     "This removes the task BOTH from this tracker AND from Rocketlane itself. " +
@@ -25634,7 +25615,23 @@
                   : "Remove task '" + taskLabel + "' from this tracker?";
                 if (!confirm(msg)) return;
                 removeTask(p.id, area, t.id);
+              };
+              // Right-click the task name → Rename / Open fullscreen / Remove.
+              label.addEventListener("contextmenu", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                showContextMenu(e, [
+                  { label: "Rename task", action: doRenameTask },
+                  { label: "Open fullscreen", action: () => openTaskFullscreen(t, notesBox) },
+                  { label: "Remove task", danger: true, action: removeThisTask },
+                ]);
               });
+
+              const del = document.createElement("button");
+              del.className = "x";
+              del.type = "button";
+              del.textContent = "Remove";
+              del.addEventListener("click", removeThisTask);
 
               // Expand/collapse inline details
               const details = document.createElement("div");
@@ -27074,6 +27071,12 @@
         const confirmMsg = "Remove category \"" + label + "\" and all " + taskCount + " task(s) inside it?" +
           (rlPid ? "\n\nThis ALSO deletes the \"" + label + "\" phase (and its tasks) in Rocketlane. This cannot be undone." : "");
         if (!confirm(confirmMsg)) return;
+        // Extra "are you really sure" gate — category removal is destructive
+        // (it deletes the matching Rocketlane phase + all its tasks when linked).
+        const reallyMsg = rlPid
+          ? "Are you ABSOLUTELY sure?\n\nThis permanently deletes the \"" + label + "\" phase and ALL its tasks in Rocketlane. There is no undo."
+          : "Are you sure? This permanently removes the \"" + label + "\" category and its tasks.";
+        if (!confirm(reallyMsg)) return;
         // Capture the phase id (if known) before clearing local data, so the
         // matching Rocketlane phase can be deleted.
         const phaseIdHint = p.areaPhaseIds?.[areaKey];
