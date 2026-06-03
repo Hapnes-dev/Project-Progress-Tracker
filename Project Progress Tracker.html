@@ -5567,19 +5567,6 @@
         color: var(--accent);
         border-bottom-color: var(--accent);
       }
-      .notifClearAll {
-        margin-left: auto;
-        appearance: none;
-        background: transparent;
-        border: none;
-        font: inherit;
-        font-size: 12.5px;
-        font-weight: 600;
-        color: var(--accent);
-        cursor: pointer;
-        padding: 6px 0;
-      }
-      .notifClearAll:hover { filter: brightness(1.2); }
 
       /* Single scroll region holding the Zendesk section + the Rocketlane list,
          so a long Zendesk list (1-month window) scrolls as one instead of
@@ -27949,8 +27936,8 @@
         let notifLastSeenAt = 0; // epoch ms
         let notifGroupsCache = null;
         let notifMyUserId = null;
-        // Last-rendered Zendesk replies, so "Clear all" can keep the list
-        // visible (just drop the "New" flags) instead of emptying it.
+        // Last-rendered Zendesk replies, so the 2-min poll + filter toggles can
+        // re-render the list in place without refetching.
         let notifZdTicketsCache = [];
         // Re-fetch + re-render the open drawer's Zendesk list. Set while the
         // drawer is open so the 2-min poll can refresh it in place; null when
@@ -29094,7 +29081,7 @@
             { key: "team",         label: "Assigned to the team" },
           ];
 
-          // New / Cleared tab row + "Clear all" link
+          // New / Cleared tab row
           const tabs = document.createElement("div");
           tabs.className = "notifTabs";
           const tabNew = document.createElement("button");
@@ -29105,13 +29092,8 @@
           tabCleared.type = "button";
           tabCleared.className = "notifTab";
           tabCleared.textContent = "Cleared";
-          const clearAll = document.createElement("button");
-          clearAll.type = "button";
-          clearAll.className = "notifClearAll";
-          clearAll.textContent = "Clear all";
           tabs.appendChild(tabNew);
           tabs.appendChild(tabCleared);
-          tabs.appendChild(clearAll);
 
           const list = document.createElement("div");
           list.className = "notifList";
@@ -29163,17 +29145,6 @@
           };
           tabNew.addEventListener("click", () => switchTab("new"));
           tabCleared.addEventListener("click", () => switchTab("cleared"));
-          clearAll.addEventListener("click", async () => {
-            // "Clear all" pushes last-seen-at forward + visually empties the list.
-            try { await bridge.markNotificationsSeen?.(); } catch (_) {}
-            notifLastSeenAt = Date.now();
-            rocketlaneSetNotifLastSeen(Date.now());
-            zendeskSetNotifLastSeen(Date.now());
-            // Re-render with all unread markers removed (keep the lists visible)
-            if (notifGroupsCache) renderNotifList(list, notifGroupsCache, notifFilter);
-            renderZdSection(zdSection, notifZdTicketsCache, 0);
-            if (els.notifBadge) els.notifBadge.style.display = "none";
-          });
 
           notifDrawerEl.appendChild(head);
           notifDrawerEl.appendChild(tabs);
