@@ -11917,7 +11917,26 @@
         out.links.saved = savedUrl;
         dbg("classified:", classified);
 
-        // ── Quote → "Draft/Quote" verdict ──
+        // If the saved link is a QUOTE that has been CONVERTED to an Order,
+        // follow the conversion and treat it as that Order. A Younium quote
+        // keeps status "Quote" forever even after it's won/converted, so
+        // reporting it as an un-converted quote is wrong (e.g. Q-010563 →
+        // O-014783). The quote object carries convertedToOrderId / number.
+        if (classified.recordType === "quote") {
+          try {
+            const qConv = await youniumFetchQuoteDetails(classified.recordId);
+            const convId = String(qConv?.convertedToOrderId || qConv?.convertedToOrderid || "").trim();
+            if (convId) {
+              out.convertedFromQuote = { quoteNumber: qConv?.number || "", orderNumber: qConv?.convertedOrderNumber || "" };
+              classified.recordType = "order";
+              classified.recordId = convId;
+              out.links.saved = "https://eu.younium.com/orders/" + convId;
+              dbg("saved Quote was converted to an Order — following", out.convertedFromQuote);
+            }
+          } catch (e) { dbg("quote conversion check failed", e); }
+        }
+
+        // ── Quote → "Draft/Quote" verdict (only when NOT converted) ──
         if (classified.recordType === "quote") {
           const q = await youniumFetchQuoteDetails(classified.recordId);
           out.raw = { quote: q };
