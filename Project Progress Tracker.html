@@ -17210,6 +17210,22 @@
         const today = new Date().toISOString().slice(0, 10);
         const nextYear = new Date(Date.now() + 366 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
         const pidV = rocketlaneCoerceId(pid);
+        // Project-scoped endpoint is what this Rocketlane tenant actually accepts
+        // (the generic POST /phases 500s here). Try it first; fall back to the
+        // legacy shapes below for older tenants.
+        try {
+          const json = await rocketlaneRequestJson(
+            "POST",
+            "/projects/" + encodeURIComponent(pid) + "/phases",
+            undefined,
+            { projectPhaseName: name, startDate: today, dueDate: nextYear },
+          );
+          const phase = json?.data ?? json;
+          if (phase && (phase.projectPhaseId ?? phase.phaseId ?? phase.id) != null) return phase;
+        } catch (e) {
+          if (e instanceof TypeError) throw e;
+          // non-network error → fall through to the generic /phases attempts
+        }
         const bodies = [
           { phaseName: name, project: { projectId: pidV }, startDate: today, dueDate: nextYear },
           { phaseName: name, project: { projectId: { value: pidV } }, startDate: today, dueDate: nextYear },
@@ -17250,6 +17266,18 @@
         const found = phases.find((ph) => rocketlanePhaseName(ph).toLowerCase() === low);
         if (found) return found;
         return await rocketlaneCreatePhase(projectId, name);
+      }
+
+      /** Delete a phase from a Rocketlane project (cascades its tasks).
+       * @param {string} projectId @param {string|number} phaseId */
+      async function rocketlaneDeleteProjectPhase(projectId, phaseId) {
+        const pid = String(projectId ?? "").trim();
+        const id = String(phaseId ?? "").trim();
+        if (!pid || !id) throw new Error("Project id and phase id required.");
+        return await rocketlaneRequestJson(
+          "DELETE",
+          "/projects/" + encodeURIComponent(pid) + "/phases/" + encodeURIComponent(id),
+        );
       }
 
       /**
@@ -24755,6 +24783,7 @@
             }
             touchProject(p.id);
             saveState(state);
+            void syncCreateCategoryPhase(p, key, label);
             render();
             return;
           } else {
@@ -24768,6 +24797,7 @@
           p.areaLabels[key] = label;
           touchProject(p.id);
           saveState(state);
+          void syncCreateCategoryPhase(p, key, label);
           render();
         });
         catTools.appendChild(catH);
@@ -26996,21 +27026,68 @@
         render();
       }
 
+      // Mirror a category ADD to Rocketlane by creating the matching phase.
+      // No-op for projects not linked to Rocketlane. Best-effort + async — the
+      // local add already happened; this just mirrors it upstream.
+      async function syncCreateCategoryPhase(project, areaKey, label) {
+        const rlPid = String(project?.rocketlaneProjectId ?? "").trim();
+        if (!rlPid) return;
+        try {
+          const phase = await rocketlaneGetOrCreatePhase(rlPid, label);
+          const phaseId = rocketlanePhaseId(phase);
+          if (phaseId) {
+            project.areaPhaseIds = project.areaPhaseIds || {};
+            project.areaPhaseIds[areaKey] = String(phaseId);
+            saveState(state);
+          }
+          showLoadMessage('Category "' + label + '" created in Rocketlane.');
+        } catch (e) {
+          showLoadMessage('Category added locally — couldn\'t create the Rocketlane phase: ' + (e?.message ?? e));
+        }
+      }
+      // Mirror a category REMOVAL to Rocketlane by deleting the matching phase
+      // (Rocketlane cascades its tasks). Uses the stored phase id when present,
+      // else matches by phase name. Best-effort + async.
+      async function syncDeleteCategoryPhase(rlPid, label, phaseIdHint) {
+        try {
+          let phaseId = String(phaseIdHint ?? "").trim();
+          if (!phaseId) {
+            const phases = await rocketlaneFetchPhasesForProject(rlPid);
+            const low = String(label ?? "").trim().toLowerCase();
+            const match = phases.find((ph) => rocketlanePhaseName(ph).toLowerCase() === low);
+            phaseId = match ? String(rocketlanePhaseId(match)) : "";
+          }
+          if (!phaseId) { showLoadMessage('Category removed locally (no matching Rocketlane phase found).'); return; }
+          await rocketlaneDeleteProjectPhase(rlPid, phaseId);
+          showLoadMessage('Category "' + label + '" deleted in Rocketlane.');
+        } catch (e) {
+          showLoadMessage('Category removed locally — couldn\'t delete the Rocketlane phase: ' + (e?.message ?? e));
+        }
+      }
+
       function removeCategory(projectId, areaKey) {
         const p = state.projects.find((x) => x.id === projectId);
         if (!p) return;
         const taskCount = (p.tasksByArea?.[areaKey] ?? []).length;
         const label = labelForArea(areaKey, p);
-        if (!confirm("Remove category \"" + label + "\" and all " + taskCount + " task(s) inside it?")) return;
+        const rlPid = String(p?.rocketlaneProjectId ?? "").trim();
+        const confirmMsg = "Remove category \"" + label + "\" and all " + taskCount + " task(s) inside it?" +
+          (rlPid ? "\n\nThis ALSO deletes the \"" + label + "\" phase (and its tasks) in Rocketlane. This cannot be undone." : "");
+        if (!confirm(confirmMsg)) return;
+        // Capture the phase id (if known) before clearing local data, so the
+        // matching Rocketlane phase can be deleted.
+        const phaseIdHint = p.areaPhaseIds?.[areaKey];
         delete p.tasksByArea[areaKey];
         if (p.areaLabels) delete p.areaLabels[areaKey];
         if (p.hiddenCategories) delete p.hiddenCategories[areaKey];
         if (p.expandedCategories) delete p.expandedCategories[areaKey];
         if (p.presetConfigs) delete p.presetConfigs[areaKey];
-        // Local-only — don't sync category removal back to Rocketlane.
+        if (p.areaPhaseIds) delete p.areaPhaseIds[areaKey];
         touchProjectLocal(projectId);
         saveState(state);
         render();
+        // Mirror the removal to Rocketlane (best-effort, async).
+        if (rlPid) void syncDeleteCategoryPhase(rlPid, label, phaseIdHint);
       }
 
       function showContextMenu(e, items) {
