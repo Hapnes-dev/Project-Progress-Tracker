@@ -27120,6 +27120,65 @@
         render();
       }
 
+      // Maps IWMAC module/product headers in the order info → a category preset key.
+      const ORDER_INFO_MODULE_MAP = [
+        { re: /IWMAC\s*Modul:\s*Refrigeration/i, key: "refrigeration_freezing" },
+        { re: /IWMAC\s*Modul:\s*Ventilation/i,   key: "ventilation" },
+        { re: /IWMAC\s*Modul:\s*Energy/i,        key: "energy" },
+        { re: /IWMAC\s*Modul:\s*Wireless/i,      key: "wireless" },
+        { re: /IWMAC\s*Modul:\s*(Heating|VGV)/i, key: "heating_system" },
+        { re: /IWMAC\s*Modul:\s*Machine\s*Room/i, key: "machine_room" },
+      ];
+      // "From order info" preset — read the project's order info (the Hubspot
+      // delivery-status / Oneflow-product field), detect which IWMAC modules the
+      // order contains, and create the matching module category (preset Design +
+      // Integration tasks + Rocketlane phase) for each. Skips modules whose
+      // category already exists. Applies the dialog's Type + dates to all.
+      async function createCategoriesFromOrderInfo(p, opts) {
+        const rlPid = String(p?.rocketlaneProjectId ?? "").trim();
+        if (!rlPid) { showLoadMessage("This project isn't linked to Rocketlane — no order info to read."); return; }
+        let info;
+        try { info = await rocketlaneFetchHubspotOrderInfo(rlPid); }
+        catch (e) { showLoadMessage("Couldn't read order info: " + (e?.message ?? e)); return; }
+        const text = String(info?.text || "") + "\n" + String(info?.html || "");
+        if (!text.trim()) { showLoadMessage("No order info found on this project."); return; }
+        // Which module presets does the order mention?
+        const presets = [];
+        const seen = new Set();
+        for (const m of ORDER_INFO_MODULE_MAP) {
+          if (m.re.test(text) && !seen.has(m.key)) {
+            const preset = CATEGORY_PRESETS.find((pr) => pr.key === m.key);
+            if (preset) { presets.push(preset); seen.add(m.key); }
+          }
+        }
+        if (!presets.length) { showLoadMessage("No IWMAC modules found in the order info."); return; }
+        const existingLower = new Set(Object.values(p.areaLabels || {}).map((l) => String(l).trim().toLowerCase()));
+        const created = [];
+        for (const preset of presets) {
+          if (existingLower.has(preset.label.toLowerCase())) continue; // don't duplicate
+          const existingKeys = new Set(Object.keys(p.tasksByArea ?? {}));
+          const key = ensureUniqueKey(existingKeys, preset.key);
+          p.tasksByArea[key] = [];
+          p.areaLabels = p.areaLabels ?? {};
+          p.areaLabels[key] = preset.label;
+          for (const taskText of [preset.integrationTask, preset.designTask]) {
+            p.tasksByArea[key].push({ id: id(), text: taskText, status: "todo", notes: "" });
+          }
+          void syncCreateCategoryPhase(p, key, preset.label, {
+            private: !!(opts && opts.private), startDate: opts && opts.startDate, dueDate: opts && opts.dueDate,
+          });
+          created.push(preset.label);
+        }
+        touchProject(p.id);
+        saveState(state);
+        render();
+        if (created.length) {
+          showLoadMessage("Created " + created.length + " categor" + (created.length > 1 ? "ies" : "y") + " from order info: " + created.join(", "));
+        } else {
+          showLoadMessage("All order-info module categories already exist on this project.");
+        }
+      }
+
       // "Add category" dialog — mirrors Rocketlane's "Create project phase"
       // (name, Shared/Private type, optional description). The phase is dated to
       // the creation day. Preserves the preset shortcut (adds preset tasks).
@@ -27154,6 +27213,9 @@
         const customOpt = document.createElement("option");
         customOpt.value = ""; customOpt.textContent = "— Custom —";
         presetSel.appendChild(customOpt);
+        const orderInfoOpt = document.createElement("option");
+        orderInfoOpt.value = "__orderinfo__"; orderInfoOpt.textContent = "🧾 From order info (auto-create modules)";
+        presetSel.appendChild(orderInfoOpt);
         CATEGORY_PRESETS.forEach((pr, i) => {
           const o = document.createElement("option");
           o.value = String(i); o.textContent = pr.label;
@@ -27170,10 +27232,6 @@
         nameInput.placeholder = "Category name";
         nameField.appendChild(nameInput);
         card.appendChild(nameField);
-        presetSel.addEventListener("change", () => {
-          const i = parseInt(presetSel.value, 10);
-          if (Number.isFinite(i) && CATEGORY_PRESETS[i]) nameInput.value = CATEGORY_PRESETS[i].label;
-        });
 
         // Date (start → due) — pre-filled with today; change if you want.
         const todayStr = new Date().toISOString().slice(0, 10);
@@ -27231,6 +27289,18 @@
         btnRow.appendChild(cancelBtn); btnRow.appendChild(createBtn);
         card.appendChild(btnRow);
 
+        // Preset change: "From order info" auto-creates module categories (hide
+        // the per-category name/description fields); a module preset fills the name.
+        const updatePresetMode = () => {
+          const orderMode = presetSel.value === "__orderinfo__";
+          nameField.style.display = orderMode ? "none" : "";
+          descField.style.display = orderMode ? "none" : "";
+          createBtn.textContent = orderMode ? "Create from order info" : "Create";
+          const i = parseInt(presetSel.value, 10);
+          if (!orderMode && Number.isFinite(i) && CATEGORY_PRESETS[i]) nameInput.value = CATEGORY_PRESETS[i].label;
+        };
+        presetSel.addEventListener("change", updatePresetMode);
+
         const close = () => { overlay.remove(); document.removeEventListener("keydown", onKey); };
         const onKey = (e) => { if (e.key === "Escape") close(); };
         cancelBtn.addEventListener("click", close);
@@ -27238,6 +27308,15 @@
         document.addEventListener("keydown", onKey);
 
         const doCreate = () => {
+          const sd = startInput.value || todayStr;
+          const dd = (dueInput.value && dueInput.value >= sd) ? dueInput.value : sd;
+          // "From order info" → auto-create a category per IWMAC module in the
+          // order (ignores the name/description fields; applies the Type + dates).
+          if (presetSel.value === "__orderinfo__") {
+            void createCategoriesFromOrderInfo(p, { private: isPrivate, startDate: sd, dueDate: dd });
+            close();
+            return;
+          }
           const label = String(nameInput.value || "").trim();
           if (!label) { nameInput.focus(); return; }
           const presetIdx = parseInt(presetSel.value, 10);
