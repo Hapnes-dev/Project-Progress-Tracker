@@ -186,7 +186,7 @@ The Rocketlane key auto-renews; Zendesk & Oneflow re-capture their CSRF every 60
 - **Project files**: 📁 Files in the toolbar.
 - **Notifications**: 🔔 in the toolbar — a combined Rocketlane + Zendesk unread count. Click to open the drawer (resets the count but keeps the list); right-click any comment/reply to read it fullscreen.
 - **Add a task**: scroll to a category → **+ Add task**. Created locally AND in Rocketlane in the same phase.
-- **Add / remove a category**: **+ Add category** creates a matching Rocketlane **phase**; removing a category (after a **double confirm**) deletes that phase — and its tasks — in Rocketlane. Applies only to Rocketlane-linked projects (otherwise local-only).
+- **Add / rename / remove a category**: **+ Add category** creates a matching Rocketlane **phase**. **Right-click a category header** → *Rename / Remove* — renaming also renames the phase; removing (after a **double confirm**) deletes the phase and its tasks. Applies only to Rocketlane-linked projects (otherwise local-only).
 - **Rename / remove a task**: **right-click the task name** → *Rename task / Open fullscreen / Remove task* (the **Remove** button next to the task still works too). If the task is linked to Rocketlane, removal ⚠ confirms the upstream delete.
 
 ### Zendesk Tasks (per project)
@@ -210,9 +210,9 @@ The Rocketlane key auto-renews; Zendesk & Oneflow re-capture their CSRF every 60
 - No telemetry, no analytics, no external services besides the integrated platforms themselves.
 - The "Local-only" rule:
   - **Project remove** never deletes from Rocketlane — only hides locally.
-  - **Owner renames** and **category renames** never sync upstream (the Rocketlane phase keeps its name).
+  - **Owner renames** never sync upstream.
   - **Task removal** DOES sync upstream when the task is linked — with a loud ⚠ confirm first.
-  - **Category add / removal** DOES sync — creates / deletes the matching Rocketlane phase (deletion cascades the phase's tasks; confirm warns first).
+  - **Category add / rename / removal** DOES sync — creates / renames / deletes the matching Rocketlane phase (deletion cascades the phase's tasks + double-confirms first).
   - All other edits (status, due date, links, notes, task add) DO push to Rocketlane.
 
 ## Security model

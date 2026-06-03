@@ -681,7 +681,6 @@ By design, these are local-only — they modify your browser's copy without touc
 
 - **Project removal** ("Remove" button) — `deleteSelected()` is explicitly local-only
 - **Owner renames** (`renameOwnerGroupEverywhere`)
-- **Category rename** (`renameArea`) — only the local label changes; the Rocketlane phase is NOT renamed
 - Category and task UI expand/collapse state
 - **Team-group collapse state** (Owner Workload Overview)
 - **Zendesk Tasks section collapse state**
@@ -691,7 +690,7 @@ By design, these are local-only — they modify your browser's copy without touc
 
 - Status, due date, project notes, custom links — propagate via the sync flow
 - **Task add** — creates the task in Rocketlane in the correct phase
-- **Category add / remove** — categories ARE Rocketlane project **phases**. "+ Add category" creates the phase (`syncCreateCategoryPhase` → `rocketlaneGetOrCreatePhase`, `POST /projects/{id}/phases`; stores `project.areaPhaseIds[key]`). `removeCategory` deletes the phase (`syncDeleteCategoryPhase` → `rocketlaneDeleteProjectPhase`, `DELETE /projects/{id}/phases/{phaseId}` — Rocketlane **cascades the phase's tasks**) — matched by stored id, else phase name. No-op without a `rocketlaneProjectId`; `removeCategory` requires a **double confirm** (the second is an "Are you ABSOLUTELY sure" gate) because it's destructive. (`rocketlaneCreatePhase` hits the project-scoped endpoint first — the generic `POST /phases` 500s on this tenant.)
+- **Category add / rename / remove** — categories ARE Rocketlane project **phases**, managed via the **"+ Add category"** button and the category header's **right-click menu** (Rename / Remove). "+ Add category" creates the phase (`syncCreateCategoryPhase` → `rocketlaneGetOrCreatePhase`, `POST /projects/{id}/phases`; stores `project.areaPhaseIds[key]`). **Rename** renames the phase too (`syncRenameCategoryPhase` → `rocketlaneRenameProjectPhase`, **PUT** `/projects/{id}/phases/{phaseId}` — PATCH 400s on this tenant — so the local label and phase name stay in sync). `removeCategory` deletes the phase (`syncDeleteCategoryPhase` → `rocketlaneDeleteProjectPhase`, `DELETE /projects/{id}/phases/{phaseId}` — Rocketlane **cascades the phase's tasks**) — matched by stored id, else phase name. No-op without a `rocketlaneProjectId`; `removeCategory` requires a **double confirm** (the second is an "Are you ABSOLUTELY sure" gate) because it's destructive. (`rocketlaneCreatePhase` hits the project-scoped endpoint first — the generic `POST /phases` 500s on this tenant.)
 - **Task rename / remove** — **right-click the task name** opens a context menu (`showContextMenu`): *Rename task* (`renameTask` via prompt), *Open fullscreen* (`openTaskFullscreen`), *Remove task* (`removeThisTask`, shared with the Remove button — Rocketlane-aware confirm; linked tasks propagate the upstream DELETE).
 - **Task removal of LINKED tasks** — propagates the upstream DELETE (with a loud ⚠ warning)
 - **Hubspot Deal Description** — auto-updated on every save with the project's external links (Oneflow / Younium / HubSpot)
