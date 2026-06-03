@@ -186,8 +186,8 @@ The Rocketlane key auto-renews; Zendesk & Oneflow re-capture their CSRF every 60
 - **Project files**: 📁 Files in the toolbar.
 - **Notifications**: 🔔 in the toolbar — a combined Rocketlane + Zendesk unread count. Click to open the drawer (resets the count but keeps the list); right-click any comment/reply to read it fullscreen.
 - **Add a task**: scroll to a category → **+ Add task**. Created locally AND in Rocketlane in the same phase.
-- **Add / remove a category**: **+ Add category** creates a matching Rocketlane **phase**; removing a category (after a confirm) deletes that phase — and its tasks — in Rocketlane. Applies only to Rocketlane-linked projects (otherwise local-only).
-- **Remove a task**: **Remove** next to the task. If linked, ⚠ confirms upstream delete.
+- **Add / remove a category**: **+ Add category** creates a matching Rocketlane **phase**; removing a category (after a **double confirm**) deletes that phase — and its tasks — in Rocketlane. Applies only to Rocketlane-linked projects (otherwise local-only).
+- **Rename / remove a task**: **right-click the task name** → *Rename task / Open fullscreen / Remove task* (the **Remove** button next to the task still works too). If the task is linked to Rocketlane, removal ⚠ confirms the upstream delete.
 
 ### Zendesk Tasks (per project)
 - Section appears in projects whose name starts with a numeric plant ID.
