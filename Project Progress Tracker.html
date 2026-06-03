@@ -27129,40 +27129,93 @@
         { re: /IWMAC\s*Modul:\s*(Heating|VGV)/i, key: "heating_system" },
         { re: /IWMAC\s*Modul:\s*Machine\s*Room/i, key: "machine_room" },
       ];
+      // Parse the order-info HTML into modules → line items → sub-bullets.
+      // Shape: <p><strong>IWMAC Modul: X</strong></p><ul><li>item</li>
+      // <li>- sub-bullet</li>…</ul>. A "- "-prefixed <li> is a sub-bullet of the
+      // most recent non-dash line item above it (Oneflow renders these flat, not
+      // as a true nested <ul>). Returns [{ headerText, items: [{ text, subs[] }] }].
+      function parseOrderInfoModules(html) {
+        const out = [];
+        let doc;
+        try { doc = new DOMParser().parseFromString(String(html || ""), "text/html"); } catch (_) { return out; }
+        let current = null;
+        for (const node of Array.from(doc.body.children)) {
+          const tag = String(node.tagName || "").toLowerCase();
+          const txt = (node.textContent || "").replace(/\s+/g, " ").trim();
+          if (tag === "p" && /IWMAC\s*(Modul|Product)\s*:/i.test(txt)) {
+            current = { headerText: txt, items: [] };
+            out.push(current);
+          } else if (tag === "ul" && current) {
+            let lastTop = null;
+            for (const li of Array.from(node.children)) {
+              if (String(li.tagName || "").toLowerCase() !== "li") continue;
+              const t = (li.textContent || "").replace(/\s+/g, " ").trim();
+              if (!t) continue;
+              if (/^[-–—]\s*/.test(t)) {
+                const sub = t.replace(/^[-–—]\s*/, "").trim();
+                if (sub) { if (lastTop) lastTop.subs.push(sub); else current.items.push({ text: sub, subs: [] }); }
+              } else {
+                lastTop = { text: t, subs: [] };
+                current.items.push(lastTop);
+              }
+            }
+          }
+        }
+        return out;
+      }
+
       // "From order info" preset — read the project's order info (the Hubspot
       // delivery-status / Oneflow-product field), detect which IWMAC modules the
-      // order contains, and create the matching module category (preset Design +
-      // Integration tasks + Rocketlane phase) for each. Skips modules whose
-      // category already exists. Applies the dialog's Type + dates to all.
+      // order contains, and for each create the matching module category with:
+      //   • the generic preset Design + Integration tasks, AND
+      //   • a task per order line item (its "- " sub-bullets become subtasks),
+      //   • a Rocketlane phase.
+      // Skips modules whose category already exists. Applies the dialog's Type + dates.
       async function createCategoriesFromOrderInfo(p, opts) {
         const rlPid = String(p?.rocketlaneProjectId ?? "").trim();
         if (!rlPid) { showLoadMessage("This project isn't linked to Rocketlane — no order info to read."); return; }
         let info;
         try { info = await rocketlaneFetchHubspotOrderInfo(rlPid); }
         catch (e) { showLoadMessage("Couldn't read order info: " + (e?.message ?? e)); return; }
-        const text = String(info?.text || "") + "\n" + String(info?.html || "");
-        if (!text.trim()) { showLoadMessage("No order info found on this project."); return; }
-        // Which module presets does the order mention?
-        const presets = [];
+        const html = String(info?.html || "");
+        if (!html.trim() && !String(info?.text || "").trim()) { showLoadMessage("No order info found on this project."); return; }
+        const modules = parseOrderInfoModules(html);
+        // Plan: each parsed module that maps to a preset (deduped by preset key).
+        const plan = [];
         const seen = new Set();
-        for (const m of ORDER_INFO_MODULE_MAP) {
-          if (m.re.test(text) && !seen.has(m.key)) {
-            const preset = CATEGORY_PRESETS.find((pr) => pr.key === m.key);
-            if (preset) { presets.push(preset); seen.add(m.key); }
-          }
+        for (const pm of modules) {
+          const map = ORDER_INFO_MODULE_MAP.find((m) => m.re.test(pm.headerText));
+          if (!map || seen.has(map.key)) continue;
+          const preset = CATEGORY_PRESETS.find((pr) => pr.key === map.key);
+          if (!preset) continue;
+          seen.add(map.key);
+          plan.push({ preset, items: pm.items });
         }
-        if (!presets.length) { showLoadMessage("No IWMAC modules found in the order info."); return; }
+        if (!plan.length) { showLoadMessage("No IWMAC modules found in the order info."); return; }
         const existingLower = new Set(Object.values(p.areaLabels || {}).map((l) => String(l).trim().toLowerCase()));
         const created = [];
-        for (const preset of presets) {
+        for (const entry of plan) {
+          const preset = entry.preset;
           if (existingLower.has(preset.label.toLowerCase())) continue; // don't duplicate
           const existingKeys = new Set(Object.keys(p.tasksByArea ?? {}));
           const key = ensureUniqueKey(existingKeys, preset.key);
           p.tasksByArea[key] = [];
           p.areaLabels = p.areaLabels ?? {};
           p.areaLabels[key] = preset.label;
+          // 1) generic Design + Integration tasks
           for (const taskText of [preset.integrationTask, preset.designTask]) {
             p.tasksByArea[key].push({ id: id(), text: taskText, status: "todo", notes: "" });
+          }
+          // 2) order line items → tasks; their "- " sub-bullets → subtasks
+          for (const item of (entry.items || [])) {
+            const parentT = { id: id(), text: item.text, status: "todo", notes: "" };
+            p.tasksByArea[key].push(parentT);
+            for (const sub of (item.subs || [])) {
+              p.tasksByArea[key].push({
+                id: id(), text: sub, status: "todo", notes: "",
+                meta: { parentLocalTaskId: String(parentT.id), parentTaskName: item.text },
+              });
+            }
           }
           void syncCreateCategoryPhase(p, key, preset.label, {
             private: !!(opts && opts.private), startDate: opts && opts.startDate, dueDate: opts && opts.dueDate,
