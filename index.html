@@ -5408,6 +5408,32 @@
         line-height: 1.4;
         flex-shrink: 0;
       }
+      /* Internal/private-note tag — amber, distinct from the red "New" pill. */
+      .notifZdInternal {
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #1a1205;
+        background: #f59e0b;
+        border-radius: 999px;
+        padding: 1px 6px;
+        line-height: 1.4;
+        flex-shrink: 0;
+      }
+      .notifFsInternalTag {
+        display: inline-block;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #1a1205;
+        background: #f59e0b;
+        border-radius: 999px;
+        padding: 0 6px;
+        margin-left: 6px;
+        vertical-align: middle;
+      }
       .notifZdMeta { font-size: 11.5px; color: var(--muted); }
       .notifZdSnippet {
         font-size: 12px;
@@ -8916,7 +8942,7 @@
       // the cache instead of calling the comments API. Author names are cached
       // by id (they rarely change). Persisted in localStorage so the cache
       // survives reloads; capped to bound storage.
-      const ZENDESK_TICKET_CACHE_KEY = "zendesk_ticket_cache_v4"; // v4: + my reply (when I replied last)
+      const ZENDESK_TICKET_CACHE_KEY = "zendesk_ticket_cache_v5"; // v5: incoming reply includes internal/private notes (isInternal)
       const ZENDESK_AUTHOR_CACHE_KEY = "zendesk_author_cache_v1";
       const ZENDESK_TICKET_CACHE_MAX = 80;
       function zendeskLoadJson(key) {
@@ -9144,15 +9170,18 @@
                     (a, b) =>
                       (Date.parse(String(b?.created_at ?? "")) || 0) - (Date.parse(String(a?.created_at ?? "")) || 0),
                   );
-                // The latest INCOMING public comment (someone else's). We key
-                // on the incoming reply — NOT the newest public comment overall
-                // — so a case stays listed even after I reply to it (my reply
-                // becoming the newest comment must not make it disappear).
-                const lp = sorted.find((c) => c?.public === true && Number(c?.author_id) !== meId);
-                // Whether MY reply is the newest public comment (I've responded
-                // since the incoming reply) — drives the Awaiting/Replied filter.
-                const newestPublic = sorted.find((c) => c?.public === true);
-                const meRepliedLast = !!(newestPublic && Number(newestPublic.author_id) === meId);
+                // The latest INCOMING reply from someone else — public OR an
+                // internal/private note. Zendesk delivers some partner emails as
+                // private comments (e.g. a CC'd supplier), and the assignee still
+                // wants to know. We key on the incoming reply — NOT the newest
+                // comment overall — so a case stays listed even after I reply.
+                const lp = sorted.find((c) => Number(c?.author_id) !== meId);
+                // My latest comment (public or internal). I've "replied" when it
+                // is newer than that incoming reply — drives Awaiting/Replied.
+                const newestMine = sorted.find((c) => Number(c?.author_id) === meId);
+                const lpTs = lp ? (Date.parse(String(lp.created_at ?? "")) || 0) : 0;
+                const mineTs = newestMine ? (Date.parse(String(newestMine.created_at ?? "")) || 0) : 0;
+                const meRepliedLast = !!(newestMine && lp && mineTs > lpTs);
                 entry = {
                   updatedAt,
                   repliedByMe: meRepliedLast,
@@ -9161,14 +9190,15 @@
                         created_at: String(lp.created_at ?? ""),
                         author_id: Number(lp.author_id) || 0,
                         body: String(lp.body ?? "").slice(0, 4000),
+                        isInternal: lp.public === false,
                       }
                     : null,
-                  // My latest reply, when it's the newest public comment — so the
-                  // card can show what I replied back.
+                  // My latest reply back (when I replied after the incoming) — so
+                  // the card can show what I responded.
                   myReply: meRepliedLast
                     ? {
-                        created_at: String(newestPublic.created_at ?? ""),
-                        body: String(newestPublic.body ?? "").slice(0, 4000),
+                        created_at: String(newestMine.created_at ?? ""),
+                        body: String(newestMine.body ?? "").slice(0, 4000),
                       }
                     : null,
                 };
@@ -9201,6 +9231,7 @@
                 replyAt: String(lp.created_at ?? ""),
                 replyTs: ts,
                 authorId: Number(lp.author_id) || 0,
+                isInternal: !!lp.isInternal,
                 repliedByMe: !!entry.repliedByMe,
                 snippet: collapsed.length > 160 ? collapsed.slice(0, 160) + "…" : collapsed,
                 fullBody: rawBody,
@@ -28566,13 +28597,20 @@
               nb.textContent = "New";
               top.appendChild(nb);
             }
+            if (t.isInternal) {
+              const ib = document.createElement("span");
+              ib.className = "notifZdInternal";
+              ib.textContent = "Internal";
+              ib.title = "Internal/private note — not visible to the requester";
+              top.appendChild(ib);
+            }
             top.appendChild(chip);
             item.appendChild(top);
 
             const meta = document.createElement("div");
             meta.className = "notifZdMeta";
             const rel = notifFormatRelative(t.replyAt);
-            meta.textContent = (t.authorName || "Someone") + " replied" + (rel ? " · " + rel : "");
+            meta.textContent = (t.authorName || "Someone") + (t.isInternal ? " added an internal note" : " replied") + (rel ? " · " + rel : "");
             item.appendChild(meta);
 
             if (t.snippet) {
@@ -28619,7 +28657,7 @@
               }
               openCommentFullscreen({
                 title: t.subject || "Ticket #" + t.id,
-                meta: (t.authorName || "Someone") + " replied" + (rel ? " · " + rel : ""),
+                meta: (t.authorName || "Someone") + (t.isInternal ? " added an internal note" : " replied") + (rel ? " · " + rel : ""),
                 bodyText: fallback,
                 // Render the real Zendesk html_body so it looks exactly like
                 // Zendesk (formatting, embedded images, signature) — fetched on
@@ -28633,8 +28671,8 @@
                   const comments = (Array.isArray(cj?.comments) ? cj.comments : [])
                     .slice()
                     .sort((a, b) => (Date.parse(String(b?.created_at ?? "")) || 0) - (Date.parse(String(a?.created_at ?? "")) || 0));
-                  const incoming = comments.find((c) => c?.public === true && Number(c?.author_id) !== meId);
-                  const mine = comments.find((c) => c?.public === true && Number(c?.author_id) === meId);
+                  const incoming = comments.find((c) => Number(c?.author_id) !== meId);
+                  const mine = comments.find((c) => Number(c?.author_id) === meId);
                   const renderC = (c) => {
                     const h = String(c?.html_body ?? "").trim();
                     const inner = h
@@ -28644,11 +28682,13 @@
                   };
                   let html = "";
                   if (incoming) {
+                    const incInternal = incoming.public === false;
                     html +=
                       '<div class="notifFsCommentHead">' +
                       escapeHtml(t.authorName || "Someone") +
-                      " replied" +
+                      (incInternal ? " added an internal note" : " replied") +
                       (rel ? " · " + escapeHtml(rel) : "") +
+                      (incInternal ? ' <span class="notifFsInternalTag">Internal</span>' : "") +
                       "</div>" +
                       renderC(incoming);
                   }
