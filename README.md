@@ -186,6 +186,7 @@ The Rocketlane key auto-renews; Zendesk & Oneflow re-capture their CSRF every 60
 - **Project files**: 📁 Files in the toolbar.
 - **Notifications**: 🔔 in the toolbar — a combined Rocketlane + Zendesk unread count. Click to open the drawer (resets the count but keeps the list); right-click any comment/reply to read it fullscreen.
 - **Add a task**: scroll to a category → **+ Add task**. Created locally AND in Rocketlane in the same phase.
+- **Add / remove a category**: **+ Add category** creates a matching Rocketlane **phase**; removing a category (after a confirm) deletes that phase — and its tasks — in Rocketlane. Applies only to Rocketlane-linked projects (otherwise local-only).
 - **Remove a task**: **Remove** next to the task. If linked, ⚠ confirms upstream delete.
 
 ### Zendesk Tasks (per project)
@@ -209,8 +210,9 @@ The Rocketlane key auto-renews; Zendesk & Oneflow re-capture their CSRF every 60
 - No telemetry, no analytics, no external services besides the integrated platforms themselves.
 - The "Local-only" rule:
   - **Project remove** never deletes from Rocketlane — only hides locally.
-  - **Owner renames** and **category renames / removal** never sync upstream.
+  - **Owner renames** and **category renames** never sync upstream (the Rocketlane phase keeps its name).
   - **Task removal** DOES sync upstream when the task is linked — with a loud ⚠ confirm first.
+  - **Category add / removal** DOES sync — creates / deletes the matching Rocketlane phase (deletion cascades the phase's tasks; confirm warns first).
   - All other edits (status, due date, links, notes, task add) DO push to Rocketlane.
 
 ## Security model
