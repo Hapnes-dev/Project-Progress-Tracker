@@ -17280,6 +17280,32 @@
         );
       }
 
+      /** Rename a phase in a Rocketlane project. Uses PUT (PATCH 400s on this
+       * tenant) and preserves the phase's existing dates.
+       * @param {string} projectId @param {string|number} phaseId @param {string} newName */
+      async function rocketlaneRenameProjectPhase(projectId, phaseId, newName) {
+        const pid = String(projectId ?? "").trim();
+        const id = String(phaseId ?? "").trim();
+        const name = String(newName ?? "").trim();
+        if (!pid || !id || !name) throw new Error("Project id, phase id and new name required.");
+        let startDate = "", dueDate = "";
+        try {
+          const phases = await rocketlaneFetchPhasesForProject(pid);
+          const ph = phases.find((p) => String(rocketlanePhaseId(p)) === id);
+          startDate = String(ph?.startDate ?? "").slice(0, 10);
+          dueDate = String(ph?.dueDate ?? "").slice(0, 10);
+        } catch (_) {}
+        const today = new Date().toISOString().slice(0, 10);
+        const body = { projectPhaseName: name, startDate: startDate || today, dueDate: dueDate || "2099-12-31" };
+        if (body.dueDate < body.startDate) body.dueDate = body.startDate;
+        return await rocketlaneRequestJson(
+          "PUT",
+          "/projects/" + encodeURIComponent(pid) + "/phases/" + encodeURIComponent(id),
+          undefined,
+          body,
+        );
+      }
+
       /**
        * Create a task in Rocketlane under the given phase.
        * @param {string} projectId
@@ -25234,9 +25260,35 @@
             // section's click handler will already fire; this is harmless.
           });
 
-          // Category rename / remove right-click menu removed —
-          // categories are managed entirely from Rocketlane, so editing
-          // them locally creates drift that doesn't sync back.
+          // Right-click the category header → Rename / Remove. Both now mirror
+          // to Rocketlane (rename / delete the phase), so editing locally no
+          // longer drifts from Rocketlane (the reason the old menu was removed).
+          title.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const doRenameCategory = () => {
+              const cur = labelForArea(area, p);
+              const next = prompt("Rename category:", cur);
+              if (next === null) return;
+              const trimmed = String(next).trim();
+              if (!trimmed || trimmed === cur) return;
+              const rlPid = String(p?.rocketlaneProjectId ?? "").trim();
+              const phaseIdHint = p.areaPhaseIds?.[area];
+              renameArea(p.id, area, trimmed); // local label + re-render
+              if (rlPid) {
+                Promise.resolve(syncRenameCategoryPhase(rlPid, cur, trimmed, phaseIdHint)).then((id) => {
+                  const useId = phaseIdHint || id;
+                  if (!useId) return;
+                  const pp = state.projects.find((x) => x.id === p.id);
+                  if (pp) { pp.areaPhaseIds = pp.areaPhaseIds || {}; pp.areaPhaseIds[area] = String(useId); saveState(state); }
+                });
+              }
+            };
+            showContextMenu(e, [
+              { label: "Rename category", action: doRenameCategory },
+              { label: "Remove category", danger: true, action: () => removeCategory(p.id, area) },
+            ]);
+          });
 
           // Mark the section as expanded so CSS can take it full-width.
           if (showTasksForThisCategory) section.classList.add("areaBoxExpanded");
@@ -27059,6 +27111,29 @@
           showLoadMessage('Category "' + label + '" deleted in Rocketlane.');
         } catch (e) {
           showLoadMessage('Category removed locally — couldn\'t delete the Rocketlane phase: ' + (e?.message ?? e));
+        }
+      }
+
+      // Mirror a category RENAME to Rocketlane by renaming the matching phase
+      // (keeps the local label == phase name so name-based matching keeps
+      // working). Returns the resolved phase id. Best-effort + async.
+      async function syncRenameCategoryPhase(rlPid, oldLabel, newLabel, phaseIdHint) {
+        if (!rlPid) return null;
+        try {
+          let phaseId = String(phaseIdHint ?? "").trim();
+          if (!phaseId) {
+            const phases = await rocketlaneFetchPhasesForProject(rlPid);
+            const low = String(oldLabel ?? "").trim().toLowerCase();
+            const m = phases.find((ph) => rocketlanePhaseName(ph).toLowerCase() === low);
+            phaseId = m ? String(rocketlanePhaseId(m)) : "";
+          }
+          if (!phaseId) { showLoadMessage('Category renamed locally (no matching Rocketlane phase found).'); return null; }
+          await rocketlaneRenameProjectPhase(rlPid, phaseId, newLabel);
+          showLoadMessage('Category renamed to "' + newLabel + '" in Rocketlane.');
+          return phaseId;
+        } catch (e) {
+          showLoadMessage('Category renamed locally — couldn\'t rename the Rocketlane phase: ' + (e?.message ?? e));
+          return null;
         }
       }
 
