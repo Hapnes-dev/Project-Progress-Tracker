@@ -11497,7 +11497,7 @@
             // per order.
             displayFields: [
               "orderNumber", "description", "plant_id", "plant_name",
-              "accountname", "status", "orderType",
+              "accountname", "accountId", "status", "orderType",
               "effectiveStartDate", "effectiveEndDate",
               "cancellationDate", "created", "modified",
               "isLastVersion", "isAutoRenewed",
@@ -11513,6 +11513,38 @@
           console.warn("[Younium status] plant_id all-orders search failed", e);
           return [];
         }
+      }
+      /**
+       * The saved Younium link may point to an OUTDATED order VERSION — e.g. a
+       * draft that was later activated/invoiced as a NEW version with its own
+       * order number. Younium keeps the old draft as a separate record with
+       * isLastVersion=false. Given such a stale order, resolve to the CURRENT
+       * version (isLastVersion=true) of the same logical order — matched by
+       * plant_id + identical description (+ accountId when the summary exposes
+       * it). Returns the stale order unchanged if no better current version is
+       * found, so it can never make the verdict worse.
+       */
+      async function youniumResolveCurrentVersion(staleOrder, project) {
+        if (!staleOrder || staleOrder.isLastVersion !== false) return staleOrder;
+        const plantId = extractPlantIdFromProjectName(project?.name)
+                     || extractPlantIdFromProjectName(staleOrder.description);
+        if (!plantId) return staleOrder;
+        let candidates;
+        try { candidates = await youniumFindAllOrdersByPlantId(plantId); }
+        catch (_) { return staleOrder; }
+        if (!Array.isArray(candidates) || !candidates.length) return staleOrder;
+        const norm = (s) => String(s || "").trim().toLowerCase();
+        const desc = norm(staleOrder.description);
+        const acct = String(staleOrder.accountId || "");
+        if (!desc) return staleOrder;
+        const summary =
+          candidates.find((c) => norm(c.description) === desc && (!c.accountId || String(c.accountId) === acct)) ||
+          candidates.find((c) => norm(c.description) === desc);
+        if (!summary || summary.id === staleOrder.id) return staleOrder;
+        try {
+          const full = await youniumFetchOrderDetails(summary.id);
+          return full || staleOrder;
+        } catch (_) { return staleOrder; }
       }
       async function youniumFetchInvoicesForOrder(orderNumber) {
         const bridge = window.YouniumBridge;
@@ -11974,6 +12006,23 @@
           out.label = "Younium: Not found";
           out.problems.push("Order not found via /api/order/<id>");
           return out;
+        }
+        // The saved link may point to an OUTDATED version (e.g. a draft that was
+        // later activated/invoiced as a new version). Follow it to the CURRENT
+        // version so the status reflects reality, not the stale draft.
+        if (order.isLastVersion === false) {
+          try {
+            const current = await youniumResolveCurrentVersion(order, project);
+            if (current && current.id !== order.id) {
+              dbg("saved link is an outdated version — resolved to current", {
+                from: { id: order.id, number: order.orderNumber, version: order.version },
+                to: { id: current.id, number: current.orderNumber, version: current.version },
+              });
+              out.supersededFrom = { id: order.id, orderNumber: order.orderNumber, version: order.version };
+              order = current;
+              out.links.saved = "https://eu.younium.com/orders/" + order.id;
+            }
+          } catch (e) { dbg("current-version resolution failed", e); }
         }
         out.orderNumber = order.orderNumber || classified.recordId;
         out.raw = { order };
