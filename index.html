@@ -27129,6 +27129,19 @@
         { re: /IWMAC\s*Modul:\s*(Heating|VGV)/i, key: "heating_system" },
         { re: /IWMAC\s*Modul:\s*Machine\s*Room/i, key: "machine_room" },
       ];
+      // Some order line items describe their OWN discipline rather than the
+      // module they're physically nested under — e.g. the "System image -
+      // Machinery" deliverable (Maskintegning / VGV-bilde) is listed under
+      // Refrigeration but belongs in its own "Machinery" category. Such items
+      // are pulled out of their module and grouped into the category named here
+      // (the item stays a task, its "- " sub-bullets stay subtasks).
+      const ORDER_INFO_PROMOTE_RULES = [
+        { re: /\bmachinery\b/i, key: "machinery", label: "Machinery" },
+      ];
+      function orderInfoPromoteRuleFor(text) {
+        const t = String(text || "");
+        return ORDER_INFO_PROMOTE_RULES.find((r) => r.re.test(t)) || null;
+      }
       // Parse the order-info HTML into modules → line items → sub-bullets.
       // Shape: <p><strong>IWMAC Modul: X</strong></p><ul><li>item</li>
       // <li>- sub-bullet</li>…</ul>. A "- "-prefixed <li> is a sub-bullet of the
@@ -27180,6 +27193,24 @@
         const html = String(info?.html || "");
         if (!html.trim() && !String(info?.text || "").trim()) { showLoadMessage("No order info found on this project."); return; }
         const modules = parseOrderInfoModules(html);
+        // Pull "own discipline" line items (e.g. System image - Machinery) out of
+        // whichever module they're nested under and group them by target category,
+        // so they become their own category instead of a task under that module.
+        const promotedByLabel = new Map(); // label -> { key, label, items: [] }
+        for (const pm of modules) {
+          const keep = [];
+          for (const item of (pm.items || [])) {
+            const rule = orderInfoPromoteRuleFor(item.text);
+            if (rule) {
+              let bucket = promotedByLabel.get(rule.label);
+              if (!bucket) { bucket = { key: rule.key, label: rule.label, items: [] }; promotedByLabel.set(rule.label, bucket); }
+              bucket.items.push(item);
+            } else {
+              keep.push(item);
+            }
+          }
+          pm.items = keep;
+        }
         // Plan: each parsed module that maps to a preset (deduped by preset key).
         const plan = [];
         const seen = new Set();
@@ -27191,7 +27222,7 @@
           seen.add(map.key);
           plan.push({ preset, items: pm.items });
         }
-        if (!plan.length) { showLoadMessage("No IWMAC modules found in the order info."); return; }
+        if (!plan.length && !promotedByLabel.size) { showLoadMessage("No IWMAC modules found in the order info."); return; }
         const existingLower = new Set(Object.values(p.areaLabels || {}).map((l) => String(l).trim().toLowerCase()));
         const created = [];
         for (const entry of plan) {
@@ -27221,6 +27252,32 @@
             private: !!(opts && opts.private), startDate: opts && opts.startDate, dueDate: opts && opts.dueDate,
           });
           created.push(preset.label);
+        }
+        // Promoted "own discipline" categories (e.g. Machinery) — built from the
+        // pulled-out line items only: no generic preset tasks, just each item as a
+        // task with its "- " sub-bullets as subtasks. Skips ones that already exist.
+        for (const bucket of promotedByLabel.values()) {
+          if (!bucket.items.length) continue;
+          if (existingLower.has(bucket.label.toLowerCase())) continue;
+          const existingKeys = new Set(Object.keys(p.tasksByArea ?? {}));
+          const key = ensureUniqueKey(existingKeys, bucket.key);
+          p.tasksByArea[key] = [];
+          p.areaLabels = p.areaLabels ?? {};
+          p.areaLabels[key] = bucket.label;
+          for (const item of bucket.items) {
+            const parentT = { id: id(), text: item.text, status: "todo", notes: "" };
+            p.tasksByArea[key].push(parentT);
+            for (const sub of (item.subs || [])) {
+              p.tasksByArea[key].push({
+                id: id(), text: sub, status: "todo", notes: "",
+                meta: { parentLocalTaskId: String(parentT.id), parentTaskName: item.text },
+              });
+            }
+          }
+          void syncCreateCategoryPhase(p, key, bucket.label, {
+            private: !!(opts && opts.private), startDate: opts && opts.startDate, dueDate: opts && opts.dueDate,
+          });
+          created.push(bucket.label);
         }
         touchProject(p.id);
         saveState(state);
