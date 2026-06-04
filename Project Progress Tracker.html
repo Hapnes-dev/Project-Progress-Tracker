@@ -27233,6 +27233,7 @@
         if (!plan.length) { showLoadMessage("No IWMAC modules found in the order info."); return; }
         const existingLower = new Set(Object.values(p.areaLabels || {}).map((l) => String(l).trim().toLowerCase()));
         const created = [];
+        const syncBatch = []; // { key, label, jobItems:[{ task, subs:[] }] }
         for (const entry of plan) {
           const preset = entry.preset;
           if (existingLower.has(preset.label.toLowerCase())) continue; // don't duplicate
@@ -27241,9 +27242,12 @@
           p.tasksByArea[key] = [];
           p.areaLabels = p.areaLabels ?? {};
           p.areaLabels[key] = preset.label;
+          const jobItems = [];
           // 1) generic Design + Integration tasks
           for (const taskText of [preset.integrationTask, preset.designTask]) {
-            p.tasksByArea[key].push({ id: id(), text: taskText, status: "todo", notes: "" });
+            const t = { id: id(), text: taskText, status: "todo", notes: "" };
+            p.tasksByArea[key].push(t);
+            jobItems.push({ task: t, subs: [] });
           }
           // 2) order line items (the module's own + any promoted into this preset,
           //    e.g. "System image - Machinery" → Machine Room) → tasks; their
@@ -27252,26 +27256,45 @@
           for (const item of lineItems) {
             const parentT = { id: id(), text: item.text, status: "todo", notes: "" };
             p.tasksByArea[key].push(parentT);
+            const jobItem = { task: parentT, subs: [] };
             for (const sub of (item.subs || [])) {
-              p.tasksByArea[key].push({
+              const subT = {
                 id: id(), text: sub, status: "todo", notes: "",
                 meta: { parentLocalTaskId: String(parentT.id), parentTaskName: item.text },
-              });
+              };
+              p.tasksByArea[key].push(subT);
+              jobItem.subs.push(subT);
             }
+            jobItems.push(jobItem);
           }
-          void syncCreateCategoryPhase(p, key, preset.label, {
-            private: !!(opts && opts.private), startDate: opts && opts.startDate, dueDate: opts && opts.dueDate,
-          });
+          syncBatch.push({ key, label: preset.label, jobItems });
           created.push(preset.label);
         }
         touchProject(p.id);
         saveState(state);
         render();
-        if (created.length) {
-          showLoadMessage("Created " + created.length + " categor" + (created.length > 1 ? "ies" : "y") + " from order info: " + created.join(", "));
-        } else {
+        if (!created.length) {
           showLoadMessage("All order-info module categories already exist on this project.");
+          return;
         }
+        showLoadMessage("Created " + created.length + " categor" + (created.length > 1 ? "ies" : "y") + " from order info: " + created.join(", ") + " — creating tasks in Rocketlane…");
+        // Create each phase AND its tasks + subtasks in Rocketlane (linking ids back
+        // onto the local tasks). The old code only created the phase via
+        // syncCreateCategoryPhase, so the tasks/subtasks were never pushed upstream —
+        // they showed in the tracker but not in Rocketlane. This is the actual fix.
+        const phaseOpts = { private: !!(opts && opts.private), startDate: opts && opts.startDate, dueDate: opts && opts.dueDate };
+        void (async () => {
+          let okTasks = 0, failTasks = 0;
+          for (const b of syncBatch) {
+            const r = await syncCreateCategoryWithTasks(p, b.key, b.label, b.jobItems, phaseOpts);
+            if (r) { okTasks += r.okTasks; failTasks += r.failTasks; }
+          }
+          showLoadMessage(
+            failTasks > 0
+              ? "Rocketlane: " + okTasks + " task(s) created, " + failTasks + " failed (kept locally)."
+              : "Rocketlane: all " + okTasks + " task(s) created.",
+          );
+        })();
       }
 
       // "Add category" dialog — mirrors Rocketlane's "Create project phase"
@@ -27422,19 +27445,30 @@
           p.tasksByArea[key] = p.tasksByArea[key] ?? [];
           p.areaLabels = p.areaLabels ?? {};
           p.areaLabels[key] = label;
+          const jobItems = [];
           if (preset) {
             for (const taskText of [preset.integrationTask, preset.designTask]) {
-              p.tasksByArea[key].push({ id: id(), text: taskText, status: "todo", notes: "" });
+              const t = { id: id(), text: taskText, status: "todo", notes: "" };
+              p.tasksByArea[key].push(t);
+              jobItems.push({ task: t, subs: [] });
             }
           }
           touchProject(p.id);
           saveState(state);
-          void syncCreateCategoryPhase(p, key, label, {
+          const catOpts = {
             private: isPrivate,
             description: String(descTa.value || "").trim(),
             startDate: startInput.value || todayStr,
             dueDate: dueInput.value || startInput.value || todayStr,
-          });
+          };
+          // Create the phase — and, when a preset added generic tasks, create those
+          // tasks in Rocketlane too (syncCreateCategoryPhase alone only makes the phase,
+          // which left the preset's Integration/Design tasks local-only).
+          if (jobItems.length) {
+            void syncCreateCategoryWithTasks(p, key, label, jobItems, catOpts);
+          } else {
+            void syncCreateCategoryPhase(p, key, label, catOpts);
+          }
           render();
           close();
         };
@@ -27527,6 +27561,65 @@
         } catch (e) {
           showLoadMessage('Category added locally — couldn\'t create the Rocketlane phase: ' + (e?.message ?? e));
         }
+      }
+      // Like syncCreateCategoryPhase, but ALSO creates the category's tasks (and
+      // their subtasks) in Rocketlane and links the returned ids back onto the
+      // local task objects. `jobItems` = [{ task:<localTaskObj>, subs:[<localSubObj>…] }].
+      // Used by the order-info preset, which builds many tasks at once — the plain
+      // syncCreateCategoryPhase only makes the phase, which left every task/subtask
+      // local-only (they never appeared in Rocketlane). Sequential on purpose:
+      // a subtask needs its parent's freshly-created Rocketlane id to nest under.
+      async function syncCreateCategoryWithTasks(project, areaKey, label, jobItems, opts) {
+        const rlPid = String(project?.rocketlaneProjectId ?? "").trim();
+        if (!rlPid) return { okTasks: 0, failTasks: 0, phase: null };
+        let phase;
+        try {
+          phase = await rocketlaneGetOrCreatePhase(rlPid, label, opts);
+        } catch (e) {
+          showLoadMessage('Category "' + label + '" added locally — couldn\'t create the Rocketlane phase: ' + (e?.message ?? e));
+          return { okTasks: 0, failTasks: 0, phase: null };
+        }
+        const phaseId = rocketlanePhaseId(phase);
+        if (phaseId) {
+          project.areaPhaseIds = project.areaPhaseIds || {};
+          project.areaPhaseIds[areaKey] = String(phaseId);
+          saveState(state);
+        }
+        const taskOpts = { private: !!(opts && opts.private) };
+        let okTasks = 0, failTasks = 0;
+        for (const it of (jobItems || [])) {
+          let parentRlId = "";
+          try {
+            const created = await rocketlaneCreateTaskInRocketlane(rlPid, phase, it.task.text, undefined, taskOpts);
+            parentRlId = String(rocketlaneTaskId(created) ?? "").trim();
+            if (parentRlId) {
+              it.task.meta = it.task.meta ?? {};
+              it.task.meta.rocketlaneTaskId = parentRlId;
+              it.task.meta.rocketlaneProjectId = rlPid;
+              it.task.meta.rocketlanePhase = rocketlanePhaseName(phase);
+              okTasks++;
+            } else { failTasks++; }
+          } catch (e) { failTasks++; console.warn("order-info: task create failed:", it.task.text, e); }
+          for (const subT of (it.subs || [])) {
+            try {
+              // parentRlId present → nests under the parent; absent → falls back to a
+              // plain task in the phase so the deliverable still exists in Rocketlane.
+              const createdSub = await rocketlaneCreateTaskInRocketlane(rlPid, phase, subT.text, parentRlId || undefined, taskOpts);
+              const subRlId = String(rocketlaneTaskId(createdSub) ?? "").trim();
+              if (subRlId) {
+                subT.meta = subT.meta ?? {};
+                subT.meta.rocketlaneTaskId = subRlId;
+                subT.meta.rocketlaneProjectId = rlPid;
+                subT.meta.rocketlanePhase = rocketlanePhaseName(phase);
+                if (parentRlId) subT.meta.parentTaskId = parentRlId;
+                okTasks++;
+              } else { failTasks++; }
+            } catch (e) { failTasks++; console.warn("order-info: subtask create failed:", subT.text, e); }
+          }
+          saveState(state);
+          render();
+        }
+        return { okTasks, failTasks, phase };
       }
       // Mirror a category REMOVAL to Rocketlane by deleting the matching phase
       // (Rocketlane cascades its tasks). Uses the stored phase id when present,
