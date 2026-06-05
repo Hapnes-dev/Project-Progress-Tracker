@@ -31079,6 +31079,26 @@
       els.sort.addEventListener("change", () => { saveToolbarPrefs(); renderList(); });
       els.filter.addEventListener("change", () => { saveToolbarPrefs(); renderList(); });
 
+      // Ctrl/Cmd+F focuses the project search box (instead of the browser's
+      // native find) — the in-app search filters the list by name / partner /
+      // owner / notes, which is what you actually want on this page. Skipped
+      // while a fullscreen reader or the add-category/task dialog is open, or
+      // while you're typing in another editable field, so it never yanks focus
+      // mid-edit (the browser's native find still works there).
+      document.addEventListener("keydown", (e) => {
+        const k = String(e.key || "").toLowerCase();
+        if (k !== "f" || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+        const box = els.search;
+        if (!box) return;
+        if (document.body.classList.contains("notesFullscreenOpen")) return;
+        if (document.getElementById("addCatOverlay")) return;
+        const ae = document.activeElement;
+        if (ae && ae !== box && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)) return;
+        e.preventDefault();
+        box.focus();
+        box.select();
+      });
+
       // Also persist when the per-owner-group quick-sort buttons change the
       // sort programmatically (they set els.sort.value directly).
       const origSortDescriptor = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
