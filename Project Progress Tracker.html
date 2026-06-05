@@ -27234,9 +27234,10 @@
       // delivery-status / Oneflow-product field), detect which IWMAC modules the
       // order contains, and for each create the matching module category with:
       //   • the generic preset Design + Integration tasks, AND
-      //   • a task per order line item (its "- " sub-bullets become subtasks),
+      //   • a task per order line item (its sub-bullets become subtasks),
       //   • a Rocketlane phase.
-      // Skips modules whose category already exists. Applies the dialog's Type + dates.
+      // If the category already exists, BACKFILLS only the missing tasks/subtasks
+      // (matched by normalized text) rather than skipping. Applies the dialog's Type + dates.
       async function createCategoriesFromOrderInfo(p, opts) {
         const rlPid = String(p?.rocketlaneProjectId ?? "").trim();
         if (!rlPid) { showLoadMessage("This project isn't linked to Rocketlane — no order info to read."); return; }
@@ -27284,57 +27285,127 @@
           plan.push({ preset, items: [] });
         }
         if (!plan.length) { showLoadMessage("No IWMAC modules found in the order info."); return; }
-        const existingLower = new Set(Object.values(p.areaLabels || {}).map((l) => String(l).trim().toLowerCase()));
-        const created = [];
-        const syncBatch = []; // { key, label, jobItems:[{ task, subs:[] }] }
+        // For each planned category, build the DESIRED task set, then either CREATE
+        // the category (new) or BACKFILL only the missing tasks/subtasks into the
+        // existing one — so re-running after you delete tasks (or an earlier
+        // half-create) tops it up instead of skipping. Matching is by normalized
+        // text (dash/space/case-insensitive) so "— 30 pcs" vs "- 30 pcs" don't dupe.
+        const norm = (s) => String(s ?? "").trim().toLowerCase().replace(/[–—−]/g, "-").replace(/\s+/g, " ");
+        const created = [];     // labels of brand-new categories
+        const backfilled = [];  // { label, count } for existing categories topped up
+        const syncBatch = [];   // { key, label, jobItems }
         for (const entry of plan) {
           const preset = entry.preset;
-          if (existingLower.has(preset.label.toLowerCase())) continue; // don't duplicate
-          const existingKeys = new Set(Object.keys(p.tasksByArea ?? {}));
-          const key = ensureUniqueKey(existingKeys, preset.key);
-          p.tasksByArea[key] = [];
-          p.areaLabels = p.areaLabels ?? {};
-          p.areaLabels[key] = preset.label;
-          const jobItems = [];
-          // 1) generic Design + Integration tasks
-          for (const taskText of [preset.integrationTask, preset.designTask]) {
-            const t = { id: id(), text: taskText, status: "todo", notes: "" };
-            p.tasksByArea[key].push(t);
-            jobItems.push({ task: t, subs: [] });
-          }
-          // 2) order line items (the module's own + any promoted into this preset,
-          //    e.g. "System image - Machinery" → Machine Room) → tasks; their
-          //    "- " sub-bullets → subtasks
+          // Desired = generic Integration/Design + a task per order line item
+          // (module's own + promoted into this preset), each with its sub-bullets.
+          const desired = [
+            { text: preset.integrationTask, subs: [] },
+            { text: preset.designTask, subs: [] },
+          ];
           const lineItems = [ ...(entry.items || []), ...(promotedByPreset.get(preset.key) || []) ];
-          for (const item of lineItems) {
-            const parentT = { id: id(), text: item.text, status: "todo", notes: "" };
-            p.tasksByArea[key].push(parentT);
-            const jobItem = { task: parentT, subs: [] };
-            for (const sub of (item.subs || [])) {
-              const subT = {
-                id: id(), text: sub, status: "todo", notes: "",
-                meta: { parentLocalTaskId: String(parentT.id), parentTaskName: item.text },
-              };
-              p.tasksByArea[key].push(subT);
-              jobItem.subs.push(subT);
-            }
-            jobItems.push(jobItem);
+          for (const item of lineItems) desired.push({ text: item.text, subs: (item.subs || []).slice() });
+
+          // Existing category with this label? (match by normalized label)
+          let existingKey = null;
+          for (const [k, lbl] of Object.entries(p.areaLabels || {})) {
+            if (norm(lbl) === norm(preset.label)) { existingKey = k; break; }
           }
-          syncBatch.push({ key, label: preset.label, jobItems });
-          created.push(preset.label);
+
+          if (!existingKey) {
+            // NEW category — create it with every desired task + subtask.
+            const existingKeys = new Set(Object.keys(p.tasksByArea ?? {}));
+            const key = ensureUniqueKey(existingKeys, preset.key);
+            p.tasksByArea[key] = [];
+            p.areaLabels = p.areaLabels ?? {};
+            p.areaLabels[key] = preset.label;
+            const jobItems = [];
+            for (const d of desired) {
+              const parentT = { id: id(), text: d.text, status: "todo", notes: "" };
+              p.tasksByArea[key].push(parentT);
+              const ji = { task: parentT, subs: [] };
+              for (const subText of d.subs) {
+                const subT = { id: id(), text: subText, status: "todo", notes: "", meta: { parentLocalTaskId: String(parentT.id), parentTaskName: d.text } };
+                p.tasksByArea[key].push(subT);
+                ji.subs.push(subT);
+              }
+              jobItems.push(ji);
+            }
+            syncBatch.push({ key, label: preset.label, jobItems });
+            created.push(preset.label);
+          } else {
+            // EXISTING category — add only the MISSING tasks/subtasks.
+            const arr = (p.tasksByArea[existingKey] = p.tasksByArea[existingKey] ?? []);
+            const topByNorm = new Map();    // norm(text) -> top-level task obj
+            const subsByParent = new Map(); // parentLocalId -> Set(norm subtext)
+            for (const t of arr) {
+              const pid = t.meta && t.meta.parentLocalTaskId;
+              if (pid) {
+                const pk = String(pid);
+                if (!subsByParent.has(pk)) subsByParent.set(pk, new Set());
+                subsByParent.get(pk).add(norm(t.text));
+              } else {
+                topByNorm.set(norm(t.text), t);
+              }
+            }
+            const jobItems = [];
+            let addedCount = 0;
+            for (const d of desired) {
+              const existParent = topByNorm.get(norm(d.text));
+              if (!existParent) {
+                // Missing top-level task → add it + all its subs (parent created in RL).
+                const parentT = { id: id(), text: d.text, status: "todo", notes: "" };
+                arr.push(parentT);
+                topByNorm.set(norm(d.text), parentT);
+                addedCount++;
+                const ji = { task: parentT, subs: [], parentExists: false };
+                for (const subText of d.subs) {
+                  const subT = { id: id(), text: subText, status: "todo", notes: "", meta: { parentLocalTaskId: String(parentT.id), parentTaskName: d.text } };
+                  arr.push(subT);
+                  ji.subs.push(subT);
+                  addedCount++;
+                }
+                jobItems.push(ji);
+              } else if (d.subs.length) {
+                // Top-level exists → add only its missing sub-bullets, nested under
+                // the EXISTING Rocketlane task (don't recreate the parent).
+                const have = subsByParent.get(String(existParent.id)) || new Set();
+                const missing = [];
+                for (const subText of d.subs) {
+                  if (have.has(norm(subText))) continue;
+                  const subT = { id: id(), text: subText, status: "todo", notes: "", meta: { parentLocalTaskId: String(existParent.id), parentTaskName: existParent.text } };
+                  arr.push(subT);
+                  have.add(norm(subText));
+                  missing.push(subT);
+                  addedCount++;
+                }
+                if (missing.length) {
+                  jobItems.push({
+                    task: existParent, subs: missing, parentExists: true,
+                    parentRlId: String((existParent.meta && existParent.meta.rocketlaneTaskId) || "").trim(),
+                  });
+                }
+              }
+            }
+            if (jobItems.length) {
+              syncBatch.push({ key: existingKey, label: preset.label, jobItems });
+              backfilled.push({ label: preset.label, count: addedCount });
+            }
+          }
         }
         touchProject(p.id);
         saveState(state);
         render();
-        if (!created.length) {
-          showLoadMessage("All order-info module categories already exist on this project.");
+        if (!created.length && !backfilled.length) {
+          showLoadMessage("Everything from the order info is already on this project.");
           return;
         }
-        showLoadMessage("Created " + created.length + " categor" + (created.length > 1 ? "ies" : "y") + " from order info: " + created.join(", ") + " — creating tasks in Rocketlane…");
-        // Create each phase AND its tasks + subtasks in Rocketlane (linking ids back
-        // onto the local tasks). The old code only created the phase via
-        // syncCreateCategoryPhase, so the tasks/subtasks were never pushed upstream —
-        // they showed in the tracker but not in Rocketlane. This is the actual fix.
+        const parts = [];
+        if (created.length) parts.push("created " + created.length + " categor" + (created.length > 1 ? "ies" : "y") + " (" + created.join(", ") + ")");
+        if (backfilled.length) parts.push("added missing tasks to " + backfilled.map((b) => b.label + " +" + b.count).join(", "));
+        showLoadMessage("Order info: " + parts.join("; ") + " — syncing to Rocketlane…");
+        // Create each phase + its new/missing tasks + subtasks in Rocketlane, linking
+        // ids back. Backfill reuses the existing phase (rocketlaneGetOrCreatePhase)
+        // and nests new sub-bullets under the existing parent task's Rocketlane id.
         const phaseOpts = { private: !!(opts && opts.private), startDate: opts && opts.startDate, dueDate: opts && opts.dueDate };
         void (async () => {
           let okTasks = 0, failTasks = 0;
@@ -27344,8 +27415,8 @@
           }
           showLoadMessage(
             failTasks > 0
-              ? "Rocketlane: " + okTasks + " task(s) created, " + failTasks + " failed (kept locally)."
-              : "Rocketlane: all " + okTasks + " task(s) created.",
+              ? "Rocketlane: " + okTasks + " task(s) synced, " + failTasks + " failed (kept locally)."
+              : "Rocketlane: all " + okTasks + " task(s) synced.",
           );
         })();
       }
@@ -27641,18 +27712,23 @@
         const taskOpts = { private: !!(opts && opts.private) };
         let okTasks = 0, failTasks = 0;
         for (const it of (jobItems || [])) {
-          let parentRlId = "";
-          try {
-            const created = await rocketlaneCreateTaskInRocketlane(rlPid, phase, it.task.text, undefined, taskOpts);
-            parentRlId = String(rocketlaneTaskId(created) ?? "").trim();
-            if (parentRlId) {
-              it.task.meta = it.task.meta ?? {};
-              it.task.meta.rocketlaneTaskId = parentRlId;
-              it.task.meta.rocketlaneProjectId = rlPid;
-              it.task.meta.rocketlanePhase = rocketlanePhaseName(phase);
-              okTasks++;
-            } else { failTasks++; }
-          } catch (e) { failTasks++; console.warn("order-info: task create failed:", it.task.text, e); }
+          // Backfill of an EXISTING parent (it.parentExists) skips creating the
+          // parent and nests the missing sub-bullets under its existing Rocketlane
+          // id (it.parentRlId); a new parent is created and linked as before.
+          let parentRlId = String(it.parentRlId || "").trim();
+          if (!it.parentExists) {
+            try {
+              const created = await rocketlaneCreateTaskInRocketlane(rlPid, phase, it.task.text, undefined, taskOpts);
+              parentRlId = String(rocketlaneTaskId(created) ?? "").trim();
+              if (parentRlId) {
+                it.task.meta = it.task.meta ?? {};
+                it.task.meta.rocketlaneTaskId = parentRlId;
+                it.task.meta.rocketlaneProjectId = rlPid;
+                it.task.meta.rocketlanePhase = rocketlanePhaseName(phase);
+                okTasks++;
+              } else { failTasks++; }
+            } catch (e) { failTasks++; console.warn("order-info: task create failed:", it.task.text, e); }
+          }
           for (const subT of (it.subs || [])) {
             try {
               // parentRlId present → nests under the parent; absent → falls back to a
