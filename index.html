@@ -8079,13 +8079,12 @@
       }
 
       // ── Download folder handle (cached across page loads) ────────────
-      // The Files popover's "Download all" used to prompt the user to
-      // pick a folder every single time. After the FIRST pick we now
-      // cache the FileSystemDirectoryHandle in IndexedDB and reuse it
-      // for every subsequent download — zero picker prompts until the
-      // browser revokes the permission (typically only on a manual
-      // permission reset). The picker, when it does appear, opens at
-      // the user's Downloads folder so they can usually one-click it.
+      // The Files popover's "Download all" prompts for the destination folder
+      // on EVERY run, so the user always chooses where the files go. We still
+      // cache the last-picked FileSystemDirectoryHandle in IndexedDB, but only
+      // to use it as the picker's STARTING location next time — the picker is
+      // always shown. (An earlier version auto-reused the cached folder with no
+      // prompt; users asked to choose the destination each time.)
       const DL_IDB_NAME = "tracker-fs-handles";
       const DL_IDB_STORE = "handles";
       const DL_HANDLE_KEY = "downloads-parent-dir";
@@ -8131,39 +8130,37 @@
       }
 
       /**
-       * Get a writable FileSystemDirectoryHandle for the parent download
-       * folder. Prefers a previously-cached handle (one-time setup); if
-       * its permission was revoked since last use, prompts for re-grant.
-       * Falls back to showDirectoryPicker starting at the Downloads dir
-       * when no cache exists. Returns null on user cancel.
+       * Always prompt the user to pick the parent download folder, so they
+       * choose the destination on every "Download all". The picker starts at
+       * the last-used folder when one is cached (else the OS Downloads dir);
+       * the pick is remembered only as next time's starting point. Returns a
+       * writable FileSystemDirectoryHandle, or null on cancel.
        */
       async function getOrPickDownloadParentDir() {
         if (typeof window.showDirectoryPicker !== "function") return null;
-        const cached = await idbGetSavedDownloadDir();
-        if (cached) {
-          try {
-            let perm = "denied";
-            if (typeof cached.queryPermission === "function") {
-              perm = await cached.queryPermission({ mode: "readwrite" });
-            }
-            if (perm !== "granted" && typeof cached.requestPermission === "function") {
-              perm = await cached.requestPermission({ mode: "readwrite" });
-            }
-            if (perm === "granted") return cached;
-          } catch (e) {
-            console.warn("[Downloads] cached handle permission check failed:", e);
-          }
-        }
+        // Start the picker at the folder used last time (a cached handle is a
+        // valid `startIn` hint even without an active permission grant), else
+        // the OS Downloads folder.
+        let startIn = "downloads";
+        try { const cached = await idbGetSavedDownloadDir(); if (cached) startIn = cached; } catch (_) {}
+        const pick = (start) => window.showDirectoryPicker({ mode: "readwrite", startIn: start, id: "tracker-downloads" });
         try {
-          const picked = await window.showDirectoryPicker({
-            mode: "readwrite",
-            startIn: "downloads",
-            id: "tracker-downloads",
-          });
-          void idbSaveDownloadDir(picked);
+          const picked = await pick(startIn);
+          void idbSaveDownloadDir(picked); // remember as next time's starting point
           return picked;
         } catch (e) {
-          if (e?.name === "AbortError") return null;
+          if (e?.name === "AbortError") return null; // user cancelled the picker
+          // A stale cached startIn handle can throw — retry once at Downloads.
+          if (startIn !== "downloads") {
+            try {
+              const picked = await pick("downloads");
+              void idbSaveDownloadDir(picked);
+              return picked;
+            } catch (e2) {
+              if (e2?.name === "AbortError") return null;
+              throw e2;
+            }
+          }
           throw e;
         }
       }
@@ -30599,10 +30596,10 @@
               // Falls back to the legacy per-file download flow when the API
               // is missing (Firefox / Safari / older Chrome / file:// origin).
               //
-              // Uses getOrPickDownloadParentDir which caches the picked
-              // folder in IndexedDB — so after the first pick (which
-              // defaults to the Downloads folder) every subsequent run
-              // writes straight there, no picker shown.
+              // Uses getOrPickDownloadParentDir, which prompts for the
+              // destination folder on every run (the picker starts at the
+              // last-used folder, else Downloads) so the user always chooses
+              // where the files go.
               //
               // After resolving the parent folder we auto-create a subfolder
               // named after the project so each project's files stay grouped.
