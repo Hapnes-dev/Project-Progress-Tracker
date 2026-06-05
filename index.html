@@ -4928,6 +4928,20 @@
       @media (prefers-color-scheme: light) {
         .notesFullscreenOverlay .notifCommentFullscreenBody { background: #ffffff; }
       }
+      /* Reply composer in the notification fullscreen reader: match the comment
+         body's surface (#0f1424 / #fff) so the "type your reply" field and its
+         panel blend with the message above, instead of the shared
+         .zendeskCompose translucent panel + var(--surface-1) textarea. */
+      .notesFullscreenOverlay .zendeskCompose,
+      .notesFullscreenOverlay .zendeskComposeTextarea {
+        background: #0f1424;
+      }
+      @media (prefers-color-scheme: light) {
+        .notesFullscreenOverlay .zendeskCompose,
+        .notesFullscreenOverlay .zendeskComposeTextarea {
+          background: #ffffff;
+        }
+      }
       .notifCommentFullscreenBody img { max-width: 100%; height: auto; }
       .notifCommentFullscreenBody .notifFsCommentHead {
         font-size: 12px;
