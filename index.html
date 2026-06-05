@@ -29170,6 +29170,124 @@
               .catch(() => { if (bodyEl.isConnected) renderBody({ bodyText: o.bodyText }); });
           }
 
+          // Optional Zendesk reply composer — identical look + behavior to the
+          // Zendesk Tasks fullscreen (shared .zendeskCompose / .zendeskReplyKind
+          // CSS, Public-reply default, Ctrl/Cmd+Enter to send). Enabled when the
+          // caller passes `o.reply = { ticketId, ticketStatus }`; closed tickets
+          // get the same "can't reply" notice (Zendesk 422s on closed tickets).
+          if (o.reply && o.reply.ticketId && window.ZendeskBridge && typeof window.ZendeskBridge.postTicketReply === "function") {
+            const replyTicketId = o.reply.ticketId;
+            const replyStatus = String(o.reply.ticketStatus || "").toLowerCase();
+            if (replyStatus === "closed") {
+              const closedNotice = document.createElement("div");
+              closedNotice.className = "zendeskComposeClosed";
+              closedNotice.style.cssText = "max-width:1100px;width:100%;align-self:center;box-sizing:border-box;";
+              closedNotice.textContent =
+                "This ticket is closed and cannot receive new replies. Re-open it in Zendesk to reply.";
+              overlay.appendChild(closedNotice);
+            } else {
+              const compose = document.createElement("div");
+              compose.className = "zendeskCompose";
+              compose.style.cssText = "max-width:1100px;width:100%;align-self:center;box-sizing:border-box;";
+
+              const composeHd = document.createElement("div");
+              composeHd.className = "zendeskComposeHd";
+              composeHd.textContent = "Reply";
+              compose.appendChild(composeHd);
+
+              const toolbar = document.createElement("div");
+              toolbar.className = "zendeskComposeToolbar";
+              const replyKind = document.createElement("div");
+              replyKind.className = "zendeskReplyKind";
+              replyKind.dataset.active = "public";
+              replyKind.setAttribute("role", "tablist");
+              const thumb = document.createElement("div");
+              thumb.className = "zendeskReplyKindThumb";
+              thumb.setAttribute("aria-hidden", "true");
+              replyKind.appendChild(thumb);
+              const btnPublic = document.createElement("button");
+              btnPublic.type = "button";
+              btnPublic.className = "zendeskReplyKindBtn public";
+              btnPublic.setAttribute("role", "tab");
+              btnPublic.setAttribute("aria-selected", "true");
+              btnPublic.title = "Customer-visible reply";
+              btnPublic.textContent = "Public reply";
+              const btnInternal = document.createElement("button");
+              btnInternal.type = "button";
+              btnInternal.className = "zendeskReplyKindBtn internal";
+              btnInternal.setAttribute("role", "tab");
+              btnInternal.setAttribute("aria-selected", "false");
+              btnInternal.title = "Agents only — customer won't see this";
+              btnInternal.textContent = "Internal note";
+              const publicCheck = { checked: true };
+              const setKind = (isPublic) => {
+                publicCheck.checked = isPublic;
+                replyKind.dataset.active = isPublic ? "public" : "internal";
+                btnPublic.setAttribute("aria-selected", isPublic ? "true" : "false");
+                btnInternal.setAttribute("aria-selected", isPublic ? "false" : "true");
+                if (typeof updateSubmitLabel === "function") updateSubmitLabel();
+              };
+              btnPublic.addEventListener("click", () => setKind(true));
+              btnInternal.addEventListener("click", () => setKind(false));
+              replyKind.appendChild(btnPublic);
+              replyKind.appendChild(btnInternal);
+              toolbar.appendChild(replyKind);
+
+              const ta = document.createElement("textarea");
+              ta.className = "zendeskComposeTextarea";
+              ta.placeholder = "Type your reply…";
+
+              const submitRow = document.createElement("div");
+              submitRow.className = "zendeskComposeRow";
+              const statusLine = document.createElement("span");
+              statusLine.className = "zendeskComposeStatus";
+              const submitBtn = document.createElement("button");
+              submitBtn.type = "button";
+              submitBtn.className = "zendeskComposeBtn";
+              const updateSubmitLabel = () => {
+                submitBtn.textContent = publicCheck.checked ? "Send public reply" : "Add internal note";
+              };
+              updateSubmitLabel();
+
+              const doSubmit = async () => {
+                const text = ta.value.trim();
+                if (!text) { statusLine.textContent = "Reply cannot be empty."; statusLine.classList.add("error"); return; }
+                submitBtn.disabled = true; ta.disabled = true;
+                statusLine.classList.remove("error");
+                statusLine.textContent = "Sending…";
+                try {
+                  await window.ZendeskBridge.postTicketReply(replyTicketId, text, publicCheck.checked);
+                  ta.value = "";
+                  statusLine.textContent = "Sent.";
+                  ta.disabled = false; submitBtn.disabled = false;
+                  // Refresh the conversation body so the just-sent reply appears.
+                  if (typeof o.load === "function") {
+                    Promise.resolve().then(() => o.load())
+                      .then((res) => { if (bodyEl.isConnected) renderBody(res || {}); })
+                      .catch(() => {});
+                  }
+                  // Refresh the recent-replies list ("You replied" line + timestamp).
+                  if (typeof o.onSent === "function") { try { o.onSent(); } catch (_) {} }
+                } catch (e) {
+                  statusLine.textContent = "Failed: " + String(e?.message ?? e);
+                  statusLine.classList.add("error");
+                  submitBtn.disabled = false; ta.disabled = false;
+                }
+              };
+              submitBtn.addEventListener("click", doSubmit);
+              ta.addEventListener("keydown", (e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); doSubmit(); }
+              });
+
+              submitRow.appendChild(statusLine);
+              submitRow.appendChild(submitBtn);
+              compose.appendChild(toolbar);
+              compose.appendChild(ta);
+              compose.appendChild(submitRow);
+              overlay.appendChild(compose);
+            }
+          }
+
           document.body.appendChild(overlay);
           document.body.classList.add("notesFullscreenOpen");
 
@@ -29373,7 +29491,7 @@
               );
             });
             // Right-click → read the full reply in a centered fullscreen popup.
-            item.title = "Left-click: open in Zendesk · Right-click: read fullscreen";
+            item.title = "Left-click: open in Zendesk · Right-click: read & reply fullscreen";
             item.addEventListener("contextmenu", (ev) => {
               ev.preventDefault();
               ev.stopPropagation();
@@ -29388,6 +29506,9 @@
                 title: t.subject || "Ticket #" + t.id,
                 meta: (t.authorName || "Someone") + (t.isInternal ? " added an internal note" : " replied") + (rel ? " · " + rel : ""),
                 bodyText: fallback,
+                // Reply right here (Public reply / Internal note), same as Zendesk Tasks.
+                reply: { ticketId: t.id, ticketStatus: t.status },
+                onSent: () => { if (typeof notifZdRefresh === "function") void notifZdRefresh(); },
                 // Render the real Zendesk html_body so it looks exactly like
                 // Zendesk (formatting, embedded images, signature) — fetched on
                 // demand to keep the cache lean and the content un-truncated.
