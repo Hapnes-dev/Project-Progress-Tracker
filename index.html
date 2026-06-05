@@ -27157,10 +27157,12 @@
         return ORDER_INFO_PROMOTE_RULES.find((r) => r.re.test(t)) || null;
       }
       // Parse the order-info HTML into modules → line items → sub-bullets.
-      // Shape: <p><strong>IWMAC Modul: X</strong></p><ul><li>item</li>
-      // <li>- sub-bullet</li>…</ul>. A "- "-prefixed <li> is a sub-bullet of the
-      // most recent non-dash line item above it (Oneflow renders these flat, not
-      // as a true nested <ul>). Returns [{ headerText, items: [{ text, subs[] }] }].
+      // Shape: <p><strong>IWMAC Modul: X</strong></p><ul>…</ul>. Sub-bullets come
+      // in TWO Oneflow flavors, both handled: (a) a true **nested <ul>** inside the
+      // parent <li> — `<li>item<ul><li>sub</li></ul></li>` — and (b) a flat
+      // **"- "-prefixed <li> sibling** after the line item. An item's OWN text
+      // excludes any nested list (else li.textContent globs parent + subs into one
+      // string). Returns [{ headerText, items: [{ text, subs[] }] }].
       function parseOrderInfoModules(html) {
         const out = [];
         let doc;
@@ -27174,16 +27176,53 @@
             out.push(current);
           } else if (tag === "ul" && current) {
             let lastTop = null;
+            // An <li>'s OWN text = text directly in it, EXCLUDING any nested
+            // <ul>/<ol> (whose <li>s are subtasks, handled separately below).
+            const liOwnText = (li) => {
+              let s = "";
+              for (const n of Array.from(li.childNodes)) {
+                if (n.nodeType === 1) {
+                  const nt = String(n.tagName || "").toLowerCase();
+                  if (nt === "ul" || nt === "ol") continue; // nested list = subtasks
+                  s += n.textContent || "";
+                } else if (n.nodeType === 3) {
+                  s += n.nodeValue || "";
+                }
+              }
+              return s.replace(/\s+/g, " ").trim();
+            };
+            const stripDash = (s) => String(s || "").replace(/^[-–—]\s*/, "").trim();
             for (const li of Array.from(node.children)) {
               if (String(li.tagName || "").toLowerCase() !== "li") continue;
-              const t = (li.textContent || "").replace(/\s+/g, " ").trim();
-              if (!t) continue;
-              if (/^[-–—]\s*/.test(t)) {
-                const sub = t.replace(/^[-–—]\s*/, "").trim();
+              const own = liOwnText(li);
+              // (b) Flat format: a dash-prefixed <li> sibling is a sub-bullet of
+              // the line item above it.
+              if (own && /^[-–—]\s*/.test(own)) {
+                const sub = stripDash(own);
                 if (sub) { if (lastTop) lastTop.subs.push(sub); else current.items.push({ text: sub, subs: [] }); }
-              } else {
-                lastTop = { text: t, subs: [] };
+                continue;
+              }
+              // New top-level line item (its own text, minus any nested list).
+              if (own) {
+                lastTop = { text: own, subs: [] };
                 current.items.push(lastTop);
+              }
+              // (a) Nested format: a <ul>/<ol> inside this <li> → its <li>s are
+              // sub-bullets of this line item.
+              let nested = null;
+              for (const c of Array.from(li.children)) {
+                const ct = String(c.tagName || "").toLowerCase();
+                if (ct === "ul" || ct === "ol") { nested = c; break; }
+              }
+              if (nested) {
+                const target = lastTop || (current.items.length ? current.items[current.items.length - 1] : null);
+                for (const subLi of Array.from(nested.children)) {
+                  if (String(subLi.tagName || "").toLowerCase() !== "li") continue;
+                  const subText = stripDash(liOwnText(subLi));
+                  if (!subText) continue;
+                  if (target) target.subs.push(subText);
+                  else current.items.push({ text: subText, subs: [] });
+                }
               }
             }
           }
