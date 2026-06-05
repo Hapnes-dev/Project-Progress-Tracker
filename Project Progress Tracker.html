@@ -27333,62 +27333,64 @@
             syncBatch.push({ key, label: preset.label, jobItems });
             created.push(preset.label);
           } else {
-            // EXISTING category — add only the MISSING tasks/subtasks.
+            // EXISTING category — ensure every desired task/subtask exists locally
+            // AND in Rocketlane. A task "needs syncing" when it's missing locally OR
+            // present locally but has no Rocketlane id yet (rlId null — e.g. created
+            // by older phase-only code, so the phase is upstream but its tasks never
+            // were). syncCreateCategoryWithTasks dedups against the phase's existing
+            // Rocketlane tasks so this never double-creates.
             const arr = (p.tasksByArea[existingKey] = p.tasksByArea[existingKey] ?? []);
-            const topByNorm = new Map();    // norm(text) -> top-level task obj
-            const subsByParent = new Map(); // parentLocalId -> Set(norm subtext)
+            const rlIdOf = (t) => String((t && t.meta && t.meta.rocketlaneTaskId) || "").trim();
+            const topByNorm = new Map();     // norm(text) -> top-level task obj
+            const subsOfParent = new Map();  // parentLocalId -> Map(norm subtext -> sub obj)
             for (const t of arr) {
-              const pid = t.meta && t.meta.parentLocalTaskId;
-              if (pid) {
-                const pk = String(pid);
-                if (!subsByParent.has(pk)) subsByParent.set(pk, new Set());
-                subsByParent.get(pk).add(norm(t.text));
+              const pidv = t.meta && t.meta.parentLocalTaskId;
+              if (pidv) {
+                const pk = String(pidv);
+                if (!subsOfParent.has(pk)) subsOfParent.set(pk, new Map());
+                subsOfParent.get(pk).set(norm(t.text), t);
               } else {
                 topByNorm.set(norm(t.text), t);
               }
             }
             const jobItems = [];
-            let addedCount = 0;
+            let queued = 0; // tasks to create/link in Rocketlane for this category
             for (const d of desired) {
-              const existParent = topByNorm.get(norm(d.text));
-              if (!existParent) {
-                // Missing top-level task → add it + all its subs (parent created in RL).
-                const parentT = { id: id(), text: d.text, status: "todo", notes: "" };
+              let parentT = topByNorm.get(norm(d.text));
+              let parentNeedsRl = false;
+              if (!parentT) {
+                parentT = { id: id(), text: d.text, status: "todo", notes: "" };
                 arr.push(parentT);
                 topByNorm.set(norm(d.text), parentT);
-                addedCount++;
-                const ji = { task: parentT, subs: [], parentExists: false };
-                for (const subText of d.subs) {
-                  const subT = { id: id(), text: subText, status: "todo", notes: "", meta: { parentLocalTaskId: String(parentT.id), parentTaskName: d.text } };
-                  arr.push(subT);
-                  ji.subs.push(subT);
-                  addedCount++;
+                parentNeedsRl = true;
+              } else if (!rlIdOf(parentT)) {
+                parentNeedsRl = true; // present locally, not yet in Rocketlane
+              }
+              if (!subsOfParent.has(String(parentT.id))) subsOfParent.set(String(parentT.id), new Map());
+              const haveSubs = subsOfParent.get(String(parentT.id));
+              const subJobs = [];
+              for (const subText of (d.subs || [])) {
+                let subObj = haveSubs.get(norm(subText));
+                if (!subObj) {
+                  subObj = { id: id(), text: subText, status: "todo", notes: "", meta: { parentLocalTaskId: String(parentT.id), parentTaskName: parentT.text } };
+                  arr.push(subObj);
+                  haveSubs.set(norm(subText), subObj);
+                  subJobs.push(subObj);
+                } else if (!rlIdOf(subObj)) {
+                  subJobs.push(subObj); // present locally, not yet in Rocketlane
                 }
-                jobItems.push(ji);
-              } else if (d.subs.length) {
-                // Top-level exists → add only its missing sub-bullets, nested under
-                // the EXISTING Rocketlane task (don't recreate the parent).
-                const have = subsByParent.get(String(existParent.id)) || new Set();
-                const missing = [];
-                for (const subText of d.subs) {
-                  if (have.has(norm(subText))) continue;
-                  const subT = { id: id(), text: subText, status: "todo", notes: "", meta: { parentLocalTaskId: String(existParent.id), parentTaskName: existParent.text } };
-                  arr.push(subT);
-                  have.add(norm(subText));
-                  missing.push(subT);
-                  addedCount++;
-                }
-                if (missing.length) {
-                  jobItems.push({
-                    task: existParent, subs: missing, parentExists: true,
-                    parentRlId: String((existParent.meta && existParent.meta.rocketlaneTaskId) || "").trim(),
-                  });
-                }
+              }
+              if (parentNeedsRl) {
+                jobItems.push({ task: parentT, subs: subJobs, parentExists: false });
+                queued += 1 + subJobs.length;
+              } else if (subJobs.length) {
+                jobItems.push({ task: parentT, subs: subJobs, parentExists: true, parentRlId: rlIdOf(parentT) });
+                queued += subJobs.length;
               }
             }
             if (jobItems.length) {
               syncBatch.push({ key: existingKey, label: preset.label, jobItems });
-              backfilled.push({ label: preset.label, count: addedCount });
+              backfilled.push({ label: preset.label, count: queued });
             }
           }
         }
@@ -27401,7 +27403,7 @@
         }
         const parts = [];
         if (created.length) parts.push("created " + created.length + " categor" + (created.length > 1 ? "ies" : "y") + " (" + created.join(", ") + ")");
-        if (backfilled.length) parts.push("added missing tasks to " + backfilled.map((b) => b.label + " +" + b.count).join(", "));
+        if (backfilled.length) parts.push("synced missing tasks to " + backfilled.map((b) => b.label + " +" + b.count).join(", "));
         showLoadMessage("Order info: " + parts.join("; ") + " — syncing to Rocketlane…");
         // Create each phase + its new/missing tasks + subtasks in Rocketlane, linking
         // ids back. Backfill reuses the existing phase (rocketlaneGetOrCreatePhase)
@@ -27709,41 +27711,70 @@
           project.areaPhaseIds[areaKey] = String(phaseId);
           saveState(state);
         }
+        // Idempotency: index the phase's EXISTING Rocketlane tasks so a re-run LINKS
+        // to them instead of creating duplicates (e.g. a task created upstream whose
+        // local rlId didn't persist). Top-level keyed by name within this phase;
+        // subtasks keyed by parentRlId + name. Best-effort — failure falls back to create.
+        const nrm = (s) => String(s ?? "").trim().toLowerCase().replace(/[–—−]/g, "-").replace(/\s+/g, " ");
+        const phaseNameNorm = nrm(rocketlanePhaseName(phase));
+        const rlTopByName = new Map();  // nrm(name) -> rlTaskId
+        const rlSubByKey = new Map();   // parentRlId + " " + nrm(name) -> rlTaskId
+        try {
+          const allRl = await rocketlaneFetchAllTasksForProject(rlPid);
+          for (const rt of (allRl || [])) {
+            const rid = String(rocketlaneTaskId(rt) || "").trim();
+            if (!rid) continue;
+            const par = String(rocketlaneTaskParentTaskId(rt) || "").trim();
+            if (par) rlSubByKey.set(par + " " + nrm(rocketlaneTaskName(rt)), rid);
+            else if (nrm(rocketlaneTaskPhase(rt)) === phaseNameNorm) rlTopByName.set(nrm(rocketlaneTaskName(rt)), rid);
+          }
+        } catch (_) { /* dedup is best-effort */ }
+        const linkMeta = (t, rid) => {
+          t.meta = t.meta ?? {};
+          t.meta.rocketlaneTaskId = rid;
+          t.meta.rocketlaneProjectId = rlPid;
+          t.meta.rocketlanePhase = rocketlanePhaseName(phase);
+        };
         const taskOpts = { private: !!(opts && opts.private) };
         let okTasks = 0, failTasks = 0;
         for (const it of (jobItems || [])) {
           // Backfill of an EXISTING parent (it.parentExists) skips creating the
           // parent and nests the missing sub-bullets under its existing Rocketlane
-          // id (it.parentRlId); a new parent is created and linked as before.
+          // id (it.parentRlId); a new parent is created OR linked to an upstream dupe.
           let parentRlId = String(it.parentRlId || "").trim();
           if (!it.parentExists) {
-            try {
-              const created = await rocketlaneCreateTaskInRocketlane(rlPid, phase, it.task.text, undefined, taskOpts);
-              parentRlId = String(rocketlaneTaskId(created) ?? "").trim();
-              if (parentRlId) {
-                it.task.meta = it.task.meta ?? {};
-                it.task.meta.rocketlaneTaskId = parentRlId;
-                it.task.meta.rocketlaneProjectId = rlPid;
-                it.task.meta.rocketlanePhase = rocketlanePhaseName(phase);
-                okTasks++;
-              } else { failTasks++; }
-            } catch (e) { failTasks++; console.warn("order-info: task create failed:", it.task.text, e); }
+            const dupe = rlTopByName.get(nrm(it.task.text));
+            if (dupe) {
+              parentRlId = dupe;            // already upstream — link, don't duplicate
+              linkMeta(it.task, dupe);
+            } else {
+              try {
+                const created = await rocketlaneCreateTaskInRocketlane(rlPid, phase, it.task.text, undefined, taskOpts);
+                parentRlId = String(rocketlaneTaskId(created) ?? "").trim();
+                if (parentRlId) { linkMeta(it.task, parentRlId); rlTopByName.set(nrm(it.task.text), parentRlId); okTasks++; }
+                else { failTasks++; }
+              } catch (e) { failTasks++; console.warn("order-info: task create failed:", it.task.text, e); }
+            }
           }
           for (const subT of (it.subs || [])) {
-            try {
-              // parentRlId present → nests under the parent; absent → falls back to a
-              // plain task in the phase so the deliverable still exists in Rocketlane.
-              const createdSub = await rocketlaneCreateTaskInRocketlane(rlPid, phase, subT.text, parentRlId || undefined, taskOpts);
-              const subRlId = String(rocketlaneTaskId(createdSub) ?? "").trim();
-              if (subRlId) {
-                subT.meta = subT.meta ?? {};
-                subT.meta.rocketlaneTaskId = subRlId;
-                subT.meta.rocketlaneProjectId = rlPid;
-                subT.meta.rocketlanePhase = rocketlanePhaseName(phase);
-                if (parentRlId) subT.meta.parentTaskId = parentRlId;
-                okTasks++;
-              } else { failTasks++; }
-            } catch (e) { failTasks++; console.warn("order-info: subtask create failed:", subT.text, e); }
+            const dupKey = parentRlId + " " + nrm(subT.text);
+            const dupeSub = parentRlId ? rlSubByKey.get(dupKey) : "";
+            if (dupeSub) {
+              linkMeta(subT, dupeSub);
+              if (parentRlId) subT.meta.parentTaskId = parentRlId;
+            } else {
+              try {
+                // parentRlId present → nests under the parent; absent → falls back to a
+                // plain task in the phase so the deliverable still exists in Rocketlane.
+                const createdSub = await rocketlaneCreateTaskInRocketlane(rlPid, phase, subT.text, parentRlId || undefined, taskOpts);
+                const subRlId = String(rocketlaneTaskId(createdSub) ?? "").trim();
+                if (subRlId) {
+                  linkMeta(subT, subRlId);
+                  if (parentRlId) { subT.meta.parentTaskId = parentRlId; rlSubByKey.set(dupKey, subRlId); }
+                  okTasks++;
+                } else { failTasks++; }
+              } catch (e) { failTasks++; console.warn("order-info: subtask create failed:", subT.text, e); }
+            }
           }
           saveState(state);
           render();
