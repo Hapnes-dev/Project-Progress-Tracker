@@ -30614,7 +30614,13 @@
                   // User cancelled the (first-time) picker — abort cleanly
                   // rather than falling through to the legacy per-file flow.
                   if (!parentDir) return;
-                  destFolderName = sanitizeFolderName(p?.name || ("Project " + rlPid));
+                  // Subfolder = "<project name> <YYYY-MM-DD>" (local date) so each
+                  // download is grouped under the project + the day it was pulled.
+                  const dlStamp = (() => {
+                    const d = new Date();
+                    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+                  })();
+                  destFolderName = sanitizeFolderName((p?.name || ("Project " + rlPid)) + " " + dlStamp);
                   try {
                     dirHandle = await parentDir.getDirectoryHandle(destFolderName, { create: true });
                   } catch (subErr) {
