@@ -179,6 +179,7 @@ The Rocketlane key auto-renews; Zendesk & Oneflow re-capture their CSRF every 60
 
 - **Refresh** projects: click **Sync** in the toolbar (or wait — auto-sync runs every 5 min).
 - **Refresh one project**: click anywhere on the project card → instant background sync.
+- **Find a project**: press **Ctrl/Cmd+F** to jump to the search box (filters by name, partner, owner, notes). It won't hijack the browser's find while you're typing in a note/chat/dialog or a fullscreen reader is open.
 - **Add Rocketlane projects**: **+ RL Project** in the toolbar, paste the URL.
 - **View chat**: select a project → "Chat history" → Private or General tab.
 - **Send a chat message**: type in the compose box; Enter sends, Shift+Enter for newline. Paste an image with Ctrl+V or click 📎. Type `@` to mention.
