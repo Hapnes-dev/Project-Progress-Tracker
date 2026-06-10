@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.9.14
-// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.9.12: also injects on http://127.0.0.1:8102 / localhost:8102 local dev servers, meta-tag gated like file://.)
+// @version      1.9.15
+// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.9.15: exposes its own @version to the tracker page as RocketlaneBridge.userscriptVersion / window.IWMAC_BRIDGE_VERSION so the tracker can warn about an outdated bridge.)
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
 // @supportURL   https://github.com/Hapnes-dev/Project-Progress-Tracker/issues
@@ -1873,6 +1873,22 @@
     target.dispatchEvent(new CustomEvent("younium-bridge-ready"));
   } catch (_) {}
 
+  // Expose this userscript's own @version on the page window so the tracker can
+  // warn when an OUTDATED bridge is installed. The tracker reads
+  // RocketlaneBridge.userscriptVersion (or window.IWMAC_BRIDGE_VERSION). This
+  // covers the direct-publish path; the <script>-tag shim fallback below
+  // re-publishes it for isolated-world browser/Tampermonkey combos.
+  try {
+    const __bridgeUserscriptVersion =
+      (typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version) || null;
+    if (__bridgeUserscriptVersion) {
+      try { target.IWMAC_BRIDGE_VERSION = __bridgeUserscriptVersion; } catch (_) {}
+      for (const __bn of ["RocketlaneBridge", "ZendeskBridge", "OneflowBridge", "HubSpotBridge", "YouniumBridge"]) {
+        try { if (target[__bn]) target[__bn].userscriptVersion = __bridgeUserscriptVersion; } catch (_) {}
+      }
+    }
+  } catch (_) {}
+
   // Verify the assignment actually landed on the page's real window
   // (not the userscript's isolated world). If it didn't — which can
   // happen on some Tampermonkey/browser combos where the unsafeWindow
@@ -1914,6 +1930,7 @@
     );
     const props = {
       version: target.RocketlaneBridge.version,
+      userscriptVersion: target.RocketlaneBridge.userscriptVersion || null,
       isAvailable: true,
     };
     shim.textContent = `
@@ -1944,6 +1961,9 @@
           };
         }
         window.RocketlaneBridge = bridge;
+        if (props.userscriptVersion) {
+          try { window.IWMAC_BRIDGE_VERSION = props.userscriptVersion; } catch (_) {}
+        }
       })();
     `;
     (document.head || document.documentElement).appendChild(shim);
