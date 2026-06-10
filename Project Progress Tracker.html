@@ -31295,15 +31295,24 @@
             window.RocketlaneBridge || window.ZendeskBridge || window.YouniumBridge ||
             window.OneflowBridge || window.HubSpotBridge;
           if (!anyBridge) return;
+          // Fetch the latest @version (raw GitHub sends ACAO:*). Retry once on a
+          // transient failure. On total failure fall back to the last version we
+          // DID fetch (cached) so an occasional rate-limit — e.g. a shared office
+          // IP — doesn't silently disable the check.
           let latest = null;
-          try {
-            const res = await fetch(BRIDGE_DOWNLOAD_URL, { cache: "no-store" });
-            if (res.ok) {
-              const m = (await res.text()).match(/@version\s+([0-9][\w.\-]*)/);
-              if (m) latest = m[1];
-            }
-          } catch (_) { return; } // offline / blocked → skip silently
-          if (!latest) return;
+          for (let attempt = 0; attempt < 2 && !latest; attempt++) {
+            if (attempt) await new Promise((r) => setTimeout(r, 1500));
+            try {
+              const res = await fetch(BRIDGE_DOWNLOAD_URL + "?t=" + Date.now(), { cache: "no-store" });
+              if (res.ok) {
+                const m = (await res.text()).match(/@version\s+([0-9][\w.\-]*)/);
+                if (m) latest = m[1];
+              }
+            } catch (_) { /* offline / blocked — fall back to cache below */ }
+          }
+          if (latest) { try { localStorage.setItem("bridge_latest_seen_v1", latest); } catch (_) {} }
+          else { try { latest = localStorage.getItem("bridge_latest_seen_v1"); } catch (_) {} }
+          if (!latest) return; // never fetched successfully yet — retry next load
           const installed = installedBridgeVersion();
           if (compareBridgeVersions(installed, latest) >= 0) return; // up to date
           if (localStorage.getItem(BRIDGE_DISMISS_KEY) === latest) return; // already dismissed this one
