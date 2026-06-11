@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.9.15
-// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.9.15: exposes its own @version to the tracker page as RocketlaneBridge.userscriptVersion / window.IWMAC_BRIDGE_VERSION so the tracker can warn about an outdated bridge.)
+// @version      1.9.16
+// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.9.16: uploadAttachment(projectId, file, { folderId }) can upload into a project folder — e.g. General Shared Files — via create(sourceType:FOLDER) + the folder link step.)
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
 // @supportURL   https://github.com/Hapnes-dev/Project-Progress-Tracker/issues
@@ -1046,7 +1046,9 @@
    *
    * @param {number|string} projectId
    * @param {File|Blob} file — must have .name and .type (or `fileName`/`fileType`)
-   * @param {{publicVisibility?: boolean}} [opts]
+   * @param {{publicVisibility?: boolean, folderId?: number|string}} [opts]
+   *        folderId → upload into that project folder (e.g. General Shared Files):
+   *        creates with sourceType:"FOLDER"/sourceId, then POSTs the folder link.
    * @returns {Promise<any>} the `attachment` object from the response
    */
   function gmUploadAttachment(projectId, file, opts) {
@@ -1057,14 +1059,22 @@
         return;
       }
       const fileName = (file && (file.name || file.fileName)) || "upload.bin";
-      const publicVisibility = !!(opts && opts.publicVisibility !== false);
-      const requestPayload = {
-        attachment: {
-          name: fileName,
-          publicVisibility: publicVisibility,
-          projectId: Number(projectId),
-        },
+      // Optional folder target (e.g. General Shared Files). When given, the
+      // create request carries sourceType/sourceId so Rocketlane homes the
+      // attachment in that folder, and we POST .../attachments/link afterwards
+      // (mirrors Rocketlane's own 2-step "upload to folder" flow). Folder
+      // uploads default publicVisibility=false to match the UI's request.
+      const folderId = opts && opts.folderId != null ? Number(opts.folderId) : null;
+      const publicVisibility = opts && typeof opts.publicVisibility === "boolean"
+        ? opts.publicVisibility
+        : folderId == null;
+      const attachmentReq = {
+        name: fileName,
+        publicVisibility: publicVisibility,
+        projectId: Number(projectId),
       };
+      if (folderId != null) { attachmentReq.sourceType = "FOLDER"; attachmentReq.sourceId = folderId; }
+      const requestPayload = { attachment: attachmentReq };
       const fd = new FormData();
       fd.append("file", file, fileName);
       fd.append("request", new Blob([JSON.stringify(requestPayload)], { type: "application/json" }));
@@ -1082,17 +1092,38 @@
             reject(new Error("Upload failed HTTP " + res.status + ": " + (res.responseText || "").slice(0, 200)));
             return;
           }
+          let att;
           try {
             const j = JSON.parse(res.responseText || "{}");
-            const att = j?.attachment ?? j?.data?.attachment ?? j;
+            att = j?.attachment ?? j?.data?.attachment ?? j;
             if (!att?.attachmentId) {
               reject(new Error("Upload succeeded but no attachmentId in response"));
               return;
             }
-            resolve(att);
           } catch (e) {
             reject(new Error("Could not parse upload response: " + e.message));
+            return;
           }
+          // No folder target → done (legacy behavior). Otherwise link the new
+          // attachment into the folder so it actually shows there (create alone
+          // leaves it an orphan — Rocketlane needs the explicit link step).
+          if (folderId == null) { resolve(att); return; }
+          GM_xmlhttpRequest({
+            method: "POST",
+            url: TENANT_API + "/projects/" + encodeURIComponent(projectId) + "/folders/" + encodeURIComponent(folderId) + "/attachments/link",
+            headers: { "api-key": apiKey, accept: "application/json", "content-type": "application/json" },
+            data: JSON.stringify([att.attachmentId]),
+            timeout: 30000,
+            onload: (lres) => {
+              if (lres.status < 200 || lres.status >= 300) {
+                reject(new Error("Folder link failed HTTP " + lres.status + ": " + (lres.responseText || "").slice(0, 200)));
+                return;
+              }
+              resolve(att);
+            },
+            onerror: () => reject(new Error("Network error during folder link")),
+            ontimeout: () => reject(new Error("Folder link timed out")),
+          });
         },
         onerror: () => reject(new Error("Network error during attachment upload")),
         ontimeout: () => reject(new Error("Attachment upload timed out")),

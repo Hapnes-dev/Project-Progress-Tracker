@@ -30589,12 +30589,27 @@
               }
               uploading = true;
               uploadBtn.disabled = true;
+              // Resolve the project's "General Shared Files" folder so uploads land
+              // there (the default shared folder: isDefault && !isPrivate). Without
+              // a folderId the attachment is created as an orphan, not shown in any
+              // folder. Needs bridge v1.9.16+ (older bridges ignore folderId → the
+              // outdated-bridge popup nudges the update).
+              let sharedFolderId = null;
+              try {
+                const fdata = await rocketlaneRequestJson("GET", "/projects/" + encodeURIComponent(rlPid) + "/folders");
+                const folders = Array.isArray(fdata?.value) ? fdata.value : Array.isArray(fdata) ? fdata : [];
+                const gsf = folders.find((f) => f && f.isDefault && !f.isPrivate)
+                  || folders.find((f) => /general shared/i.test(String(f?.folderName || "")));
+                sharedFolderId = gsf ? (gsf.folderId ?? gsf.id) : null;
+              } catch (e) {
+                console.warn("[FilesPopover] couldn't resolve General Shared Files folder:", e);
+              }
               let done = 0, failed = 0;
               for (const f of list) {
                 done++;
                 uploadBtn.textContent = "Uploading " + done + "/" + list.length + "…";
                 try {
-                  await bridge.uploadAttachment(rlPid, f, { publicVisibility: true });
+                  await bridge.uploadAttachment(rlPid, f, { folderId: sharedFolderId, publicVisibility: false });
                 } catch (e) {
                   failed++;
                   console.warn("[FilesPopover] upload failed for " + (f && f.name) + ":", e);
