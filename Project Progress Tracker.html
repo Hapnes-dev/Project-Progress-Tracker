@@ -4796,6 +4796,13 @@
         opacity: 0.7;
         cursor: wait;
       }
+      /* Drag-and-drop upload target state — shown while files are dragged
+         over the Files popover. */
+      .filesPopover.filesDropActive {
+        outline: 2px dashed var(--accent, #60a5fa);
+        outline-offset: -6px;
+        background: var(--accent-soft, rgba(96, 165, 250, 0.08));
+      }
 
       /* Notes textarea fullscreen mode (toggled via right-click).
          Side padding scales with viewport width so the content stays
@@ -30551,10 +30558,117 @@
             attsRef = atts;
             body.textContent = "";
 
+            // ── Upload to "General shared files": header ⬆ Upload button +
+            // drag-and-drop anywhere on the popover. bridge.uploadAttachment
+            // POSTs /attachments with just { name, publicVisibility, projectId } —
+            // an attachment not linked to a task/chat lands in General shared
+            // files (same first step as a chat upload, minus the message link).
+            // After a batch completes the popover reopens to re-fetch the list.
+            const canUpload = typeof bridge.uploadAttachment === "function";
+            const uploadBtn = document.createElement("button");
+            uploadBtn.type = "button";
+            uploadBtn.className = "filesDownloadAllBtn";
+            const uploadBtnIdleText = "⬆ Upload";
+            uploadBtn.textContent = uploadBtnIdleText;
+            uploadBtn.title = canUpload
+              ? "Upload files to this project's General shared files — or drag & drop them anywhere on this popover"
+              : "Update the Tampermonkey userscript — it needs uploadAttachment() to upload files.";
+            const fileInput = document.createElement("input");
+            fileInput.type = "file";
+            fileInput.multiple = true;
+            fileInput.style.display = "none";
+            filesPopoverEl.appendChild(fileInput);
+
+            let uploading = false;
+            const uploadFiles = async (fileList) => {
+              const list = Array.from(fileList || []).filter((f) => f && typeof f.name === "string");
+              if (!list.length || uploading) return;
+              if (!canUpload) {
+                alert("Update the Tampermonkey userscript — it needs uploadAttachment() to upload files.");
+                return;
+              }
+              uploading = true;
+              uploadBtn.disabled = true;
+              let done = 0, failed = 0;
+              for (const f of list) {
+                done++;
+                uploadBtn.textContent = "Uploading " + done + "/" + list.length + "…";
+                try {
+                  await bridge.uploadAttachment(rlPid, f, { publicVisibility: true });
+                } catch (e) {
+                  failed++;
+                  console.warn("[FilesPopover] upload failed for " + (f && f.name) + ":", e);
+                }
+              }
+              uploadBtn.textContent = failed ? "Done — " + failed + " failed" : "Uploaded ✓";
+              uploading = false;
+              // Reopen the popover so the list re-fetches and shows the new files.
+              setTimeout(() => {
+                if (!filesPopoverEl) return;
+                closeFilesPopover();
+                els.btnOpenRocketlaneFiles.click();
+              }, failed ? 1800 : 700);
+            };
+            uploadBtn.addEventListener("click", (ev) => {
+              ev.preventDefault();
+              ev.stopPropagation();
+              if (!canUpload) {
+                alert("Update the Tampermonkey userscript — it needs uploadAttachment() to upload files.");
+                return;
+              }
+              fileInput.click();
+            });
+            fileInput.addEventListener("change", () => {
+              const fs = Array.from(fileInput.files || []);
+              fileInput.value = "";
+              void uploadFiles(fs);
+            });
+
+            // Drag & drop — highlight the popover while files hover, upload on drop.
+            // dragenter/leave fire per descendant, so track depth to avoid flicker.
+            let dragDepth = 0;
+            const hasFilesDrag = (e) => {
+              const types = e && e.dataTransfer && e.dataTransfer.types;
+              return !!types && Array.from(types).includes("Files");
+            };
+            filesPopoverEl.addEventListener("dragenter", (e) => {
+              if (!hasFilesDrag(e)) return;
+              e.preventDefault();
+              dragDepth++;
+              filesPopoverEl.classList.add("filesDropActive");
+            });
+            filesPopoverEl.addEventListener("dragover", (e) => {
+              if (!hasFilesDrag(e)) return;
+              e.preventDefault();
+              try { e.dataTransfer.dropEffect = "copy"; } catch (_) {}
+            });
+            filesPopoverEl.addEventListener("dragleave", () => {
+              dragDepth = Math.max(0, dragDepth - 1);
+              if (!dragDepth) filesPopoverEl.classList.remove("filesDropActive");
+            });
+            filesPopoverEl.addEventListener("drop", (e) => {
+              if (!hasFilesDrag(e)) return;
+              e.preventDefault();
+              e.stopPropagation();
+              dragDepth = 0;
+              filesPopoverEl.classList.remove("filesDropActive");
+              void uploadFiles(e.dataTransfer.files);
+            });
+
+            // Header actions (⬆ Upload + close X; ⬇ Download all joins below
+            // when the project has files). Built BEFORE the empty-check so you
+            // can upload to a project with no files yet.
+            const filesActions = document.createElement("div");
+            filesActions.className = "filesPopoverActions";
+            if (closeBtn.parentNode === head) head.removeChild(closeBtn);
+            filesActions.appendChild(uploadBtn);
+            filesActions.appendChild(closeBtn);
+            head.appendChild(filesActions);
+
             if (!atts || !atts.length) {
               const empty = document.createElement("div");
               empty.className = "orderInfoEmpty";
-              empty.textContent = "No files uploaded to this project yet.";
+              empty.textContent = "No files uploaded to this project yet. Drag & drop files here (or click ⬆ Upload) to add them to General shared files.";
               body.appendChild(empty);
               return;
             }
@@ -30698,15 +30812,9 @@
                 downloadAllBtn.disabled = false;
               }, 2500);
             });
-            // Re-parent close X into a sub-div alongside the new button —
-            // .orderInfoHead's justify-content: space-between would otherwise
-            // push the new button into the middle of the header.
-            const filesActions = document.createElement("div");
-            filesActions.className = "filesPopoverActions";
-            if (closeBtn.parentNode === head) head.removeChild(closeBtn);
-            filesActions.appendChild(downloadAllBtn);
-            filesActions.appendChild(closeBtn);
-            head.appendChild(filesActions);
+            // Join the header actions div (created above with ⬆ Upload + close X):
+            // order is ⬇ Download all · ⬆ Upload · ×.
+            filesActions.insertBefore(downloadAllBtn, uploadBtn);
 
             // Initial sort (newest-first) is handled by renderRows() below
             // via sortState.key="date" / dir="desc".
