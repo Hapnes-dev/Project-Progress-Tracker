@@ -27569,17 +27569,35 @@
           if (!label) { nameInput.focus(); return; }
           const presetIdx = parseInt(presetSel.value, 10);
           const preset = (Number.isFinite(presetIdx) && CATEGORY_PRESETS[presetIdx]) ? CATEGORY_PRESETS[presetIdx] : null;
-          const preferredKey = preset ? preset.key : ("custom_" + slugifyKey(label));
-          const existing = new Set(Object.keys(p.tasksByArea ?? {}));
-          const key = ensureUniqueKey(existing, preferredKey);
+          const norm = (s) => String(s ?? "").trim().toLowerCase().replace(/[–—−]/g, "-").replace(/\s+/g, " ");
+          // Reuse an existing category with this label instead of creating a
+          // duplicate; below we also skip any preset task that's already there.
+          let key = null;
+          for (const [k, lbl] of Object.entries(p.areaLabels || {})) {
+            if (norm(lbl) === norm(label)) { key = k; break; }
+          }
+          const isExisting = !!key;
+          if (!key) {
+            const preferredKey = preset ? preset.key : ("custom_" + slugifyKey(label));
+            const existing = new Set(Object.keys(p.tasksByArea ?? {}));
+            key = ensureUniqueKey(existing, preferredKey);
+            p.areaLabels = p.areaLabels ?? {};
+            p.areaLabels[key] = label;
+          }
           p.tasksByArea[key] = p.tasksByArea[key] ?? [];
-          p.areaLabels = p.areaLabels ?? {};
-          p.areaLabels[key] = label;
+          // Normalized texts of existing top-level tasks → never add a duplicate.
+          const haveNorm = new Set(
+            (p.tasksByArea[key] || [])
+              .filter((t) => !(t.meta && t.meta.parentLocalTaskId))
+              .map((t) => norm(t.text)),
+          );
           const jobItems = [];
           if (preset) {
             for (const taskText of [preset.integrationTask, preset.designTask]) {
+              if (haveNorm.has(norm(taskText))) continue; // already present — skip
               const t = { id: id(), text: taskText, status: "todo", notes: "" };
               p.tasksByArea[key].push(t);
+              haveNorm.add(norm(taskText));
               jobItems.push({ task: t, subs: [] });
             }
           }
@@ -27591,13 +27609,15 @@
             startDate: startInput.value || todayStr,
             dueDate: dueInput.value || startInput.value || todayStr,
           };
-          // Create the phase — and, when a preset added generic tasks, create those
-          // tasks in Rocketlane too (syncCreateCategoryPhase alone only makes the phase,
-          // which left the preset's Integration/Design tasks local-only).
+          // New category → create the phase (+ any preset tasks). Existing one →
+          // only sync the newly-added tasks (syncCreateCategoryWithTasks dedups
+          // against Rocketlane too); if nothing was added, say so.
           if (jobItems.length) {
             void syncCreateCategoryWithTasks(p, key, label, jobItems, catOpts);
-          } else {
+          } else if (!isExisting) {
             void syncCreateCategoryPhase(p, key, label, catOpts);
+          } else {
+            showLoadMessage('Category "' + label + '" already exists — nothing new to add.');
           }
           render();
           close();
