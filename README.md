@@ -203,7 +203,7 @@ The Rocketlane key auto-renews; Zendesk & Oneflow re-capture their CSRF every 60
 - Click a section header chevron to collapse / expand.
 
 ### Edit project dialog — auto-find external links
-- **🔎 Find** next to each link field searches the corresponding system and auto-fills the URL (or shows a picker if multiple candidates).
+- **🔎 Find** next to each link field searches the corresponding system and auto-fills the URL (or shows a picker if multiple candidates). Matching scores each candidate on the project's plant ID, name, partner, contact, money and the HubSpot deal's custom fields — including any links already curated in the deal description, each routed to its correct field (Order/offer vs Subscription).
 - On **Save**, the project's Rocketlane "Hubspot Deal Description" field is updated with a `Links:` block listing the populated Oneflow / Younium / HubSpot URLs.
 
 ## Data & privacy
