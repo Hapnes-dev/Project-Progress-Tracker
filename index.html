@@ -9470,7 +9470,13 @@
           String(x?.fieldName ?? "").toLowerCase().replace(/\s+/g, "").startsWith(want)
         );
         if (!f) return "";
-        const v = f.value;
+        // Rocketlane's /projects payload stores the value under `fieldValue`
+        // (the `value` key only exists on a couple of other shapes). Reading
+        // `f.value` here returned undefined for EVERY custom field — silently
+        // zeroing out the entire HubSpot-mirror bundle, contact info, money and
+        // embedded links on the match context, so auto-find ran on plant_id +
+        // name tokens alone. Prefer fieldValue, fall back to value.
+        const v = (f.fieldValue !== undefined && f.fieldValue !== null) ? f.fieldValue : f.value;
         if (v == null) return "";
         if (Array.isArray(v)) {
           return v
