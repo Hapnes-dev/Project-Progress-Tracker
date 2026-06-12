@@ -3710,10 +3710,13 @@
         transform: rotate(-90deg);
       }
       .ownerStatusOverview .bd.collapsed { display: none; }
-      /* Header row: collapse toggle on the left, refresh button beside it. */
+      /* Header row: collapse toggle on the left, refresh button beside it.
+         (The base .hd uses justify-content: space-between, which would shove
+         the button to the far right — pin it next to the heading instead.) */
       .ownerStatusOverview .hd.ownerStatusHd {
         display: flex;
         align-items: center;
+        justify-content: flex-start;
         gap: 10px;
       }
       /* Refresh team workload — small icon button next to the heading.
