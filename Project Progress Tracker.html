@@ -12954,6 +12954,24 @@
             return;
           }
 
+          // Ground truth first: if the project's curated HubSpot Deal
+          // Description carries a "Younium (Subscription)" link, that human-
+          // verified URL beats any plant_id heuristic. (This finder doesn't use
+          // the shared scorer, so we check the labelled embedded link directly.)
+          try {
+            const ctx = await buildEnrichedProjectMatchContext();
+            const curated = (ctx.embeddedLinks || []).find(
+              (l) => l && l.platform === "younium" && l.linkKind === "subscription" && l.url
+            );
+            if (curated) {
+              inputEl.value = curated.url;
+              inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+              inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+              setStatus("Linked from the deal description (subscription).", "good");
+              return;
+            }
+          } catch (_) { /* fall back to the plant_id + IWMAC-product search below */ }
+
           const found = await youniumFindSubscriptionByPlantId(plantId);
           if (!found) {
             setStatus("No IWMAC Subscription / Abonnement order found for plant " + plantId + ".", "warn");
