@@ -12477,49 +12477,66 @@
        */
       function youniumToMatchCandidate(o) {
         const statusLabel = YOUNIUM_STATUS_LABEL[o?.status] ?? ("status " + o?.status);
-        const partyNames = [o?.accountname].filter(Boolean).map(String);
-        const dateRaw = o?.effectiveStartDate ?? o?.effectiveEndDate ?? null;
+        // customFields[] (present on a HYDRATED getOrderById record, not on the
+        // search/summary shape) carry the richest signals: plant_id / plant_name,
+        // deal_contact, and the HubSpot deal id — verified live via Playwright.
+        const cf = {};
+        for (const c of (Array.isArray(o?.customFields) ? o.customFields : [])) {
+          if (c && c.name != null && c.value != null && c.value !== "") cf[String(c.name)] = String(c.value);
+        }
+        // _account is the resolved Younium account (set by the hydration step):
+        // gives the organisation number (+20 when it matches the project) + name.
+        const acct = o?._account || null;
+        const description = String(o?.description ?? "").trim();
+        // plant_id: explicit field → customField → literal parse from the order
+        // description ("10218 EXTRA Rønvik - Abonnementsavtale"). Younium orders
+        // have NO top-level plant_id on the getOrderById shape, only on search.
+        let plantId = String(o?.plant_id ?? cf.plant_id ?? "").trim();
+        if (!plantId && description) plantId = String(matchExtractPlantId(description) || "");
+        const plantName = String(o?.plant_name ?? cf.plant_name ?? "").trim();
+        const accountName = String(o?.accountname ?? acct?.name ?? "").trim();
+        const partyNames = [accountName, acct?.name].filter(Boolean).map(String);
+        const dateRaw = o?.effectiveStartDate ?? o?.effectiveEndDate ?? o?.orderDate ?? null;
         const dateDisplay = dateRaw ? String(dateRaw).slice(0, 10) : "";
-        // Pricing — Younium exposes several money fields. Prefer total
-        // contract value, fall back to annual or monthly recurring.
-        // (Search responses sometimes only carry one of these; we pick
-        // whichever is populated.)
-        const totalContractValue = matchExtractMoneyAmount(o?.totalContractValue);
-        const annualContractValue = matchExtractMoneyAmount(o?.annualContractValue ?? o?.arr);
-        const monthlyRecurringRevenue = matchExtractMoneyAmount(o?.mrr);
+        // Money — Younium's REAL fields are objects { amount } named tcv / acv /
+        // cmrr / emrr (NOT totalContractValue/arr/mrr, which don't exist → the old
+        // code scored 0). Prefer total contract value, then annual, then monthly.
+        const moneyOf = (m) => matchExtractMoneyAmount(m && typeof m === "object" ? m.amount : m);
+        const tcv  = moneyOf(o?.tcv  ?? o?.totalContractValue);
+        const acv  = moneyOf(o?.acv  ?? o?.annualContractValue ?? o?.arr);
+        const cmrr = moneyOf(o?.cmrr ?? o?.mrr);
         const bestAmount =
-          Number.isFinite(totalContractValue) && totalContractValue > 0 ? totalContractValue :
-          Number.isFinite(annualContractValue) && annualContractValue > 0 ? annualContractValue :
-          Number.isFinite(monthlyRecurringRevenue) && monthlyRecurringRevenue > 0 ? monthlyRecurringRevenue :
+          Number.isFinite(tcv)  && tcv  > 0 ? tcv  :
+          Number.isFinite(acv)  && acv  > 0 ? acv  :
+          Number.isFinite(cmrr) && cmrr > 0 ? cmrr :
           null;
-        const currency = String(o?.currency ?? o?.currencyCode ?? "").trim();
-        // Order Tracking Number is a free-text custom reference on
-        // Younium orders — confirmed via the orders-list UI column.
-        // Anything there is a candidate "project reference".
+        const currency = String(o?.currency?.code ?? o?.currency ?? o?.currencyCode ?? "").trim();
         const trackingNumber = String(o?.order_tracking_number ?? o?.trackingNumber ?? "").trim();
+        const dealContact = String(cf.deal_contact ?? "").trim();
+        const hubspotDealId = String(cf.integrationHubspotHubspotDealId ?? "").trim();
+        const orgNumbers = [acct?.organizationNumber, acct?.organisationNumber].filter(Boolean).map(String);
         return {
           id: o?.id,
           platform: "younium",
           primaryText:
             (o?.orderNumber ?? "(no number)") +
-            (o?.plant_name ? " — " + o.plant_name : ""),
+            (plantName ? " — " + plantName : ""),
           secondaryText:
             statusLabel +
-            (o?.accountname ? " · " + o.accountname : "") +
+            (accountName ? " · " + accountName : "") +
             (dateDisplay ? " · " + dateDisplay : "") +
             (bestAmount ? " · " + Math.round(bestAmount).toLocaleString() + (currency ? " " + currency : "") : ""),
           matchableTexts: [
-            o?.orderNumber,
-            o?.plant_name,
-            o?.accountname,
-            trackingNumber,
+            o?.orderNumber, plantName, accountName, trackingNumber, description,
+            cf.iwmac_deal_invoice_reference_project,
           ].filter(Boolean).map(String),
           partyNames,
-          contactNames: [],
-          contactEmails: [],
+          contactNames: dealContact ? [dealContact] : [],
+          contactEmails: acct?.domain ? ["x@" + String(acct.domain).trim().toLowerCase()] : [],
           contactPhones: [],
-          orgNumbers: [],
-          plantId: String(o?.plant_id ?? "").trim(),
+          orgNumbers,
+          plantId,
+          hubspotDealId: hubspotDealId || undefined,
           status: statusLabel,
           date: dateRaw,
           amount: bestAmount,
@@ -12750,9 +12767,39 @@
           return;
         }
 
+        // ── Hydrate the matched orders (a SMALL set — already filtered to this
+        //    exact plant_id) with their full record + Younium account, so the rich
+        //    signals — HubSpot deal-id cross-link (+35), organisation number (+20),
+        //    money proximity, description, deal contact — actually reach the
+        //    scorer (the search/summary shape carries none of these). Best-effort:
+        //    a failed hydrate gracefully falls back to the search-shape order.
+        const youniumAccountCache = new Map();
+        const fetchYouniumAccount = async (accountId) => {
+          const id = String(accountId || "").trim();
+          if (!id) return null;
+          if (youniumAccountCache.has(id)) return youniumAccountCache.get(id);
+          let acct = null;
+          try { acct = await youniumApiRequest("GET", "/Accounts/" + encodeURIComponent(id)); } catch (_) {}
+          youniumAccountCache.set(id, acct);
+          return acct;
+        };
+        const enrichedOrders = await Promise.all(orderMatches.map(async (o) => {
+          let full = o;
+          try {
+            const f = window.YouniumBridge?.getOrderById ? await window.YouniumBridge.getOrderById(o.id) : null;
+            // Spread the full record first, then the search fields override — so
+            // plant_id / plant_name / accountname / orderNumber / status stay from
+            // search (the getOrderById shape lacks them) while customFields /
+            // description / acv-tcv come from the full record.
+            if (f && f.id) full = { ...f, ...o };
+          } catch (_) {}
+          const acct = await fetchYouniumAccount(full.accountId || o.accountId);
+          return acct ? { ...full, _account: acct } : full;
+        }));
+
         // Score both populations through the SAME shared scorer.
         const scored = [
-          ...orderMatches.map((o) => {
+          ...enrichedOrders.map((o) => {
             const candidate = youniumToMatchCandidate(o);
             const { score, percent, signals } = scoreMatchCandidate(candidate, ctx);
             return { candidate, score, percent, signals };
