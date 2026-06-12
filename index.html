@@ -11274,6 +11274,31 @@
         if (oldPicker) oldPicker.remove();
 
         const ctx = await buildEnrichedProjectMatchContext();
+
+        // Ground truth first: the project's own "Hubspot Deal ID" custom field —
+        // and the HubSpot link curated in the deal description — name the EXACT
+        // deal this project was created from (set by the HubSpot→Rocketlane
+        // integration). HubSpot's full-text search can't fetch a deal by its
+        // numeric object id, and a plant frequently has several deals (the
+        // plant/name search then surfaces a DIFFERENT one — e.g. plant 10218's
+        // search returns the subscription deal, not the project's), so when we
+        // have the id, trust it directly instead of guessing from search.
+        try {
+          const embeddedHs = (ctx.embeddedLinks || []).find(
+            (l) => l && l.platform === "hubspot" && l.recordId && l.url
+          );
+          const fkDealId = String(ctx.foreignKeys?.hubspotDealId || "").trim();
+          const groundTruthUrl = embeddedHs?.url || (fkDealId ? await hubspotDealUrl(fkDealId) : "");
+          if (groundTruthUrl) {
+            inputEl.value = groundTruthUrl;
+            inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+            inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+            statusEl.className = "oneflowFindStatus success";
+            statusEl.textContent = "Linked from the project's HubSpot Deal ID.";
+            return;
+          }
+        } catch (_) { /* fall back to the search-based match below */ }
+
         if (!ctx.plantId && !ctx.name) {
           statusEl.className = "oneflowFindStatus error";
           statusEl.textContent = "Need at least a project name (or plant ID) to search.";
