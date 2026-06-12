@@ -3710,6 +3710,45 @@
         transform: rotate(-90deg);
       }
       .ownerStatusOverview .bd.collapsed { display: none; }
+      /* Header row: collapse toggle on the left, refresh button beside it. */
+      .ownerStatusOverview .hd.ownerStatusHd {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      /* Refresh team workload — small icon button next to the heading.
+         Reuses the toolbar's refresh-icon mask + the rlSyncSpin keyframe. */
+      .ownerStatusRefresh {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
+        padding: 0;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--panel2);
+        color: var(--muted2);
+        cursor: pointer;
+        transition: color 120ms ease, border-color 120ms ease, opacity 120ms ease;
+      }
+      .ownerStatusRefresh::before {
+        content: "";
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        background-color: currentColor;
+        -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path fill='black' d='M13.65 2.35a.5.5 0 0 1 .85.35V6a.5.5 0 0 1-.5.5h-3.3a.5.5 0 0 1-.35-.85l1.05-1.06A5 5 0 0 0 3 8a1 1 0 1 1-2 0 7 7 0 0 1 11.55-5.31l1.1-1.34ZM2.35 13.65A.5.5 0 0 1 1.5 13.3V10a.5.5 0 0 1 .5-.5h3.3a.5.5 0 0 1 .35.85L4.6 11.41A5 5 0 0 0 13 8a1 1 0 1 1 2 0 7 7 0 0 1-11.55 5.31l-1.1.34Z'/></svg>") no-repeat center / 14px 14px;
+                mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path fill='black' d='M13.65 2.35a.5.5 0 0 1 .85.35V6a.5.5 0 0 1-.5.5h-3.3a.5.5 0 0 1-.35-.85l1.05-1.06A5 5 0 0 0 3 8a1 1 0 1 1-2 0 7 7 0 0 1 11.55-5.31l1.1-1.34ZM2.35 13.65A.5.5 0 0 1 1.5 13.3V10a.5.5 0 0 1 .5-.5h3.3a.5.5 0 0 1 .35.85L4.6 11.41A5 5 0 0 0 13 8a1 1 0 1 1 2 0 7 7 0 0 1-11.55 5.31l-1.1.34Z'/></svg>") no-repeat center / 14px 14px;
+      }
+      .ownerStatusRefresh:hover:not(:disabled) {
+        color: var(--text);
+        border-color: var(--accent);
+      }
+      .ownerStatusRefresh:disabled { cursor: wait; opacity: 0.55; }
+      .ownerStatusRefresh.spinning::before {
+        animation: rlSyncSpin 0.8s linear infinite;
+      }
       /* Team-group section inside the overview. The bottom gap is
          intentionally small — the overview header above and each
          group header use the same 4/6px header padding, so they
@@ -6950,6 +6989,7 @@
             <span class="ownerStatusChevron" aria-hidden="true">▾</span>
             <h2>Owner Workload Overview</h2>
           </button>
+          <button type="button" id="ownerStatusRefresh" class="ownerStatusRefresh" title="Refresh team workload from Rocketlane" aria-label="Refresh team workload"></button>
         </div>
         <div class="bd" id="ownerStatusBody">
           <div class="ownerStatusRows" id="ownerStatusRows"></div>
@@ -20596,6 +20636,7 @@
         filter: document.getElementById("filter"),
         ownerStatusRows: document.getElementById("ownerStatusRows"),
         ownerStatusToggle: document.getElementById("ownerStatusToggle"),
+        ownerStatusRefresh: document.getElementById("ownerStatusRefresh"),
         ownerStatusBody: document.getElementById("ownerStatusBody"),
         btnSaveAsDataFile: document.getElementById("btnSaveAsDataFile"),
         dataFileStatus: document.getElementById("dataFileStatus"),
@@ -31711,6 +31752,28 @@
           ownerOverviewCollapsed = !ownerOverviewCollapsed;
           saveOwnerOverviewCollapsed();
           applyOverviewCollapsed();
+        });
+      }
+      // Manual refresh: re-pull every teammate's project counts + workload
+      // values from Rocketlane and re-render the overview. rocketlaneFetchTeam
+      // Workload already re-renders on success; the spinning/disabled state
+      // here just guards against double-fires and gives visual feedback.
+      if (els.ownerStatusRefresh) {
+        els.ownerStatusRefresh.addEventListener("click", async () => {
+          const btn = els.ownerStatusRefresh;
+          if (btn.disabled) return;
+          btn.disabled = true;
+          btn.classList.add("spinning");
+          btn.title = "Refreshing team workload…";
+          try {
+            await rocketlaneFetchTeamWorkload();
+          } catch (e) {
+            console.warn("[TeamWorkload] manual refresh failed:", e);
+          } finally {
+            btn.classList.remove("spinning");
+            btn.disabled = false;
+            btn.title = "Refresh team workload from Rocketlane";
+          }
         });
       }
       els.btnSaveAsDataFile.addEventListener("click", async () => {
