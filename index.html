@@ -9780,6 +9780,35 @@
         };
         const allEmbedded = dedupeByUrl(embeddedLinks);
 
+        // Tag each embedded link with the FIELD it was labelled for in the
+        // curated description — "Oneflow (Order)" vs "(Subscription)", "Younium
+        // (Order / offer)" vs "(Subscription)". parseProjectLinksFromHtml
+        // already walks each <li>/<p> container and routes the link to the
+        // right slot via its nearby label, so we reuse it and key the kind by
+        // platform+recordId. The scorer then gives a curated link only to its
+        // own field's Find button (a "(Subscription)" link no longer scores for
+        // the order/offer slot, and vice-versa).
+        try {
+          const slotHtml =
+            (cf.hubspotDealDescription || "") + "\n" + (cf.hubspotDeliveryStatus || "");
+          if (slotHtml.trim()) {
+            const slots = parseProjectLinksFromHtml(slotHtml);
+            const kindByKey = {};
+            const tagSlot = (url, kind) => {
+              const c = url ? classifyLinkUrl(url) : null;
+              if (c && c.recordId) kindByKey[c.platform + ":" + String(c.recordId)] = kind;
+            };
+            tagSlot(slots.oneflowOrder, "order");
+            tagSlot(slots.oneflowSubscription, "subscription");
+            tagSlot(slots.younium, "order");
+            tagSlot(slots.youniumSubscription, "subscription");
+            for (const l of allEmbedded) {
+              const k = kindByKey[l.platform + ":" + String(l.recordId)];
+              if (k) l.linkKind = k;
+            }
+          }
+        } catch (_) { /* kind tagging is best-effort — never break ctx build */ }
+
         // Zendesk ticket IDs embedded in the project's deal description /
         // delivery status. An Oneflow order's "Churn: Zendesk Ticket ID"
         // custom field matching one of these is a cross-link signal.
@@ -9966,7 +9995,7 @@
        *     raw:           original API object,
        *   }
        */
-      function scoreMatchCandidate(candidate, ctx) {
+      function scoreMatchCandidate(candidate, ctx, opts) {
         const signals = [];
         let raw = 0;
 
@@ -10177,11 +10206,25 @@
             l.recordId && String(l.recordId) === String(candidate.id)
           );
           if (matchingLink) {
-            signals.push({
-              label: "Linked from RL description (" + matchingLink.url.slice(0, 40) + "…)",
-              points: 25,
-            });
-            raw += 25;
+            // The curated description labels each link for a specific field
+            // ("Oneflow (Order)" vs "(Subscription)", "Younium (Order/offer)"
+            // vs "(Subscription)"). When the caller is finding for a specific
+            // slot (opts.preferLinkKind) and this exact record was labelled for
+            // the OTHER slot, it belongs there — don't reward it here, so the
+            // sibling field's own curated link wins its slot cleanly.
+            const preferKind = opts && opts.preferLinkKind;
+            if (preferKind && matchingLink.linkKind && matchingLink.linkKind !== preferKind) {
+              signals.push({
+                label: "Curated link is the " + matchingLink.linkKind + " one — skipped here",
+                points: 0,
+              });
+            } else {
+              signals.push({
+                label: "Linked from RL description (" + matchingLink.url.slice(0, 40) + "…)",
+                points: 25,
+              });
+              raw += 25;
+            }
           }
         }
 
@@ -10921,7 +10964,7 @@
         const scored = results
           .map((a) => {
             const candidate = oneflowToMatchCandidate(a);
-            const { score, percent, signals } = scoreMatchCandidate(candidate, ctx);
+            const { score, percent, signals } = scoreMatchCandidate(candidate, ctx, { preferLinkKind: wantKind });
             // Kind-aware adjustment — only meaningful when the user
             // asked for a specific kind via the dedicated Find button.
             const kindMatch = candidate.oneflowKind === wantKind;
@@ -12807,12 +12850,12 @@
         const scored = [
           ...enrichedOrders.map((o) => {
             const candidate = youniumToMatchCandidate(o);
-            const { score, percent, signals } = scoreMatchCandidate(candidate, ctx);
+            const { score, percent, signals } = scoreMatchCandidate(candidate, ctx, { preferLinkKind: "order" });
             return { candidate, score, percent, signals };
           }),
           ...quoteMatches.map((q) => {
             const candidate = youniumToQuoteMatchCandidate(q);
-            const { score, percent, signals } = scoreMatchCandidate(candidate, ctx);
+            const { score, percent, signals } = scoreMatchCandidate(candidate, ctx, { preferLinkKind: "order" });
             return { candidate, score, percent, signals };
           }),
         ].sort((x, y) => y.percent - x.percent || y.score - x.score);
