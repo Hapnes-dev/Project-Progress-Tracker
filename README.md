@@ -97,7 +97,7 @@ A status chip in the project header meta row (between the **Updated** and **RL s
 - **Warnings panel** — only when problems exist
 - **Order / offer** section — Younium link, IDs, name, status (color-coded ✓), invoice status, dates, Created by / Last updated by
 - **Subscription** section — found via plant_id lookup, shows IWMAC product status + dates + Created by / Last updated by
-- **Other orders for this plant** section — compact rows for sibling orders (Younium versions orders, so a single plant can have multiple records)
+- **Other orders for this plant** section — compact rows for sibling orders (Younium versions orders, so a single plant can have multiple records). Each row's status badge shows the **real order status** — Invoiced / Not invoiced / Draft / Cancelled / Created / Pending start — not just the raw Active/Draft lifecycle state: an active row briefly reads "Active", then (while the modal is open) its invoices are fetched and the badge upgrades to Invoiced or Not invoiced, matching the primary order's verdict
 
 **Subscription detection**: a Younium order is treated as an IWMAC subscription when (a) any product on the order has a name matching the strict pattern `/\bIWMAC\s*(?:Abonnement|Subscription)\b/i` — i.e. literally `IWMAC Subscription` or `IWMAC Abonnement`, NOT `IWMAC Modul / Product` (those are Order/Offer line items, not subscription evidence) — OR (b) we find such an order via the `plant_id` custom field. **All three entry paths now run the plant_id fallback**: when the saved URL points to an Order, a Quote, OR is empty entirely. For projects with no saved Younium link, the plant's most-recently-modified `isLastVersion=true` order is automatically promoted into the Order/Offer section so the modal is never blank.
 

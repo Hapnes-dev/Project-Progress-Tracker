@@ -11840,6 +11840,49 @@
         3: "Paid",
       };
 
+      // A Younium invoice counts as "posted" (i.e. the order was actually
+      // invoiced) when its status is Sent (2) or Paid (3), or it carries an
+      // explicit posted flag. Shared by the status verdict + the "Other orders"
+      // row badges so both read invoicing the same way.
+      function youniumInvoiceIsPosted(inv) {
+        return !!(inv && (inv.status === 3 || inv.status === 2 || inv.posted));
+      }
+
+      // Rich, human order status for a Younium order SUMMARY (the shape returned
+      // by youniumFindAllOrdersByPlantId) — mirrors the derivation inside
+      // computeYouniumStatus so the "Other orders for this plant" rows read the
+      // same as the primary order's verdict (Invoiced / Draft / Cancelled / …).
+      // `postedInvoiceCount` is the order's posted-invoice count, or null/undefined
+      // when not yet fetched — in which case an otherwise-active order reads
+      // "Active" until the post-render invoice check refines it.
+      function youniumRelatedOrderStatusLabel(o, postedInvoiceCount) {
+        const now = Date.now();
+        const tsStart     = o?.effectiveStartDate ? Date.parse(o.effectiveStartDate) : NaN;
+        const tsCancelled = o?.cancellationDate   ? Date.parse(o.cancellationDate)   : NaN;
+        const invoicesKnown = typeof postedInvoiceCount === "number";
+        if (Number.isFinite(tsCancelled) && tsCancelled <= now) return "Cancelled";
+        if (o?.status === 5 || o?.status === 0)                  return "Draft";
+        if (o?.status === 1)                                     return "Created";
+        if (invoicesKnown && postedInvoiceCount > 0)             return "Invoiced";
+        if (Number.isFinite(tsStart) && tsStart > now)           return "Pending start";
+        if (!invoicesKnown)                                      return "Active";
+        if (o?.isLastVersion)                                    return "Not invoiced";
+        return "Outdated";
+      }
+      function youniumRelatedOrderBadgeClass(label) {
+        switch (label) {
+          case "Invoiced":
+          case "Active":        return "youniumSubBadge-green";
+          case "Cancelled":
+          case "Draft":
+          case "Outdated":      return "youniumSubBadge-red";
+          case "Not invoiced":
+          case "Pending start":
+          case "Created":       return "youniumSubBadge-yellow";
+          default:              return "youniumSubBadge-gray";
+        }
+      }
+
       /**
        * Compute Younium status for a project. Returns:
        *   { color, label, kind, orderStatus, subscriptionStatus,
@@ -11990,9 +12033,7 @@
             const isRawCreated   = order.status === 1;
 
             const invoices = await youniumFetchInvoicesForOrder(order.orderNumber);
-            const postedInvoices = (invoices || []).filter((inv) =>
-              inv && (inv.status === 3 || inv.status === 2 || inv.posted)
-            );
+            const postedInvoices = (invoices || []).filter(youniumInvoiceIsPosted);
             out.raw.invoices = invoices;
 
             if (isCancelled)                      out.orderStatus = "Cancelled";
@@ -32505,31 +32546,26 @@
               const tb = Date.parse(b.effectiveStartDate || b.created || "") || 0;
               return tb - ta;
             });
-            // Status enum → human label (incl. unknowns).
-            const statusLabel = (s) =>
-              s === 9 ? "Active" :
-              s === 5 ? "Draft" :
-              s === 1 ? "Created" :
-              s === 0 ? "Draft" :
-              (s == null ? "—" : "status " + s);
-            const statusBadgeClass = (s) =>
-              s === 9 ? "youniumSubBadge-green" :
-              (s === 5 || s === 0 || s === 1) ? "youniumSubBadge-red" :
-              "youniumSubBadge-gray";
             const rows = others.map((o) => {
               const url = "https://eu.younium.com/orders/" + o.id;
               const num = o.orderNumber || "Draft";
               const desc = o.description ? " — " + escHtml(o.description) : "";
               const start = o.effectiveStartDate ? fmtDateOnly(o.effectiveStartDate) : "—";
               const end = o.effectiveEndDate ? fmtDateOnly(o.effectiveEndDate) : "—";
+              // Initial badge from the summary's lifecycle state. The summary
+              // carries no invoice data, so an otherwise-active order shows
+              // "Active" until the post-render refinement fetches its invoices
+              // and upgrades it to the real status ("Invoiced" / "Not invoiced").
+              const statusText = youniumRelatedOrderStatusLabel(o, null);
+              const needsInvoiceCheck = statusText === "Active";
               // The header is clickable to toggle an inline detail panel
               // (lazy-loaded via getOrderById). The Younium link inside it
               // stops propagation so it still opens the order in a new tab.
-              return '<div class="youniumRelatedRow" data-order-id="' + escHtml(String(o.id || "")) + '" data-order-number="' + escHtml(String(o.orderNumber || "")) + '">' +
+              return '<div class="youniumRelatedRow" data-order-id="' + escHtml(String(o.id || "")) + '" data-order-number="' + escHtml(String(o.orderNumber || "")) + '"' + (needsInvoiceCheck ? ' data-needs-invoice-check="1"' : "") + '>' +
                 '<div class="youniumRelatedHead" title="Click for full order details">' +
                   '<button type="button" class="youniumRelatedToggle" aria-label="Toggle order details" aria-expanded="false">▸</button>' +
                   '<a href="' + escHtml(toHttpUrl(url) || "#") + '" target="_blank" rel="noopener noreferrer">' + escHtml(num) + '</a>' +
-                  ' <span class="youniumSubBadge ' + statusBadgeClass(o.status) + '">' + escHtml(statusLabel(o.status)) + '</span>' +
+                  ' <span class="youniumSubBadge ' + youniumRelatedOrderBadgeClass(statusText) + '">' + escHtml(statusText) + '</span>' +
                   desc +
                 '</div>' +
                 '<div class="youniumRelatedMeta">Start ' + escHtml(start) + ' · End ' + escHtml(end) + '</div>' +
@@ -32555,6 +32591,34 @@
             if (link) link.addEventListener("click", (ev) => ev.stopPropagation());
             if (head) head.addEventListener("click", () => { void toggleRelatedRow(rowEl); });
           });
+
+        // Refine the "Other orders" badges from lifecycle state to the REAL
+        // order status. The summary only knows Active/Draft; whether an order was
+        // actually INVOICED needs its invoice history. For each still-ambiguous
+        // "Active" row, fetch posted invoices and upgrade the badge (Invoiced /
+        // Not invoiced) to match the primary order's verdict. Runs only when the
+        // modal is open (not on the background status chip) and only for the
+        // active rows; skipped entirely when the bridge can't fetch invoices, so
+        // we keep the lifecycle label rather than wrongly asserting "not invoiced".
+        if (window.YouniumBridge && typeof window.YouniumBridge.getInvoicesForOrder === "function") {
+          els.dlgYouniumStatusBody
+            .querySelectorAll('.youniumRelatedRow[data-needs-invoice-check="1"]')
+            .forEach(async (rowEl) => {
+              const id = rowEl.getAttribute("data-order-id");
+              const num = rowEl.getAttribute("data-order-number");
+              const o = (verdict.relatedOrders || []).find((x) => String(x.id || "") === id);
+              const badge = rowEl.querySelector(".youniumSubBadge");
+              if (!o || !num || !badge) return;
+              try {
+                const invoices = await youniumFetchInvoicesForOrder(num);
+                const posted = (invoices || []).filter(youniumInvoiceIsPosted).length;
+                const label = youniumRelatedOrderStatusLabel(o, posted);
+                badge.textContent = label;
+                badge.className = "youniumSubBadge " + youniumRelatedOrderBadgeClass(label);
+                rowEl.removeAttribute("data-needs-invoice-check");
+              } catch (_) { /* leave the provisional "Active" label on failure */ }
+            });
+        }
 
         // Footer action buttons — show/hide based on what's available
         if (orderLink) {
