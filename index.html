@@ -346,6 +346,29 @@
         overflow-y: hidden;
       }
 
+      /* Full-width resize handle for note textareas (makeTextareaEdgeResizable).
+         Replaces the fiddly native corner grip — the whole bottom edge drags. */
+      .taResizeHandle {
+        height: 11px;
+        /* Negative margin cancels the parent grid's row gap (8px in .taskDetails,
+           4px in .taskPrivateNoteWrap) so the strip hugs the textarea's bottom. */
+        margin-top: -8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: ns-resize;
+        touch-action: none;
+      }
+      .taResizeHandle::after {
+        content: "";
+        width: 42px;
+        height: 3px;
+        border-radius: 2px;
+        background: var(--border);
+        transition: background 120ms ease, width 120ms ease;
+      }
+      .taResizeHandle:hover::after { background: var(--muted2); width: 60px; }
+
       .chatsGrid {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -21694,6 +21717,46 @@
         }
       }
 
+      // Make a note <textarea> resizable by dragging its ENTIRE bottom edge,
+      // not just the tiny native corner grip (which is fiddly to grab). Disables
+      // the native resize and inserts a full-width drag strip as the textarea's
+      // next sibling. Idempotent. The handle is a sibling (not a wrapper) so the
+      // note-popout move logic — which captures notesBox.nextSibling — restores
+      // the correct order; and the popout's `height:auto !important` overrides
+      // any inline drag-height while open, so a resized note never breaks it.
+      function makeTextareaEdgeResizable(ta) {
+        if (!ta || ta.dataset.edgeResize === "1" || !ta.parentNode) return;
+        ta.dataset.edgeResize = "1";
+        ta.style.resize = "none";
+        const handle = document.createElement("div");
+        handle.className = "taResizeHandle";
+        handle.title = "Drag to resize";
+        ta.parentNode.insertBefore(handle, ta.nextSibling);
+        let startY = 0, startH = 0, dragging = false;
+        const onMove = (e) => {
+          if (!dragging) return;
+          const minH = parseFloat(getComputedStyle(ta).minHeight) || 60;
+          ta.style.height = Math.max(minH, startH + (e.clientY - startY)) + "px";
+        };
+        const onUp = () => {
+          if (!dragging) return;
+          dragging = false;
+          document.removeEventListener("pointermove", onMove);
+          document.removeEventListener("pointerup", onUp);
+          document.body.style.userSelect = "";
+        };
+        handle.addEventListener("pointerdown", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dragging = true;
+          startY = e.clientY;
+          startH = ta.getBoundingClientRect().height;
+          document.body.style.userSelect = "none";
+          document.addEventListener("pointermove", onMove);
+          document.addEventListener("pointerup", onUp);
+        });
+      }
+
       function renderDetail() {
         const p = getSelectedProject();
         els.btnEdit.disabled = !p;
@@ -26457,6 +26520,8 @@
               details.appendChild(notesLabel);
               details.appendChild(notesBox);
               details.appendChild(noteMsg);
+              // Drag-to-resize along the whole bottom edge (not just the corner).
+              makeTextareaEdgeResizable(notesBox);
               if (showDescriptionBox) {
                 details.appendChild(descLabel);
                 details.appendChild(descBox);
@@ -26515,6 +26580,7 @@
               privateNoteWrap.appendChild(privateNoteLabel);
               privateNoteWrap.appendChild(privateNoteBox);
               privateNoteWrap.appendChild(pnMsg);
+              makeTextareaEdgeResizable(privateNoteBox);
 
               // Reveal when there's existing content / a draft, or when the user
               // explicitly clicks "Add a private note".
