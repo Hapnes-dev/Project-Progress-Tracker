@@ -1642,6 +1642,13 @@
         color: var(--muted);
       }
 
+      .taskNoteLink {
+        color: var(--accent);
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      .taskNoteLink:hover { opacity: 0.85; }
+
       .taskStatusBadge {
         display: inline-block;
         padding: 2px 8px;
@@ -24911,6 +24918,34 @@
           root.appendChild(taskNotesTitle);
           const taskNotesBlock = document.createElement("div");
           taskNotesBlock.className = "taskNotesBlock";
+          // Render note text with any http(s) URLs as clickable links. Built
+          // from text nodes + <a> elements (never innerHTML) so the note stays
+          // XSS-safe; the anchor stops click propagation so opening a link
+          // doesn't also trigger the row's "open task in categories" handler.
+          const appendNoteText = (parent, text) => {
+            const s = String(text ?? "");
+            const re = /(https?:\/\/[^\s]+)/g;
+            let last = 0, m;
+            while ((m = re.exec(s)) !== null) {
+              if (m.index > last) {
+                parent.appendChild(document.createTextNode(s.slice(last, m.index)));
+              }
+              let url = m[0], trail = "";
+              const tm = url.match(/[.,;:!?]+$/); // don't swallow trailing prose punctuation
+              if (tm) { trail = tm[0]; url = url.slice(0, -trail.length); }
+              const a = document.createElement("a");
+              a.href = url;
+              a.textContent = url;
+              a.target = "_blank";
+              a.rel = "noopener noreferrer";
+              a.className = "taskNoteLink";
+              a.addEventListener("click", (e) => e.stopPropagation());
+              parent.appendChild(a);
+              if (trail) parent.appendChild(document.createTextNode(trail));
+              last = m.index + m[0].length;
+            }
+            if (last < s.length) parent.appendChild(document.createTextNode(s.slice(last)));
+          };
           for (const item of taskNotesList) {
             const row = document.createElement("div");
             row.className = "taskNoteItem s-" + item.status;
@@ -24956,7 +24991,7 @@
             lbl.className = "taskNoteLabel";
             lbl.textContent = "Note: ";
             const txt = document.createElement("span");
-            txt.textContent = item.note;
+            appendNoteText(txt, item.note);
             body.appendChild(lbl);
             body.appendChild(txt);
             row.appendChild(head);
