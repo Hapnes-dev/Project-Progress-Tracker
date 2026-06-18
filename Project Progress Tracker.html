@@ -27480,6 +27480,17 @@
       // by `presetKey` (the item stays a task, its "- " sub-bullets stay subtasks).
       const ORDER_INFO_PROMOTE_RULES = [
         { re: /\bmachinery\b/i, presetKey: "machine_room" },
+        // Aftermarket refrigeration deliverables (e.g. "IWMAC Aftermarket: New
+        // refrigeration position/section — 26 pcs") sit under the unmapped
+        // "IWMAC Product: Aftermarket Services" header, so without a rule they're
+        // dropped entirely. Promote them into the Refrigeration category (created
+        // via the promote-fallback even when no "IWMAC Modul: Refrigeration" is in
+        // the order). Anchored on "aftermarket" so it NEVER matches the
+        // "Per refrigeration position/section including image" item inside an
+        // IWMAC Modul: Refrigeration (that text has no "aftermarket") — mapped-
+        // module behaviour is byte-for-byte unchanged. Verified across 20 real
+        // orders: matches exactly the 2 aftermarket items, 0 module items.
+        { re: /aftermarket.*refrigeration/i, presetKey: "refrigeration_freezing" },
       ];
       function orderInfoPromoteRuleFor(text) {
         const t = String(text || "");
