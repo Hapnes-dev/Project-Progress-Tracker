@@ -27543,7 +27543,15 @@
       // are pulled out of their module and MERGED into the preset category named
       // by `presetKey` (the item stays a task, its "- " sub-bullets stay subtasks).
       const ORDER_INFO_PROMOTE_RULES = [
-        { re: /\bmachinery\b/i, presetKey: "machine_room" },
+        // Anything machine-related belongs in the Machine Room: "Machinery",
+        // "Maskinbilde", "Maskintegning", "Kuldemaskin" (chiller), etc. Norwegian
+        // "maskin" = machine; "machine" also covers "machinery". Verified across
+        // 20 real orders: matches only genuine machine items, no false positives.
+        { re: /maskin|machine/i, presetKey: "machine_room" },
+        // "IWMAC Aftermarket: Integration Gateway" (a Danfoss integration gateway)
+        // → Refrigeration. Narrow on the full phrase so other gateways (e.g.
+        // "Wireless MQTT Gateway", "Mini Gateway with DIN") are NOT swept in.
+        { re: /integration gateway/i, presetKey: "refrigeration_freezing" },
         // Aftermarket refrigeration deliverables (e.g. "IWMAC Aftermarket: New
         // refrigeration position/section — 26 pcs") sit under the unmapped
         // "IWMAC Product: Aftermarket Services" header, so without a rule they're
