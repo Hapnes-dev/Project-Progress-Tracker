@@ -29,6 +29,7 @@ Prefer a local copy? Download `Project Progress Tracker.html` and open it from y
 - **Collapsible sections** (whole overview + each team) with per-localStorage state.
 - **Live counts from Rocketlane**: total active projects + "In progress" specifically per teammate, fetched from `/projects/lightV1` (which returns `teamMembers` inline so we don't have to fan out to /members).
 - **Cross-user workload sharing**: each agent's Low / Normal / High / Need Work / On Hold selection is stored in a hidden `[Tracker] Workload Sync` Rocketlane meta-project (one task per user, plain-text token in `taskDescription`). Pull on every 5-min sync; push on every picker change.
+- **Manual refresh button** next to the heading re-pulls every teammate's project counts + workload values from Rocketlane on demand (the icon spins while fetching) — handy right after someone's status changes, instead of waiting for the 5-min sync.
 
 ### Rocketlane integration
 - **Sync (bidirectional)**: 5-min pull when tab is visible (resumes on focus), push-on-change within 2.5s, manual single-project sync via the "RL sync" chip.
@@ -44,9 +45,9 @@ Expand any task to edit two independent notes that mirror Rocketlane's task draw
 - **Description note** — the task's main description. For Rocketlane-linked tasks it reads/writes the Rocketlane task description; for local-only tasks it's stored in the tracker.
 - **Private note** — hidden behind a **+ Add a private note** link (matching Rocketlane's own affordance); click it to reveal a cream editor. For linked tasks this syncs to Rocketlane's task-level **`privateTaskDescription`** field — the same private note shown in the task drawer — via `PUT /projects/<projectId>/tasks/<taskId>/mini`. **Clearing** the note in the tracker also clears it in Rocketlane, and notes authored **in** Rocketlane pull back into the tracker on every sync.
 
-Stored locally as `t.privateNote`, kept separate from the description so the two never collide. Saved on Enter or click-away.
+Stored locally as `t.privateNote`, kept separate from the description so the two never collide. Saved on Enter or click-away. Both note editors **resize by dragging anywhere along their bottom edge** — a full-width handle, not just the fiddly native corner grip.
 
-A **Task notes overview** at the top of the project detail surfaces every task that needs attention — any task that isn't completed and either has a note or a non-"To do"/"In progress" status — as a card showing the category, **task name**, status, and note. Subtasks are marked with a `↳` and their parent ("under &lt;parent&gt;"). Click a card to jump to that task in its category.
+A **Task notes overview** at the top of the project detail surfaces every task that needs attention — any task that isn't completed and either has a note or a non-"To do"/"In progress" status — as a card showing the category, **task name**, status, and note. Any URL in the note renders as a **clickable link** (opens in a new tab; clicking it doesn't also open the task). Subtasks are marked with a `↳` and their parent ("under &lt;parent&gt;"). Click a card to jump to that task in its category.
 
 ### Zendesk Tasks (per project)
 - **Section** under "Chat history" in the project detail panel, sorted by **last public reply** (not generic `updated_at`). Matches tickets by **plant ID and store name** (merged), so tickets that name the store but not the plant number still show.
