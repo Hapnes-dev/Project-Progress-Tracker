@@ -7497,6 +7497,10 @@
               <div class="hint" id="rlQueryHint" style="margin-top: 6px">
                 Shows only Kiona team members (not partners/customers). Click your name to choose projects to import.
               </div>
+              <label class="small" id="rlOwnerOnlyRow" style="display: none; margin-top: 8px; align-items: center; gap: 6px; cursor: pointer">
+                <input type="checkbox" id="rlOwnerOnly" style="margin: 0" />
+                <span id="rlOwnerOnlyLabel">Only show projects I'm the owner of</span>
+              </label>
             </div>
           </div>
           <div class="small" id="rlStatus" style="margin-top: 10px"></div>
@@ -8532,6 +8536,8 @@
       let rocketlaneProjectPickerFiltered = [];
       const rocketlaneProjectPickerSelectedIds = new Set(); // rocketlane projectId strings
       let rocketlaneProjectPickerVisibleTotal = 0;
+      // "Only projects owned by the picked user" toggle in the import dialog.
+      let rocketlaneProjectPickerOwnerOnly = false;
 
       function getSavedSessionKey() {
         try { return String(localStorage.getItem(ROCKETLANE_SESSION_KEY_STORAGE) || "").trim(); } catch { return ""; }
@@ -8645,6 +8651,12 @@
             ? "Shows only Kiona team members (not partners/customers). Click your name to choose projects to import."
             : "Select one or more projects, then click <b>Import selected</b>.";
         }
+        // Owner-only toggle: projects mode only; label names the picked owner.
+        if (els?.rlOwnerOnlyRow) els.rlOwnerOnlyRow.style.display = isUsers ? "none" : "inline-flex";
+        if (!isUsers && els?.rlOwnerOnlyLabel) {
+          const who = rocketlanePickedUser ? rocketlaneUserDisplayName(rocketlanePickedUser) : "me";
+          els.rlOwnerOnlyLabel.textContent = "Only show projects owned by " + who;
+        }
 
         rocketlaneUpdateProjectPickerControls();
       }
@@ -8687,6 +8699,19 @@
         const q = String(els?.rlProjectQuery?.value ?? "").trim().toLowerCase();
         const all = Array.isArray(rocketlaneProjectPickerAll) ? rocketlaneProjectPickerAll : [];
         let filtered = q ? all.filter((pr) => rocketlaneProjectMatchBlob(pr).includes(q)) : all.slice();
+        // "Only show projects owned by <picked user>" toggle — match on the
+        // project's Rocketlane owner email (exact), falling back to owner name
+        // when the payload doesn't expose the owner's email.
+        if (rocketlaneProjectPickerOwnerOnly && rocketlanePickedUser) {
+          const meEmail = rocketlaneUserEmail(rocketlanePickedUser).toLowerCase();
+          const meName = rocketlaneUserDisplayName(rocketlanePickedUser).toLowerCase();
+          filtered = filtered.filter((pr) => {
+            const oe = rocketlaneProjectOwnerEmail(pr).toLowerCase();
+            if (meEmail && oe) return oe === meEmail;
+            const on = rocketlaneProjectOwnerName(pr).toLowerCase();
+            return !!meName && !!on && on === meName;
+          });
+        }
         filtered.sort((a, b) => rocketlaneProjectName(a).localeCompare(rocketlaneProjectName(b)));
         rocketlaneProjectPickerFiltered = filtered;
 
@@ -15311,6 +15336,8 @@
 
         rocketlanePickedUser = user;
         rocketlaneProjectPickerSelectedIds.clear();
+        rocketlaneProjectPickerOwnerOnly = false;
+        if (els?.rlOwnerOnly) els.rlOwnerOnly.checked = false;
         rocketlaneSetDlgMode("projects");
 
         if (els?.rocketlaneOwnerHint) {
@@ -20850,6 +20877,9 @@
         btnClearSessionKey: document.getElementById("btnClearSessionKey"),
         btnAutoFillSessionKey: document.getElementById("btnAutoFillSessionKey"),
         rlProjectQuery: document.getElementById("rlProjectQuery"),
+        rlOwnerOnly: document.getElementById("rlOwnerOnly"),
+        rlOwnerOnlyRow: document.getElementById("rlOwnerOnlyRow"),
+        rlOwnerOnlyLabel: document.getElementById("rlOwnerOnlyLabel"),
         rlStatus: document.getElementById("rlStatus"),
         rlResults: document.getElementById("rlResults"),
 
@@ -33187,6 +33217,12 @@
           rocketlaneSearchFromDialog();
         }, 350);
       });
+      if (els.rlOwnerOnly) {
+        els.rlOwnerOnly.addEventListener("change", () => {
+          rocketlaneProjectPickerOwnerOnly = !!els.rlOwnerOnly.checked;
+          rocketlaneRenderProjectPicker();
+        });
+      }
 
       els.btnCloseDlg.addEventListener("click", () => els.dlg.close());
       els.btnCancelDlg.addEventListener("click", () => els.dlg.close());
