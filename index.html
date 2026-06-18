@@ -8699,18 +8699,11 @@
         const q = String(els?.rlProjectQuery?.value ?? "").trim().toLowerCase();
         const all = Array.isArray(rocketlaneProjectPickerAll) ? rocketlaneProjectPickerAll : [];
         let filtered = q ? all.filter((pr) => rocketlaneProjectMatchBlob(pr).includes(q)) : all.slice();
-        // "Only show projects owned by <picked user>" toggle — match on the
-        // project's Rocketlane owner email (exact), falling back to owner name
-        // when the payload doesn't expose the owner's email.
+        // "Only show projects owned by <picked user>" toggle. Reuse the canonical
+        // ownership predicate (userId → email → normalized-name match) that also
+        // powers the "owned: N" count, so this filter stays consistent with it.
         if (rocketlaneProjectPickerOwnerOnly && rocketlanePickedUser) {
-          const meEmail = rocketlaneUserEmail(rocketlanePickedUser).toLowerCase();
-          const meName = rocketlaneUserDisplayName(rocketlanePickedUser).toLowerCase();
-          filtered = filtered.filter((pr) => {
-            const oe = rocketlaneProjectOwnerEmail(pr).toLowerCase();
-            if (meEmail && oe) return oe === meEmail;
-            const on = rocketlaneProjectOwnerName(pr).toLowerCase();
-            return !!meName && !!on && on === meName;
-          });
+          filtered = filtered.filter((pr) => rocketlaneProjectIsOwnedByUser(pr, rocketlanePickedUser));
         }
         filtered.sort((a, b) => rocketlaneProjectName(a).localeCompare(rocketlaneProjectName(b)));
         rocketlaneProjectPickerFiltered = filtered;
