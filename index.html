@@ -17462,16 +17462,26 @@
       }
 
       /** Fetch one sample task for a Rocketlane project (to learn object shapes). @param {string} projectId */
+      // Per-session cache of a project's sample task — rocketlaneCreateTaskInRocketlane
+      // reads it to learn the tenant's task object shape (+ assignees to inherit).
+      // The shape is stable within a session, so fetch it once per project instead
+      // of on EVERY task create — that redundant GET (plus its filter-key probe)
+      // dominated batch creates ("From order info", multiple subtasks). Cleared by
+      // rocketlaneClearProjectCreateCaches when the project is (re)synced.
+      const rocketlaneTaskSampleCache = new Map(); // projectId -> sample task | null
       async function rocketlaneFetchTaskSampleForProject(projectId) {
         const pid = String(projectId ?? "").trim();
         if (!pid) return null;
+        if (rocketlaneTaskSampleCache.has(pid)) return rocketlaneTaskSampleCache.get(pid);
         const key = await rocketlaneDetectTasksProjectFilterKey(pid);
         const params = { pageSize: 1 };
         // @ts-ignore
         params[key] = pid;
         const json = await rocketlaneFetchJson("/tasks", params);
         const { data } = rocketlaneUnwrapList(json);
-        return Array.isArray(data) && data.length ? data[0] : null;
+        const sample = Array.isArray(data) && data.length ? data[0] : null;
+        rocketlaneTaskSampleCache.set(pid, sample);
+        return sample;
       }
 
       const MAX_PHASES_PAGES = 20;
@@ -17615,14 +17625,38 @@
 
       /** Get phase by name or create it. @param {string} projectId @param {string} phaseName
        * @param {{private?:boolean, description?:string}} [opts] applied only when creating */
+      // Per-session cache of resolved phases by (project, name) so adding several
+      // tasks to the same category doesn't re-GET the phase list each time. Only
+      // PRESENT phases are cached (never "absence"), so a stale entry can at worst
+      // point at a since-deleted phase (rare; the task POST then errors and is
+      // surfaced) — it can never cause a duplicate phase.
+      const rocketlanePhaseByNameCache = new Map(); // pid+" "+nameLower -> phase
+      // Clear the per-project task-create caches (sample + phases). Called when a
+      // phase is renamed/deleted or the project is re-synced, so stale entries
+      // don't outlive the change. No arg → clear everything.
+      function rocketlaneClearProjectCreateCaches(projectId) {
+        const pid = String(projectId ?? "").trim();
+        if (!pid) { rocketlaneTaskSampleCache.clear(); rocketlanePhaseByNameCache.clear(); return; }
+        rocketlaneTaskSampleCache.delete(pid);
+        const prefix = pid + " ";
+        for (const k of [...rocketlanePhaseByNameCache.keys()]) {
+          if (k.startsWith(prefix)) rocketlanePhaseByNameCache.delete(k);
+        }
+      }
       async function rocketlaneGetOrCreatePhase(projectId, phaseName, opts) {
         const name = String(phaseName ?? "").trim();
         if (!name) throw new Error("Phase name required.");
+        const pid = String(projectId ?? "").trim();
+        const cacheKey = pid + " " + name.toLowerCase();
+        const cached = rocketlanePhaseByNameCache.get(cacheKey);
+        if (cached) return cached;
         const phases = await rocketlaneFetchPhasesForProject(projectId);
         const low = name.toLowerCase();
         const found = phases.find((ph) => rocketlanePhaseName(ph).toLowerCase() === low);
-        if (found) return found;
-        return await rocketlaneCreatePhase(projectId, name, opts);
+        if (found) { rocketlanePhaseByNameCache.set(cacheKey, found); return found; }
+        const created = await rocketlaneCreatePhase(projectId, name, opts);
+        if (created) rocketlanePhaseByNameCache.set(cacheKey, created);
+        return created;
       }
 
       /** Delete a phase from a Rocketlane project (cascades its tasks).
@@ -17631,10 +17665,12 @@
         const pid = String(projectId ?? "").trim();
         const id = String(phaseId ?? "").trim();
         if (!pid || !id) throw new Error("Project id and phase id required.");
-        return await rocketlaneRequestJson(
+        const res = await rocketlaneRequestJson(
           "DELETE",
           "/projects/" + encodeURIComponent(pid) + "/phases/" + encodeURIComponent(id),
         );
+        rocketlaneClearProjectCreateCaches(pid); // a cached phase may now be gone
+        return res;
       }
 
       /** Rename a phase in a Rocketlane project. Uses PUT (PATCH 400s on this
@@ -17655,12 +17691,14 @@
         const today = new Date().toISOString().slice(0, 10);
         const body = { projectPhaseName: name, startDate: startDate || today, dueDate: dueDate || "2099-12-31" };
         if (body.dueDate < body.startDate) body.dueDate = body.startDate;
-        return await rocketlaneRequestJson(
+        const res = await rocketlaneRequestJson(
           "PUT",
           "/projects/" + encodeURIComponent(pid) + "/phases/" + encodeURIComponent(id),
           undefined,
           body,
         );
+        rocketlaneClearProjectCreateCaches(pid); // cached phase name/object now stale
+        return res;
       }
 
       /**
@@ -22018,6 +22056,9 @@
                 force: true,
                 onlyProjectId: p.id,
               });
+              // A fresh pull may have changed this project's phases upstream —
+              // drop its task-create caches so the next create re-resolves them.
+              try { rocketlaneClearProjectCreateCaches(String(p.rocketlaneProjectId || "")); } catch (_) {}
               if (res && res.skipped) {
                 rlSyncTag.textContent = "RL sync skipped: " + String(res.reason || "unknown");
                 window.setTimeout(() => refreshRocketlaneSyncTagInPlace(), 1500);
