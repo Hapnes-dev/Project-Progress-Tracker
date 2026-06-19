@@ -28,6 +28,7 @@ Prefer a local copy? Download `Project Progress Tracker.html` and open it from y
 - **Team groups**: Team kulde lists a fixed roster (configured at `OWNER_TEAM_GROUPS`); everyone else falls into Others.
 - **Collapsible sections** (whole overview + each team) with per-localStorage state.
 - **Live counts from Rocketlane**: total active projects + "In progress" specifically per teammate, fetched from `/projects/lightV1` (which returns `teamMembers` inline so we don't have to fan out to /members).
+- **"owns N" chip**: alongside the "N project(s)" count (which includes projects they're just a team member on), each card shows how many of those they're the **project owner** of — hover it to see the owned project names.
 - **Cross-user workload sharing**: each agent's Low / Normal / High / Need Work / On Hold selection is stored in a hidden `[Tracker] Workload Sync` Rocketlane meta-project (one task per user, plain-text token in `taskDescription`). Pull on every 5-min sync; push on every picker change.
 - **Manual refresh button** next to the heading re-pulls every teammate's project counts + workload values from Rocketlane on demand (the icon spins while fetching) — handy right after someone's status changes, instead of waiting for the 5-min sync.
 
