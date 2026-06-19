@@ -27710,12 +27710,27 @@
           const preset = entry.preset;
           // Desired = generic Integration/Design + a task per order line item
           // (module's own + promoted into this preset), each with its sub-bullets.
-          const desired = [
+          const rawDesired = [
             { text: preset.integrationTask, subs: [] },
             { text: preset.designTask, subs: [] },
           ];
           const lineItems = [ ...(entry.items || []), ...(promotedByPreset.get(preset.key) || []) ];
-          for (const item of lineItems) desired.push({ text: item.text, subs: (item.subs || []).slice() });
+          for (const item of lineItems) rawDesired.push({ text: item.text, subs: (item.subs || []).slice() });
+          // Collapse duplicates by normalized text so a category never gets two
+          // identical tasks: merge their sub-bullets (themselves deduped). This is
+          // what makes the NEW-category branch below safe even when an order repeats
+          // a line item (the existing-category branch separately dedups against the
+          // tasks already on the project). Net: a run never adds a task that's
+          // already present — locally or, via syncCreateCategoryWithTasks, upstream.
+          const desired = [];
+          const desiredByNorm = new Map();
+          for (const d of rawDesired) {
+            const dk = norm(d.text);
+            let agg = desiredByNorm.get(dk);
+            if (!agg) { agg = { text: d.text, subs: [] }; desiredByNorm.set(dk, agg); desired.push(agg); }
+            const seenSub = new Set(agg.subs.map(norm));
+            for (const s of (d.subs || [])) { const sk = norm(s); if (!seenSub.has(sk)) { agg.subs.push(s); seenSub.add(sk); } }
+          }
 
           // Existing category with this label? (match by normalized label)
           let existingKey = null;
