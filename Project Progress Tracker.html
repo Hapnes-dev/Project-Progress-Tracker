@@ -263,6 +263,15 @@
         padding: 3px 7px;
       }
 
+      /* "owns N" chip — the count of projects this person is the OWNER of
+         (vs just a team member). Accent-tinted to set it apart from the plain
+         "N project(s)" chip; hover shows the owned project names. */
+      .ownerOwnsTag {
+        color: var(--accent);
+        font-weight: 600;
+        cursor: default;
+      }
+
       .ownerStatusMetaStatusBtn {
         appearance: none;
         font: inherit;
@@ -16031,6 +16040,8 @@
           // The project's OWNER also counts as a participant — owners are
           // not always duplicated into teamMembers.
           const owner = pr?.projectOwner;
+          const ownerUid = String(owner?.userId ?? "").trim();
+          const pname = String(pr?.projectName ?? pr?.name ?? "").trim();
           const participants = owner ? [...members, owner] : members;
           // Dedup by userId within this single project (in case owner
           // also appears in teamMembers).
@@ -16045,10 +16056,16 @@
               const firstName = String(u?.firstName ?? "").trim();
               const lastName  = String(u?.lastName ?? "").trim();
               const fullName  = [firstName, lastName].filter(Boolean).join(" ").trim() || ("User #" + uid);
-              byUserId[uid] = { firstName, lastName, fullName, total: 0, inProgress: 0, projectIds: [], inProgressProjectIds: [] };
+              byUserId[uid] = { firstName, lastName, fullName, total: 0, inProgress: 0, owned: 0, ownedProjectNames: [], projectIds: [], inProgressProjectIds: [] };
             }
             byUserId[uid].total += 1;
             if (pid) byUserId[uid].projectIds.push(pid);
+            // Is this user the OWNER of this project (the crown on Rocketlane's
+            // members page), as opposed to just a team member?
+            if (ownerUid && uid === ownerUid) {
+              byUserId[uid].owned += 1;
+              if (pname) byUserId[uid].ownedProjectNames.push(pname);
+            }
             if (inProg) {
               byUserId[uid].inProgress += 1;
               if (pid) byUserId[uid].inProgressProjectIds.push(pid);
@@ -21317,6 +21334,14 @@
                 byOwner[ownerKey].taskInProgressCount = t.inProgress;
               }
             }
+            // How many of these the teammate is the OWNER of (the crown role on
+            // Rocketlane's members page), + the project names for the tooltip.
+            // Take the higher of any local value and Rocketlane's authoritative count.
+            const orow = byOwner[ownerKey];
+            if ((t.owned || 0) > (orow.ownedCount || 0)) {
+              orow.ownedCount = t.owned || 0;
+              orow.ownedNames = Array.isArray(t.ownedProjectNames) ? t.ownedProjectNames : [];
+            }
           }
         }
 
@@ -21370,6 +21395,23 @@
           projectsTag.className = "tag";
           projectsTag.textContent = row.projectCount + " project(s)";
           meta.appendChild(projectsTag);
+
+          // "owns N" — how many of those projects this person is the OWNER of
+          // (the crown role), vs just a team member. Hover lists the owned ones.
+          if (row.ownedCount > 0) {
+            const ownsTag = document.createElement("span");
+            ownsTag.className = "tag ownerOwnsTag";
+            ownsTag.textContent = "owns " + row.ownedCount;
+            const names = Array.isArray(row.ownedNames) ? row.ownedNames : [];
+            if (names.length) {
+              const shown = names.slice(0, 20);
+              ownsTag.title = "Project owner of:\n• " + shown.join("\n• ") +
+                (row.ownedCount > shown.length ? "\n…and " + (row.ownedCount - shown.length) + " more" : "");
+            } else {
+              ownsTag.title = "Project owner of " + row.ownedCount + " project(s)";
+            }
+            meta.appendChild(ownsTag);
+          }
 
           const appendStatusChip = (count, refs, cls, text, statusKey, statusLabel, blink) => {
             if (count <= 0) return;
