@@ -27656,6 +27656,14 @@
         const t = String(text || "");
         return (ORDER_INFO_FLAT_CLASSIFY.find((r) => r.re.test(t)) || {}).key || null;
       }
+      // "IWMAC License" and "IWMAC License: <discipline>" line items are ALWAYS
+      // skipped (never become tasks) — the license is implied by the discipline
+      // category itself, not a deliverable. Applied to both the flat HubSpot
+      // line-items path and the module path. Anchored on the start so it never
+      // matches an item that merely mentions "license" mid-text.
+      function orderInfoIsLicenseItem(text) {
+        return /^\s*IWMAC\s*License\b/i.test(String(text || ""));
+      }
       // Parse the order-info HTML into modules → line items → sub-bullets.
       // Shape: <p><strong>IWMAC Modul: X</strong></p><ul>…</ul>. Sub-bullets come
       // in TWO Oneflow flavors, both handled: (a) a true **nested <ul>** inside the
@@ -27779,6 +27787,7 @@
           // promote-fallback plan loop below — same path the module flow uses.
           if (pm.flat) {
             for (const item of (pm.items || [])) {
+              if (orderInfoIsLicenseItem(item.text)) continue; // IWMAC License: always skipped
               const key = orderInfoClassifyDiscipline(item.text);
               if (!key) continue;
               if (!promotedByPreset.has(key)) promotedByPreset.set(key, []);
@@ -27789,6 +27798,7 @@
           }
           const keep = [];
           for (const item of (pm.items || [])) {
+            if (orderInfoIsLicenseItem(item.text)) continue; // IWMAC License: always skipped
             const rule = orderInfoPromoteRuleFor(item.text);
             if (rule) {
               if (!promotedByPreset.has(rule.presetKey)) promotedByPreset.set(rule.presetKey, []);
