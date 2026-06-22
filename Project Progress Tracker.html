@@ -11882,6 +11882,15 @@
       // `postedInvoiceCount` is the order's posted-invoice count, or null/undefined
       // when not yet fetched — in which case an otherwise-active order reads
       // "Active" until the post-render invoice check refines it.
+      // Younium order "delivery" states (status 7/8) — what the order header badge
+      // shows in Younium itself (e.g. O-015011 = "Partially delivered"). These take
+      // precedence over the invoice-derived "Invoiced" when displaying the order
+      // status. status 7 verified live (O-015011 + 9 others); 8 = fully Delivered.
+      function youniumDeliveryStatusLabel(status) {
+        if (status === 7) return "Partially delivered";
+        if (status === 8) return "Delivered";
+        return null;
+      }
       function youniumRelatedOrderStatusLabel(o, postedInvoiceCount) {
         const now = Date.now();
         const tsStart     = o?.effectiveStartDate ? Date.parse(o.effectiveStartDate) : NaN;
@@ -11890,6 +11899,8 @@
         if (Number.isFinite(tsCancelled) && tsCancelled <= now) return "Cancelled";
         if (o?.status === 5 || o?.status === 0)                  return "Draft";
         if (o?.status === 1)                                     return "Created";
+        const delivered = youniumDeliveryStatusLabel(o?.status); // 7/8 — Younium's header badge
+        if (delivered)                                           return delivered;
         if (invoicesKnown && postedInvoiceCount > 0)             return "Invoiced";
         if (Number.isFinite(tsStart) && tsStart > now)           return "Pending start";
         if (!invoicesKnown)                                      return "Active";
@@ -11899,12 +11910,14 @@
       function youniumRelatedOrderBadgeClass(label) {
         switch (label) {
           case "Invoiced":
+          case "Delivered":
           case "Active":        return "youniumSubBadge-green";
           case "Cancelled":
           case "Draft":
           case "Outdated":      return "youniumSubBadge-red";
           case "Not invoiced":
           case "Pending start":
+          case "Partially delivered":
           case "Created":       return "youniumSubBadge-yellow";
           default:              return "youniumSubBadge-gray";
         }
@@ -11947,6 +11960,7 @@
           label: "Younium: Missing",
           kind: null,
           orderStatus: "Unknown",
+          deliveryStatus: null,
           subscriptionStatus: "Unknown",
           orderNumber: null,
           links: {},
@@ -12070,6 +12084,10 @@
             else if (startsInFuture)              out.orderStatus = "Order (pending start)";
             else if (order.isLastVersion)         out.orderStatus = "Order (not invoiced)";
             else                                  out.orderStatus = "Draft (outdated version)";
+            // Younium's own header shows the DELIVERY state (status 7/8 = Partially
+            // delivered / Delivered). Surface that as the displayed order status; the
+            // invoice-workflow verdict/summary below still key off orderStatus + invoices.
+            out.deliveryStatus = youniumDeliveryStatusLabel(order.status);
 
             // ── Subscription status derivation (if subscriptionOrder found)
             if (subscriptionOrder) {
@@ -12596,6 +12614,10 @@
         } else {
           out.orderStatus = "Draft (outdated version)";
         }
+        // Younium's own header shows the DELIVERY state (status 7/8 = Partially
+        // delivered / Delivered). Surface that as the displayed order status; the
+        // verdict/summary below still key off orderStatus + invoices.
+        out.deliveryStatus = youniumDeliveryStatusLabel(order.status);
 
         // ── Color verdict ──
         // Expected end state: Invoiced. Anything else is a problem of
@@ -12669,8 +12691,11 @@
       // Younium status numbers (verified from the orders list — 5 = Draft,
       // 9 = Active. Others appear in deal lifecycle: 1 = Created, etc.)
       const YOUNIUM_STATUS_LABEL = {
+        0: "Draft",
         1: "Created",
         5: "Draft",
+        7: "Partially delivered",
+        8: "Delivered",
         9: "Active",
       };
 
@@ -32410,16 +32435,22 @@
         // Order status verdict for color coding — "Invoiced" is the
         // expected/positive end state; anything else is a warning or
         // error in the order pipeline.
-        const orderIsInvoiced = verdict.orderStatus === "Invoiced";
-        const orderIsBad = ["Cancelled", "Expired"].includes(verdict.orderStatus)
-          || verdict.orderStatus.startsWith("Draft")
-          || verdict.orderStatus.startsWith("Created");
-        const orderStatusColor = orderIsInvoiced ? "var(--good)" : (orderIsBad ? "var(--bad)" : "var(--warn)");
+        // Display the Younium-NATIVE order status: its delivery badge (status 7/8 =
+        // Partially delivered / Delivered) when present, else the invoice-workflow
+        // status. "Invoiced"/"Delivered" read as good (green); "Partially delivered"
+        // as in-progress (yellow). Only the order section's display changes — the
+        // verdict/summary still key off verdict.orderStatus.
+        const displayOrderStatus = verdict.deliveryStatus || verdict.orderStatus;
+        const orderIsGood = displayOrderStatus === "Invoiced" || displayOrderStatus === "Delivered";
+        const orderIsBad = ["Cancelled", "Expired"].includes(displayOrderStatus)
+          || displayOrderStatus.startsWith("Draft")
+          || displayOrderStatus.startsWith("Created");
+        const orderStatusColor = orderIsGood ? "var(--good)" : (orderIsBad ? "var(--bad)" : "var(--warn)");
         const orderHasPostedInvoices = invoices.length > 0 && invoices.some(i => i.status === 3 || i.posted);
         const invoiceStatusColor = orderHasPostedInvoices
           ? "var(--good)"
           : (invoices.length === 0 ? "var(--bad)" : "var(--warn)");
-        const orderBadgeClass = orderIsInvoiced ? "youniumSubBadge-green"
+        const orderBadgeClass = orderIsGood ? "youniumSubBadge-green"
           : (orderIsBad ? "youniumSubBadge-red" : "youniumSubBadge-yellow");
 
         // RAW(html) marks a value as already-safe, intentionally-built
@@ -32455,8 +32486,8 @@
           ["Order number",                verdict.orderNumber],
           ["Order name",                  orderName],
           ["Order status",                RAW('<strong style="color: ' + orderStatusColor + ';">' +
-                                          (orderIsInvoiced ? "✓ " : "") +
-                                          escHtml(verdict.orderStatus) + '</strong>')],
+                                          (orderIsGood ? "✓ " : "") +
+                                          escHtml(displayOrderStatus) + '</strong>')],
           // Invoice status — hidden entirely when the order itself is in
           // a bad state (Draft, Cancelled, Expired). In those cases the
           // invoices Younium returns belong to a PRIOR version of the
@@ -32644,7 +32675,7 @@
           // the Younium verdict.
           '<div class="youniumSection">' +
             '<div class="youniumSectionTitle">Order / offer' +
-              ' <span class="youniumSubBadge ' + orderBadgeClass + '">' + escHtml(verdict.orderStatus) + '</span>' +
+              ' <span class="youniumSubBadge ' + orderBadgeClass + '">' + escHtml(displayOrderStatus) + '</span>' +
             '</div>' +
             renderKV(orderKV) +
           '</div>' +
