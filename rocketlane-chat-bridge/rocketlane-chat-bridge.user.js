@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.9.16
-// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.9.16: uploadAttachment(projectId, file, { folderId }) can upload into a project folder — e.g. General Shared Files — via create(sourceType:FOLDER) + the folder link step.)
+// @version      1.10.0
+// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.10.0: background desktop notifications — pops a GM_notification for new Rocketlane chat/mention/status notifications + new Zendesk public replies whenever ANY matched tab is open, so you get alerts without the tracker open. Toggle via the Tampermonkey menu.)
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
 // @supportURL   https://github.com/Hapnes-dev/Project-Progress-Tracker/issues
@@ -24,6 +24,8 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        unsafeWindow
+// @grant        GM_notification
+// @grant        GM_registerMenuCommand
 // @connect      kiona.api.rocketlane.com
 // @connect      iwmac.zendesk.com
 // @connect      app.oneflow.com
@@ -2232,4 +2234,154 @@
       }
     });
   });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Background desktop notifications (v1.10.0)
+  // Pops a GM_notification for new Rocketlane chat/mention/status notifications
+  // AND new Zendesk public replies, from whichever matched tab is open — so you
+  // get alerts WITHOUT the Project Progress Tracker open. Uses GM_notification
+  // (no per-site permission prompt). Cross-tab dedup + a shared ~60s poll
+  // throttle via GM_setValue so multiple open tabs don't double-notify/over-poll
+  // (the tracker's own in-page notifier defers to this bridge when v1.10.0+).
+  // Can't fire when the browser is fully closed (that needs a backend + push).
+  // Toggle via the Tampermonkey menu ("✅/❌ Desktop notifications").
+  // ──────────────────────────────────────────────────────────────────────────
+  (function setupDesktopNotifier() {
+    if (typeof GM_notification !== "function") return;
+    const POLL_MS = 60 * 1000;
+    const EN_KEY = "notif_desktop_enabled_v1";
+    const SEEN_KEY = "notif_desktop_seen_v1";
+    const LASTPOLL_KEY = "notif_desktop_lastpoll_v1";
+    const PRIMED_KEY = "notif_desktop_primed_v1";
+    const ZID_KEY = "notif_desktop_zendesk_uid";
+
+    const getVal = (k, d) => { try { const v = GM_getValue(k, d); return v === undefined ? d : v; } catch (_) { return d; } };
+    const enabled = () => getVal(EN_KEY, true) !== false;
+    const getSeen = () => { try { return new Set(JSON.parse(getVal(SEEN_KEY, "[]"))); } catch (_) { return new Set(); } };
+    const saveSeen = (s) => { try { GM_setValue(SEEN_KEY, JSON.stringify(Array.from(s).slice(-400))); } catch (_) {} };
+    const stripHtml = (h) => String(h || "")
+      .replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ").trim();
+
+    // Shared ~60s throttle so multiple open tabs poll ~once/min total.
+    function claimPollSlot() {
+      let last = 0; try { last = Number(getVal(LASTPOLL_KEY, 0)) || 0; } catch (_) {}
+      const now = Date.now();
+      if (now - last < POLL_MS - 5000) return false;
+      try { GM_setValue(LASTPOLL_KEY, now); } catch (_) {}
+      return true;
+    }
+
+    function pop(item) {
+      try {
+        GM_notification({
+          title: item.title || "New notification",
+          text: (item.body && item.body.trim()) || "Click to open",
+          timeout: 15000,
+          onclick: () => { try { if (item.url) window.open(item.url, "_blank", "noopener"); else window.focus(); } catch (_) {} },
+        });
+      } catch (_) {}
+    }
+
+    async function collectRocketlane(items) {
+      try {
+        const data = await gmFetch(TENANT_API + "/notifications/groups?status=New&filter=All&count=20&groupSize=8");
+        const groups = Array.isArray(data) ? data : Object.values(data || {});
+        for (const g of groups) {
+          const ns = (g && g.notifications) || [];
+          if (!ns.length) continue;
+          let newest = ns[0], ts0 = Date.parse(String(newest.timestamp || "")) || 0;
+          for (const n of ns) { const ts = Date.parse(String(n.timestamp || "")) || 0; if (ts > ts0) { newest = n; ts0 = ts; } }
+          const conv = g.conversation || {};
+          const title = conv.conversationName || (conv.project && conv.project.name) || "Rocketlane";
+          const content = newest.meta && newest.meta.message && newest.meta.message.content;
+          items.push({
+            key: "rl:" + String((newest && newest.id) || (g.key && g.key.uri) || "?"),
+            title: "Rocketlane · " + title,
+            body: (stripHtml(content) || "New activity").slice(0, 180),
+            url: "https://kiona.rocketlane.com" + String((g.key && g.key.uri) || ""),
+          });
+        }
+      } catch (e) { try { console.warn("[bridge-notifier] Rocketlane poll failed:", (e && e.message) || e); } catch (_) {} }
+    }
+
+    async function zendeskUid() {
+      let id = 0; try { id = Number(getVal(ZID_KEY, 0)) || 0; } catch (_) {}
+      if (id) return id;
+      try { const me = await gmZendeskRequest("GET", "/users/me.json"); id = Number(me && me.user && me.user.id) || 0; if (id) GM_setValue(ZID_KEY, id); } catch (_) {}
+      return id;
+    }
+
+    async function collectZendesk(items) {
+      try {
+        const uid = await zendeskUid();
+        if (!uid) return;
+        const sinceDate = new Date(Date.now() - 3 * 864e5).toISOString().slice(0, 10);
+        const q = "type:ticket assignee:" + uid + " updated>" + sinceDate;
+        const res = await gmZendeskRequest("GET", "/search.json?query=" + encodeURIComponent(q) + "&sort_by=updated_at&sort_order=desc");
+        const tickets = ((res && res.results) || []).slice(0, 12);
+        for (const t of tickets) {
+          if (String(t.status || "").toLowerCase() === "closed") continue;
+          let comments = null;
+          try { comments = await gmZendeskRequest("GET", "/tickets/" + t.id + "/comments.json"); } catch (_) {}
+          const list = (comments && comments.comments) || [];
+          let last = null, lastTs = -1;
+          for (const c of list) { if (c && c.public) { const ts = Date.parse(String(c.created_at || "")) || 0; if (ts >= lastTs) { lastTs = ts; last = c; } } }
+          if (!last || Number(last.author_id) === uid) continue; // no public reply, or mine — skip
+          items.push({
+            key: "zd:" + last.id,
+            title: "Zendesk · " + (String(t.subject || "").trim() || ("Ticket #" + t.id)),
+            body: stripHtml(last.body).slice(0, 180),
+            url: "https://iwmac.zendesk.com/agent/tickets/" + t.id,
+          });
+        }
+      } catch (e) { try { console.warn("[bridge-notifier] Zendesk poll failed:", (e && e.message) || e); } catch (_) {} }
+    }
+
+    async function pollOnce() {
+      if (!enabled() || !claimPollSlot()) return;
+      const items = [];
+      await collectRocketlane(items);
+      await collectZendesk(items);
+      const seen = getSeen();
+      if (getVal(PRIMED_KEY, false) !== true) {
+        // First run ever: record the current backlog as seen and fire nothing,
+        // so only genuinely-new items pop afterwards (no install-time blast).
+        for (const it of items) seen.add(it.key);
+        saveSeen(seen);
+        try { GM_setValue(PRIMED_KEY, true); } catch (_) {}
+        try { console.log("[bridge-notifier] primed with " + items.length + " existing item(s); new ones will pop."); } catch (_) {}
+        return;
+      }
+      let fired = 0;
+      for (const it of items) {
+        if (!it || !it.key || seen.has(it.key)) continue;
+        seen.add(it.key); pop(it); fired++;
+      }
+      if (fired) { saveSeen(seen); try { console.log("[bridge-notifier] popped " + fired + " new notification(s)."); } catch (_) {} }
+    }
+
+    // Tampermonkey menu toggle.
+    try {
+      if (typeof GM_registerMenuCommand === "function") {
+        GM_registerMenuCommand((enabled() ? "✅" : "❌") + " Desktop notifications (Rocketlane + Zendesk)", () => {
+          const next = !enabled();
+          try { GM_setValue(EN_KEY, next); } catch (_) {}
+          try {
+            GM_notification({
+              title: "Desktop notifications " + (next ? "ON" : "OFF"),
+              text: next ? "You'll get popups for new Rocketlane/Zendesk activity while any tab is open." : "Turned off.",
+              timeout: 6000,
+            });
+          } catch (_) {}
+        });
+      }
+    } catch (_) {}
+
+    // Start after a short delay (lets the Rocketlane api-key / Zendesk session
+    // capture settle), then poll on an interval.
+    setTimeout(function () { void pollOnce(); }, 8000);
+    setInterval(function () { void pollOnce(); }, POLL_MS);
+    try { console.log("[bridge-notifier] active — desktop alerts for Rocketlane + Zendesk (enabled=" + enabled() + ")"); } catch (_) {}
+  })();
 })();

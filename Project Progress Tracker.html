@@ -9130,6 +9130,12 @@
       }
       // items: [{ key, title, body }]. Pops one Notification per unseen key.
       function fireDesktopNotificationsFor(items) {
+        // The Tampermonkey bridge (v1.10.0+) runs its OWN background desktop
+        // notifier that works even without this tracker open. When it's present,
+        // defer to it so the same item isn't popped twice from two stores.
+        try {
+          if (compareBridgeVersions(installedBridgeVersion(), "1.10.0") >= 0) return;
+        } catch (_) {}
         if (!desktopNotifEnabled() || !desktopNotifSupported() || Notification.permission !== "granted") return;
         const list = (items || []).filter((it) => it && it.key);
         const seen = desktopNotifGetSeen();
