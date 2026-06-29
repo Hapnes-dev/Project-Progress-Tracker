@@ -6878,6 +6878,56 @@
       .task.expanded .taskAddSubtaskBtn {
         display: inline-flex;
       }
+
+      /* ===================================================================
+         Accessibility fixes — frontend-developer review, "High" batch.
+         Appended LAST so they win over the duplicated rule blocks above.
+         H1 visible keyboard focus · H2 >=24px targets · H3 responsive task grid
+         =================================================================== */
+      /* H1 — restore a clearly visible keyboard-focus ring. Many controls set
+         `outline:none` with no usable replacement, and the task status control
+         had none at all, so keyboard users got no focus feedback.
+         WCAG 2.4.7 Focus Visible / 2.4.11 Focus Appearance. */
+      .btn:focus-visible,
+      .statusBtn:focus-visible,
+      .statusPicker:focus-visible,
+      .task select:focus-visible,
+      .input:focus-visible,
+      .select:focus-visible,
+      .addCatInput:focus-visible,
+      textarea:focus-visible,
+      select:focus-visible,
+      .btn.youniumStatusBtn:focus-visible,
+      .tag.rlSyncQuiet:focus-visible,
+      button.projectStatusTag:focus-visible,
+      .groupToggle:focus-visible,
+      .ownerGroupHeader .ownerCollapse:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      /* H2 — minimum 24x24px interactive target size. WCAG 2.5.8. Applies only
+         to the CLICKABLE chips/toggles (static Owner/Partner/Updated tags are
+         left alone). */
+      .tag.rlSyncQuiet,
+      .btn.youniumStatusBtn,
+      button.projectStatusTag {
+        min-height: 24px;
+        display: inline-flex;
+        align-items: center;
+      }
+      .groupToggle { min-width: 24px; min-height: 24px; }
+      .ownerGroupHeader .ownerCollapse { width: 24px; height: 24px; }
+
+      /* H3 — the task row is a fixed `180px 1fr auto` grid with no responsive
+         fallback, so on narrow viewports the task name is crushed/overflows.
+         Collapse to a single column and let the status control go full-width. */
+      @media (max-width: 640px) {
+        .task { grid-template-columns: 1fr; row-gap: 8px; }
+        .task select,
+        .statusPicker,
+        .statusBtn { width: 100%; }
+      }
     </style>
     <script>
       // Tiny shim: tag known buttons with `iconPlus`/`iconSync`/`iconEdit`/`iconTrash`
