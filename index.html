@@ -8616,6 +8616,25 @@
           const rawKey = bridgeRef?.apiKey;
           const bridgeKey = String(rawKey ?? "").trim();
           if (!bridgeKey) {
+            // The sync `.apiKey` property isn't always published yet (bridge
+            // timing / world-boundary), but the ASYNC getApiKey() has it. Kick
+            // off a one-shot pull that SAVES the key, so the next auth check
+            // finds it via getSavedSessionKey() — no manual paste, and the
+            // auto-sync stops logging "missing_api_key" once it lands. Guarded
+            // so it fires at most once at a time.
+            if (typeof bridgeRef?.getApiKey === "function" && !window.__rlKeyPrimeInFlight) {
+              window.__rlKeyPrimeInFlight = true;
+              Promise.resolve(bridgeRef.getApiKey())
+                .then((info) => {
+                  const k = String(info?.apiKey ?? "").trim();
+                  if (k && getSavedSessionKey() !== k) {
+                    saveSessionKey(k);
+                    console.log("[Auth] Primed session key from bridge.getApiKey() (length=" + k.length + ")");
+                  }
+                })
+                .catch(() => {})
+                .finally(() => { window.__rlKeyPrimeInFlight = false; });
+            }
             // Diagnostic: this is THE failure mode for "missing_api_key"
             // when the bridge IS published. SECURITY: never log raw
             // credential bytes — even partial prefixes reduce entropy
@@ -16600,10 +16619,15 @@
       // missing_api_key, dialog_open, cooldown, in_flight, success, etc.
       const rlSyncStats = {
         ticks: /** @type {{t:string, msg:string}[]} */ ([]),
+        _lastLogged: "",
         note(msg) {
           this.ticks.push({ t: new Date().toLocaleTimeString("nb-NO"), msg });
           if (this.ticks.length > 30) this.ticks.shift();
-          console.log("[RL auto-sync]", msg);
+          // Only console.log when the message CHANGES — a long run of identical
+          // ticks (e.g. repeated "skip: missing_api_key" before the bridge key
+          // is ready) would otherwise spam the console. The full per-tick
+          // history is still kept in `ticks` / window.__rlSyncStats.
+          if (msg !== this._lastLogged) { this._lastLogged = msg; console.log("[RL auto-sync]", msg); }
         },
       };
       try { window.__rlSyncStats = rlSyncStats; } catch (_) {}
