@@ -8499,6 +8499,7 @@
       const rocketlaneTaskDescriptionSyncTokens = new Map(); // rocketlaneTaskId -> number
       const rocketlaneTaskDescriptionLastSent = new Map(); // rocketlaneTaskId -> string
       const rocketlaneLastSyncAtByProjectId = new Map(); // local project.id -> ISO
+      const rocketlaneOwnerNameFetchTried = new Set(); // local project.id — lazy real-owner fetch attempted this session
       // Persistence so the "RL sync: <when>" chip survives page reloads.
       // Without this, every reload shows "RL sync: pending" until the next
       // sync timer fires (up to 10 min later), even though the data is fresh.
@@ -18396,6 +18397,7 @@
                 name: rlName,
                 client: customerName || "",
                 owner: trackerOwnerName,
+                rocketlaneOwnerName: rlOwnerName || "",
                 status: "proposed",
                 due: due || "",
                 notes: [
@@ -18431,6 +18433,11 @@
               local.name = rlName;
               if (customerName) local.client = customerName;
               if (!preserveLocalOwner && trackerOwnerName) local.owner = trackerOwnerName;
+              // The REAL Rocketlane project owner is tracked separately from the
+              // (grouping) owner and is always refreshed when Rocketlane reports
+              // one — even on the silent resync (preserveLocalOwner) — so the
+              // header Owner chip reflects the actual project owner.
+              if (rlOwnerName) local.rocketlaneOwnerName = rlOwnerName;
               if (due) local.due = due;
               local.rocketlaneProjectId = rlPid;
               local.grouping = local.grouping ?? "smart";
@@ -22094,10 +22101,20 @@
           meta.appendChild(cl);
         }
 
-        if (p.owner) {
+        // Owner chip shows the REAL Rocketlane project owner when known
+        // (p.rocketlaneOwnerName), falling back to the local grouping owner
+        // (p.owner) until a sync captures it. Project-list / Owner-Workload
+        // grouping still uses p.owner — only this display follows the real owner.
+        const ownerDisplayName = String(p.rocketlaneOwnerName || "").trim() || String(p.owner || "").trim();
+        if (ownerDisplayName) {
           const ow = document.createElement("span");
           ow.className = "tag";
-          ow.textContent = "Owner: " + p.owner;
+          ow.textContent = "Owner: " + ownerDisplayName;
+          const groupOwner = String(p.owner || "").trim();
+          if (String(p.rocketlaneOwnerName || "").trim() && groupOwner &&
+              ownerDisplayName.toLowerCase() !== groupOwner.toLowerCase()) {
+            ow.title = 'Rocketlane project owner — grouped under "' + groupOwner + '" in your list/overview.';
+          }
           meta.appendChild(ow);
         }
 
@@ -22122,6 +22139,28 @@
         }
 
         const linkedRocketlaneProjectId = String(p.rocketlaneProjectId ?? "").trim();
+        // Older imports stored the importing user as p.owner and never captured
+        // the real Rocketlane project owner. If this linked project has no
+        // rocketlaneOwnerName yet, fetch it once (per session) and re-render so
+        // the Owner chip shows the actual project owner.
+        if (
+          linkedRocketlaneProjectId &&
+          !String(p.rocketlaneOwnerName || "").trim() &&
+          !rocketlaneOwnerNameFetchTried.has(String(p.id)) &&
+          typeof rocketlaneFetchProjectById === "function"
+        ) {
+          rocketlaneOwnerNameFetchTried.add(String(p.id));
+          rocketlaneFetchProjectById(linkedRocketlaneProjectId)
+            .then((rp) => {
+              const nm = rocketlaneProjectOwnerName(rp) || "";
+              if (nm && nm !== p.rocketlaneOwnerName) {
+                p.rocketlaneOwnerName = nm;
+                saveState(state);
+                if (String(state.selectedProjectId) === String(p.id)) render();
+              }
+            })
+            .catch(() => {});
+        }
         if (linkedRocketlaneProjectId) {
           const rlSyncTag = document.createElement("span");
           rlSyncTag.id = "rocketlaneSyncTag";
