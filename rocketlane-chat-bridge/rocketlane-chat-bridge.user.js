@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.10.0
-// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.10.0: background desktop notifications — pops a GM_notification for new Rocketlane chat/mention/status notifications + new Zendesk public replies whenever ANY matched tab is open, so you get alerts without the tracker open. Toggle via the Tampermonkey menu.)
+// @version      1.11.0
+// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.11.0: richer desktop notifications — title = plant id + name, body = who + what changed; resolves project names for automation/phase events. v1.10.0: background desktop notifications for new Rocketlane + Zendesk activity whenever any matched tab is open. Toggle via the Tampermonkey menu.)
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
 // @supportURL   https://github.com/Hapnes-dev/Project-Progress-Tracker/issues
@@ -2283,6 +2283,45 @@
       } catch (_) {}
     }
 
+    // Strip HTML + Rocketlane :emoji_shortcode: tokens for a clean one-liner.
+    const rlClean = (s) => stripHtml(s).replace(/:[a-z0-9_+\-]+:/gi, "").replace(/\s+/g, " ").trim();
+    // "Tomas Berger (Epta Norway AS)" / "Automation" / "Matthias Criel".
+    function rlAuthorName(by) {
+      if (!by || typeof by !== "object") return "";
+      if (by.userType === "AUTOMATION_BOT") return "Automation";
+      const nm = [by.firstName, by.lastName].map((s) => String(s || "").trim()).filter(Boolean).join(" ").trim()
+        || String(by.userName || "").trim();
+      const co = String((by.company && by.company.companyName) || "").trim();
+      if (by.userType === "EXTERNAL" && co && co.toLowerCase() !== "kiona") return nm ? (nm + " (" + co + ")") : co;
+      return nm;
+    }
+    const RL_EVENT_LABELS = {
+      MessageCreated: "message", NotifyThroughAutomation: "update",
+      ProjectPhaseStatusChanged: "phase status changed", ProjectPhaseDueDateChanged: "phase due date changed",
+      ProjectMemberJoinedMyProject: "member joined", ProjectFolderAttachmentAdded: "file added",
+      ProjectFolderAttachmentRemoved: "file removed", ProjectHoursThresholdReached: "hours threshold reached",
+      TaskNameOrDescriptionChanged: "task updated", TaskStatusChanged: "task status changed",
+      TimesheetOverdueReminder: "timesheet overdue", TimesheetDueReminder: "timesheet due",
+      TimesheetRequested: "timesheet requested",
+    };
+    const rlEventLabel = (et) => RL_EVENT_LABELS[et] || String(et || "update").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
+    // Resolve "plant id - name". Chat carries conv.project.name; project-type
+    // events only carry projectId, so look it up (cached in GM persistently).
+    async function rlProjectName(conv, projectId) {
+      const direct = conv && conv.project && String(conv.project.name || "").trim();
+      if (direct) return direct;
+      if (!projectId) return "Rocketlane";
+      const ck = "notif_pname_" + projectId;
+      let cached = ""; try { cached = String(GM_getValue(ck, "") || ""); } catch (_) {}
+      if (cached) return cached;
+      try {
+        const p = await gmFetch(TENANT_API + "/projects/" + projectId);
+        const name = String((p && (p.projectName || p.name)) || "").trim();
+        if (name) { try { GM_setValue(ck, name); } catch (_) {} return name; }
+      } catch (_) {}
+      return "Project #" + projectId;
+    }
+
     async function collectRocketlane(items) {
       try {
         const data = await gmFetch(TENANT_API + "/notifications/groups?status=New&filter=All&count=20&groupSize=8");
@@ -2292,13 +2331,23 @@
           if (!ns.length) continue;
           let newest = ns[0], ts0 = Date.parse(String(newest.timestamp || "")) || 0;
           for (const n of ns) { const ts = Date.parse(String(n.timestamp || "")) || 0; if (ts > ts0) { newest = n; ts0 = ts; } }
+          const meta = (newest && newest.meta) || {};
           const conv = g.conversation || {};
-          const title = conv.conversationName || (conv.project && conv.project.name) || "Rocketlane";
-          const content = newest.meta && newest.meta.message && newest.meta.message.content;
+          const plant = await rlProjectName(conv, meta.projectId);   // "2619 - Coop Extra Heggedal: Ombygging"
+          const who = rlAuthorName(meta.by);
+          let body;
+          if (meta.eventType === "MessageCreated") {
+            const msg = rlClean(meta.message && (typeof meta.message === "object" ? meta.message.content : meta.message)) || "(message)";
+            body = (who ? who + ": " : "") + msg;                    // who + what was said
+          } else {
+            const detail = rlClean(meta.note) || rlClean(meta.subject) || "";
+            body = (who && who !== "Automation" ? who + " — " : "") + rlEventLabel(meta.eventType) + (detail ? ": " + detail : "");
+          }
+          const moreN = ns.length > 1 ? ns.length - 1 : 0;
           items.push({
             key: "rl:" + String((newest && newest.id) || (g.key && g.key.uri) || "?"),
-            title: "Rocketlane · " + title,
-            body: (stripHtml(content) || "New activity").slice(0, 180),
+            title: plant.slice(0, 90),                               // plant id + name
+            body: (body || "New activity").slice(0, 200) + (moreN ? "  (+" + moreN + " more)" : ""),
             url: "https://kiona.rocketlane.com" + String((g.key && g.key.uri) || ""),
           });
         }
