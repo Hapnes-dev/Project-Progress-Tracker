@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.12.0
-// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.12.0: desktop notifications now fire ONLY for actual case responses — Rocketlane chat replies + Zendesk public replies from someone else — never for your own task/status/automation updates. v1.11.0: richer detail — title = plant id + name, body = who + what. Toggle via the Tampermonkey menu.)
+// @version      1.13.0
+// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.13.0: clicking a Rocketlane chat notification now opens the correct /projects/<id>/chat/<convId> URL instead of the blank /project-conversations/<id> route. v1.12.0: notifications fire ONLY for actual case responses, never your own task/status updates. Toggle via the Tampermonkey menu.)
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
 // @supportURL   https://github.com/Hapnes-dev/Project-Progress-Tracker/issues
@@ -2335,11 +2335,19 @@
           const who = rlAuthorName(meta.by);
           const msg = rlClean(meta.message && (typeof meta.message === "object" ? meta.message.content : meta.message)) || "(message)";
           const moreN = msgs.length > 1 ? msgs.length - 1 : 0;
+          // Chat deep-link must be /projects/<projectId>/chat/<conversationId>.
+          // The group's key.uri ("/project-conversations/<id>") is a dead route
+          // that opens a blank page — build the real chat URL from the ids.
+          const convId = (conv.conversationId != null ? conv.conversationId : (g.key && g.key.projectConversationId)) || "";
+          const projId = (conv.project && conv.project.id) || meta.projectId || "";
+          const url = (projId && convId)
+            ? "https://kiona.rocketlane.com/projects/" + projId + "/chat/" + convId
+            : "https://kiona.rocketlane.com" + String((g.key && g.key.uri) || "");
           items.push({
             key: "rl:" + String((newest && newest.id) || (g.key && g.key.uri) || "?"),
             title: plant.slice(0, 90),                               // plant id + name
             body: ((who ? who + ": " : "") + msg).slice(0, 200) + (moreN ? "  (+" + moreN + " more)" : ""),
-            url: "https://kiona.rocketlane.com" + String((g.key && g.key.uri) || ""),
+            url,
           });
         }
       } catch (e) { try { console.warn("[bridge-notifier] Rocketlane poll failed:", (e && e.message) || e); } catch (_) {} }
