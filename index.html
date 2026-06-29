@@ -11996,6 +11996,20 @@
         if (status === 8) return "Delivered";
         return null;
       }
+      // A "Partially delivered" order (Younium delivery status 7) is NOT fully
+      // done even when invoiced + subscription Active, so an otherwise-green
+      // verdict must NOT read "All good". Downgrade it to a yellow warning.
+      // Fully "Delivered" (8) stays green. Called before each verdict return.
+      function youniumApplyPartialDeliveryDowngrade(out) {
+        if (out && out.color === "green" && out.deliveryStatus === "Partially delivered") {
+          out.color = "yellow";
+          out.label = "Younium: ⚠ Partially delivered";
+          (out.problems = out.problems || []).push(
+            "Order is only Partially delivered in Younium — not fully delivered yet.",
+          );
+        }
+        return out;
+      }
       function youniumRelatedOrderStatusLabel(o, postedInvoiceCount) {
         const now = Date.now();
         const tsStart     = o?.effectiveStartDate ? Date.parse(o.effectiveStartDate) : NaN;
@@ -12267,6 +12281,7 @@
           } catch (e) {
             dbg("no-link plant_id flow failed:", e);
           }
+          youniumApplyPartialDeliveryDowngrade(out);
           return out;
         }
         const classified = classifyLinkUrl(savedUrl);
@@ -12789,6 +12804,7 @@
           out.problems.push("Could not determine subscription state confidently");
         }
 
+        youniumApplyPartialDeliveryDowngrade(out);
         dbg("verdict:", { color: out.color, label: out.label, orderStatus: out.orderStatus, subscriptionStatus: out.subscriptionStatus });
         return out;
       }
@@ -32676,6 +32692,8 @@
           summaryText = "Action needed: Subscription is " + subStatus + " — should be Active.";
         } else if (verdict.color === "red") {
           summaryText = "Action needed: " + (verdict.label?.replace(/^Younium:\s*[✗⚠✓]?\s*/, "") || "Younium needs attention.");
+        } else if (verdict.color === "yellow" && verdict.deliveryStatus === "Partially delivered") {
+          summaryText = "Partially delivered — the order isn't fully delivered in Younium yet (invoice + subscription otherwise fine).";
         } else if (verdict.color === "yellow" && verdict.orderStatus === "Invoiced") {
           summaryText = "Pending — Order is Invoiced, waiting for Subscription to become Active.";
         } else if (verdict.color === "yellow" && verdict.orderStatus === "Order (not invoiced)") {
