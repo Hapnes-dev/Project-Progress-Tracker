@@ -22655,13 +22655,22 @@
                 resizeNotesTa();
               }
               if (res.fieldId) {
+                // A Rocketlane "Project Notes" field exists → notes sync there.
+                notesTa.placeholder = "Write notes for this project (press Enter to save)...";
                 setChip("Synced from Rocketlane", "good", "Notes successfully synced");
                 restoreChipAfter(2500);
               } else {
-                // No notes field configured — just restore the normal chip
-                restoreChipAfter(0);
+                // No "Project Notes" custom field exists on this Rocketlane
+                // tenant, so there's nowhere to sync to — notes save on THIS
+                // DEVICE only. Make that explicit instead of leaving the stale
+                // "Loading from Rocketlane…" placeholder (which looked stuck).
+                notesTa.placeholder = "Saved on this device only — Rocketlane has no Project Notes field (press Enter to save)";
+                setChip("Saved on this device only", "warn",
+                  "This Rocketlane tenant has no 'Project Notes' custom field, so notes can't sync there. They're saved locally in this browser. Create a project custom field whose name starts with 'Project Notes' in Rocketlane to enable syncing.");
+                restoreChipAfter(7000);
               }
             } catch (e) {
+              notesTa.placeholder = "Couldn't reach Rocketlane — saved on this device (press Enter to save)";
               setChip(
                 "Could not load from Rocketlane",
                 "bad",
