@@ -9102,6 +9102,60 @@
         } catch (_) {}
       }
 
+      // ── Desktop (browser) notifications ──────────────────────────────────
+      // Opt-in popup via the Web Notifications API, fired from the existing
+      // badge poll when a NEW Rocketlane/Zendesk item arrives. The tab must stay
+      // open (static page — no service worker / push backend). Each item is keyed
+      // (source:id:newestTimestamp) and fired at most once via a persisted "seen"
+      // set; a per-session "prime" makes the first poll after (re)load or after
+      // enabling record the current backlog silently so it never blasts.
+      const DESKTOP_NOTIF_ENABLED_KEY = "ppt_desktop_notif_enabled_v1";
+      const DESKTOP_NOTIF_SEEN_KEY = "ppt_desktop_notif_seen_v1";
+      let desktopNotifPrimed = false;
+      function desktopNotifSupported() { return typeof Notification !== "undefined"; }
+      function desktopNotifEnabled() {
+        try { return localStorage.getItem(DESKTOP_NOTIF_ENABLED_KEY) === "1"; } catch (_) { return false; }
+      }
+      function setDesktopNotifEnabled(on) {
+        try { localStorage.setItem(DESKTOP_NOTIF_ENABLED_KEY, on ? "1" : "0"); } catch (_) {}
+        if (on) desktopNotifPrimed = false; // re-prime so enabling never blasts the backlog
+      }
+      function desktopNotifGetSeen() {
+        try { return new Set(JSON.parse(localStorage.getItem(DESKTOP_NOTIF_SEEN_KEY) || "[]")); }
+        catch (_) { return new Set(); }
+      }
+      function desktopNotifSaveSeen(set) {
+        try { localStorage.setItem(DESKTOP_NOTIF_SEEN_KEY, JSON.stringify(Array.from(set).slice(-300))); }
+        catch (_) {}
+      }
+      // items: [{ key, title, body }]. Pops one Notification per unseen key.
+      function fireDesktopNotificationsFor(items) {
+        if (!desktopNotifEnabled() || !desktopNotifSupported() || Notification.permission !== "granted") return;
+        const list = (items || []).filter((it) => it && it.key);
+        const seen = desktopNotifGetSeen();
+        if (!desktopNotifPrimed) {
+          // First poll after load / enable: record the current backlog as seen,
+          // fire nothing, so only genuinely-new items pop afterwards.
+          for (const it of list) seen.add(it.key);
+          desktopNotifSaveSeen(seen);
+          desktopNotifPrimed = true;
+          return;
+        }
+        let changed = false;
+        for (const it of list) {
+          if (seen.has(it.key)) continue;
+          seen.add(it.key); changed = true;
+          try {
+            const n = new Notification(it.title || "New notification", {
+              body: String(it.body || "").slice(0, 180),
+              tag: it.key, // collapse duplicates at the OS level too
+            });
+            n.onclick = () => { try { window.focus(); } catch (_) {} try { n.close(); } catch (_) {} };
+          } catch (_) {}
+        }
+        if (changed) desktopNotifSaveSeen(seen);
+      }
+
       // Zendesk recent-replies list filters (persisted, UI-only).
       // hideSolved default = ON (solved/closed hidden); replyFilter default "all".
       const ZENDESK_NOTIF_HIDE_SOLVED_KEY = "zendesk_notif_hide_solved_v1";
@@ -30666,6 +30720,9 @@
 
         const refreshNotifBadge = async () => {
           try {
+            // Collected from the same unread data below, then fired once per
+            // genuinely-new item as an opt-in desktop notification.
+            const desktopNotifItems = [];
             // Rocketlane unread groups (chat, mentions, status changes, …).
             // NOTE: notification timestamps are ISO strings — parse with
             // Date.parse, NOT Number() (Number("2026-…") is NaN, which made
@@ -30686,6 +30743,17 @@
                 );
                 return acc + (newest > notifLastSeenAt ? 1 : 0);
               }, 0);
+              // Collect the newly-unread groups for a desktop popup.
+              for (const g of (groups || [])) {
+                const newest = Math.max(0, ...(g.notifications ?? []).map((n) => Date.parse(String(n?.timestamp ?? "")) || 0));
+                if (newest > notifLastSeenAt) {
+                  desktopNotifItems.push({
+                    key: "rl:" + String(g?.key?.uri ?? g?.key?.uuid ?? notifGroupTitle(g) ?? "?") + ":" + newest,
+                    title: notifGroupTitle(g) || "Rocketlane notification",
+                    body: (typeof notifCommentTextFor === "function" ? (notifCommentTextFor(g.notifications?.[0]) || "") : ""),
+                  });
+                }
+              }
             }
 
             // Zendesk unread — tickets assigned to me with a new public reply
@@ -30699,6 +30767,13 @@
                 (t) => !hideSolved || !["solved", "closed"].includes(String(t.status || "").toLowerCase()),
               );
               zdUnread = zt.length;
+              for (const t of zt) {
+                desktopNotifItems.push({
+                  key: "zd:" + t.id + ":" + (t.replyTs || 0),
+                  title: "Zendesk · " + (t.subject || ("Ticket #" + t.id)),
+                  body: t.snippet || "",
+                });
+              }
             } catch (_) {}
 
             const total = rlUnread + zdUnread;
@@ -30720,6 +30795,8 @@
                   ? "Notifications — Rocketlane: " + rlUnread + ", Zendesk: " + zdUnread
                   : "Notifications";
             }
+            // Opt-in: pop a browser notification for each genuinely-new item.
+            fireDesktopNotificationsFor(desktopNotifItems);
           } catch (e) {
             console.warn("[Notifications] badge refresh failed:", e);
           }
@@ -30751,6 +30828,43 @@
           closeBtn.textContent = "×";
           closeBtn.addEventListener("click", closeNotifDrawer);
           head.appendChild(title);
+
+          // Opt-in desktop-notifications toggle (requests permission on enable).
+          const bellToggle = document.createElement("button");
+          bellToggle.type = "button";
+          bellToggle.className = "notifDesktopToggle btn";
+          bellToggle.style.cssText =
+            "margin-left:auto;margin-right:8px;font-size:11px;padding:4px 10px;min-height:24px;border-radius:999px;white-space:nowrap;";
+          const syncBellToggle = () => {
+            const supported = desktopNotifSupported();
+            const granted = supported && Notification.permission === "granted";
+            const on = desktopNotifEnabled() && granted;
+            bellToggle.textContent = on ? "🔔 Alerts on" : "🔕 Alerts off";
+            bellToggle.setAttribute("aria-pressed", on ? "true" : "false");
+            bellToggle.title = !supported
+              ? "This browser doesn't support desktop notifications"
+              : Notification.permission === "denied"
+                ? "Blocked — allow notifications for this site in your browser settings, then click again"
+                : "Pop a browser notification when a new Rocketlane/Zendesk notification arrives (this tab must stay open)";
+          };
+          bellToggle.addEventListener("click", async () => {
+            if (!desktopNotifSupported()) { alert("This browser doesn't support desktop notifications."); return; }
+            if (desktopNotifEnabled() && Notification.permission === "granted") {
+              setDesktopNotifEnabled(false); syncBellToggle(); return;
+            }
+            let perm = Notification.permission;
+            if (perm !== "granted") { try { perm = await Notification.requestPermission(); } catch (_) {} }
+            if (perm === "granted") {
+              setDesktopNotifEnabled(true);
+            } else {
+              setDesktopNotifEnabled(false);
+              if (perm === "denied") alert("Notifications are blocked for this site. Enable them in your browser's site settings, then click the toggle again.");
+            }
+            syncBellToggle();
+          });
+          syncBellToggle();
+          head.appendChild(bellToggle);
+
           head.appendChild(closeBtn);
 
           const filtersWrap = document.createElement("div");
