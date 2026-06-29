@@ -31109,17 +31109,21 @@
 
         els.btnNotifications.addEventListener("click", openNotifDrawer);
 
-        // Initial badge load + refresh every 2 minutes when tab is visible.
-        // The tick re-checks BOTH Rocketlane and Zendesk for new replies (the
-        // badge count), and — if the drawer is open — refreshes its Zendesk
-        // recent-replies list in place so new comments show without reopening.
+        // Initial badge load + refresh every minute. Foreground always; while
+        // hidden, only when desktop alerts are on (so popups can fire when you're
+        // on another window). The tick re-checks BOTH Rocketlane and Zendesk for
+        // new replies (the badge count + desktop popups), and — if the drawer is
+        // open — refreshes its Zendesk recent-replies list in place.
         const notifTick = () => {
-          if (document.hidden) return;
+          // Skip background ticks to save network — EXCEPT when desktop alerts
+          // are enabled, since polling while the tab is hidden is exactly what
+          // lets a new-notification popup fire while you're on another window.
+          if (document.hidden && !desktopNotifEnabled()) return;
           void refreshNotifBadge();
           if (notifDrawerEl && typeof notifZdRefresh === "function") void notifZdRefresh();
         };
         void refreshNotifBadge();
-        setInterval(notifTick, 2 * 60 * 1000);
+        setInterval(notifTick, 60 * 1000);
         document.addEventListener("visibilitychange", () => {
           if (!document.hidden) notifTick();
         });
