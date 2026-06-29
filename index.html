@@ -8493,9 +8493,15 @@
         } catch {}
       }
       // Expose tiny helpers on window for ad-hoc use from DevTools.
+      // NOTE: do NOT expose getSavedRocketlaneApiKey as `window.getRocketlaneApiKey`
+      // — in this classic (non-module) script that REASSIGNS the global
+      // `getRocketlaneApiKey`, clobbering the real session-aware function
+      // (function getRocketlaneApiKey() below) for EVERY caller — including the
+      // auto-sync auth gate, which then always saw the empty legacy API key and
+      // skipped with "missing_api_key". Expose it under its own name instead.
       try {
         window.setRocketlaneApiKey = saveRocketlaneApiKey;
-        window.getRocketlaneApiKey = getSavedRocketlaneApiKey;
+        window.getSavedRocketlaneApiKey = getSavedRocketlaneApiKey;
         window.clearRocketlaneApiKey = () => saveRocketlaneApiKey("");
       } catch {}
       // Auto-sync cadence: every 5 minutes. Local data changes (status,
