@@ -153,7 +153,7 @@ The bridge is required for **any** cross-origin API call from `github.io` or `fi
 
 Despite the name, this single userscript also bridges Zendesk, Oneflow, HubSpot, and Younium. Tampermonkey will open an install prompt — confirm **Install**. The script auto-updates on every push.
 
-> **Outdated-bridge check:** the tracker compares your installed bridge version against the latest on GitHub on load and shows a dismissible **"Tampermonkey bridge outdated"** popup (with an **Update bridge** link) if you're behind. Requires bridge **v1.9.15+** (older bridges can't report their version, so they're flagged as outdated until updated).
+> **Auto-update prompt (always checks for the newest):** on every load the tracker fetches the latest bridge `@version` from GitHub and, if your installed copy is behind, pops a dismissible **"Tampermonkey bridge outdated → Update bridge"** card (bottom-right). The check is version-agnostic, so it nudges you to **every** new bridge release automatically (new features + fixes — e.g. the desktop notifications). One click opens Tampermonkey's update prompt. Requires bridge **v1.9.15+** (older bridges can't report their version, so they're flagged until updated).
 
 The userscript is hosted in a separate repo: [Hapnes-dev/tampermonkey-scripts → rocketlane-chat-bridge](https://github.com/Hapnes-dev/tampermonkey-scripts/tree/main/rocketlane-chat-bridge).
 
