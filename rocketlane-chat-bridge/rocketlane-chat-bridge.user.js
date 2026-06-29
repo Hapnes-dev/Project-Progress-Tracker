@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.11.0
-// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.11.0: richer desktop notifications — title = plant id + name, body = who + what changed; resolves project names for automation/phase events. v1.10.0: background desktop notifications for new Rocketlane + Zendesk activity whenever any matched tab is open. Toggle via the Tampermonkey menu.)
+// @version      1.12.0
+// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.12.0: desktop notifications now fire ONLY for actual case responses — Rocketlane chat replies + Zendesk public replies from someone else — never for your own task/status/automation updates. v1.11.0: richer detail — title = plant id + name, body = who + what. Toggle via the Tampermonkey menu.)
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
 // @supportURL   https://github.com/Hapnes-dev/Project-Progress-Tracker/issues
@@ -2295,16 +2295,6 @@
       if (by.userType === "EXTERNAL" && co && co.toLowerCase() !== "kiona") return nm ? (nm + " (" + co + ")") : co;
       return nm;
     }
-    const RL_EVENT_LABELS = {
-      MessageCreated: "message", NotifyThroughAutomation: "update",
-      ProjectPhaseStatusChanged: "phase status changed", ProjectPhaseDueDateChanged: "phase due date changed",
-      ProjectMemberJoinedMyProject: "member joined", ProjectFolderAttachmentAdded: "file added",
-      ProjectFolderAttachmentRemoved: "file removed", ProjectHoursThresholdReached: "hours threshold reached",
-      TaskNameOrDescriptionChanged: "task updated", TaskStatusChanged: "task status changed",
-      TimesheetOverdueReminder: "timesheet overdue", TimesheetDueReminder: "timesheet due",
-      TimesheetRequested: "timesheet requested",
-    };
-    const rlEventLabel = (et) => RL_EVENT_LABELS[et] || String(et || "update").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
     // Resolve "plant id - name". Chat carries conv.project.name; project-type
     // events only carry projectId, so look it up (cached in GM persistently).
     async function rlProjectName(conv, projectId) {
@@ -2324,30 +2314,31 @@
 
     async function collectRocketlane(items) {
       try {
+        // Only "responses from the case" — actual chat replies. We deliberately
+        // skip task/phase/status updates, automation nudges, timesheet reminders,
+        // member/file events, etc. (everything that isn't a MessageCreated), AND
+        // skip my OWN messages — a "response" is someone ELSE replying.
+        const myId = Number(GM_getValue("rlUserId", 0)) || 0;
         const data = await gmFetch(TENANT_API + "/notifications/groups?status=New&filter=All&count=20&groupSize=8");
         const groups = Array.isArray(data) ? data : Object.values(data || {});
         for (const g of groups) {
-          const ns = (g && g.notifications) || [];
-          if (!ns.length) continue;
-          let newest = ns[0], ts0 = Date.parse(String(newest.timestamp || "")) || 0;
-          for (const n of ns) { const ts = Date.parse(String(n.timestamp || "")) || 0; if (ts > ts0) { newest = n; ts0 = ts; } }
-          const meta = (newest && newest.meta) || {};
+          const msgs = ((g && g.notifications) || []).filter((n) =>
+            n && n.meta && n.meta.eventType === "MessageCreated" &&
+            !(myId && Number(n.meta.by && n.meta.by.userId) === myId),
+          );
+          if (!msgs.length) continue;
+          let newest = msgs[0], ts0 = Date.parse(String(newest.timestamp || "")) || 0;
+          for (const n of msgs) { const ts = Date.parse(String(n.timestamp || "")) || 0; if (ts > ts0) { newest = n; ts0 = ts; } }
+          const meta = newest.meta || {};
           const conv = g.conversation || {};
           const plant = await rlProjectName(conv, meta.projectId);   // "2619 - Coop Extra Heggedal: Ombygging"
           const who = rlAuthorName(meta.by);
-          let body;
-          if (meta.eventType === "MessageCreated") {
-            const msg = rlClean(meta.message && (typeof meta.message === "object" ? meta.message.content : meta.message)) || "(message)";
-            body = (who ? who + ": " : "") + msg;                    // who + what was said
-          } else {
-            const detail = rlClean(meta.note) || rlClean(meta.subject) || "";
-            body = (who && who !== "Automation" ? who + " — " : "") + rlEventLabel(meta.eventType) + (detail ? ": " + detail : "");
-          }
-          const moreN = ns.length > 1 ? ns.length - 1 : 0;
+          const msg = rlClean(meta.message && (typeof meta.message === "object" ? meta.message.content : meta.message)) || "(message)";
+          const moreN = msgs.length > 1 ? msgs.length - 1 : 0;
           items.push({
             key: "rl:" + String((newest && newest.id) || (g.key && g.key.uri) || "?"),
             title: plant.slice(0, 90),                               // plant id + name
-            body: (body || "New activity").slice(0, 200) + (moreN ? "  (+" + moreN + " more)" : ""),
+            body: ((who ? who + ": " : "") + msg).slice(0, 200) + (moreN ? "  (+" + moreN + " more)" : ""),
             url: "https://kiona.rocketlane.com" + String((g.key && g.key.uri) || ""),
           });
         }
