@@ -12028,9 +12028,20 @@
       // shows in Younium itself (e.g. O-015011 = "Partially delivered"). These take
       // precedence over the invoice-derived "Invoiced" when displaying the order
       // status. status 7 verified live (O-015011 + 9 others); 8 = fully Delivered.
+      // Younium's NATIVE order-header status badge (the value shown on the
+      // order page), beyond the invoice-workflow "Invoiced". Covers both the
+      // delivery dimension (7/8) AND the payment dimension (10/11): an order
+      // that's been invoiced moves to "Partially paid" (10) once some payment
+      // is received, then "Paid" (11) when settled. Returning the native label
+      // here makes the modal's "Order status" reflect Younium instead of the
+      // derived "Invoiced". (11 = "Paid" is inferred from the 10 = "Partially
+      // paid" pair, verified live on O-014603; flag if a fully-paid order ever
+      // mislabels.)
       function youniumDeliveryStatusLabel(status) {
-        if (status === 7) return "Partially delivered";
-        if (status === 8) return "Delivered";
+        if (status === 7)  return "Partially delivered";
+        if (status === 8)  return "Delivered";
+        if (status === 10) return "Partially paid";
+        if (status === 11) return "Paid";
         return null;
       }
       // A "Partially delivered" order (Younium delivery status 7) is NOT fully
@@ -12067,6 +12078,8 @@
         switch (label) {
           case "Invoiced":
           case "Delivered":
+          case "Partially paid":
+          case "Paid":
           case "Active":        return "youniumSubBadge-green";
           case "Cancelled":
           case "Draft":
@@ -12855,6 +12868,8 @@
         7: "Partially delivered",
         8: "Delivered",
         9: "Active",
+        10: "Partially paid",
+        11: "Paid",
       };
 
       // Quote-specific status enum — verified via Playwright:
@@ -32813,7 +32828,8 @@
         // as in-progress (yellow). Only the order section's display changes — the
         // verdict/summary still key off verdict.orderStatus.
         const displayOrderStatus = verdict.deliveryStatus || verdict.orderStatus;
-        const orderIsGood = displayOrderStatus === "Invoiced" || displayOrderStatus === "Delivered";
+        const orderIsGood = displayOrderStatus === "Invoiced" || displayOrderStatus === "Delivered"
+          || displayOrderStatus === "Partially paid" || displayOrderStatus === "Paid";
         const orderIsBad = ["Cancelled", "Expired"].includes(displayOrderStatus)
           || displayOrderStatus.startsWith("Draft")
           || displayOrderStatus.startsWith("Created");
