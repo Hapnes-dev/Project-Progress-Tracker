@@ -11964,19 +11964,25 @@
        *   description / message / event / type
        */
       function pickEventTs(e) {
-        return Date.parse(e?.timestamp || e?.createdDate || e?.eventDate ||
+        // Younium's eventlog uses `timeStamp` (capital S); keep the other names
+        // as defensive fallbacks. Without timeStamp this returned 0 for EVERY
+        // event, so the sort was a no-op and both "Created by" / "Last updated
+        // by" collapsed to events[0] (the API's newest entry).
+        return Date.parse(e?.timeStamp || e?.timestamp || e?.createdDate || e?.eventDate ||
                           e?.created || e?.when || e?.date || "") || 0;
       }
       function normalizeEvent(top) {
         if (!top) return null;
         return {
-          timestamp: top.timestamp || top.createdDate || top.eventDate ||
+          timestamp: top.timeStamp || top.timestamp || top.createdDate || top.eventDate ||
                      top.created || top.when || top.date || null,
           user: top.userEmail || top.email || top.userDisplayName ||
                 top.userName || top.user || top.modifiedByUserDisplayName ||
                 top.modifiedBy || top.createdByUserDisplayName ||
                 top.createdBy || null,
-          description: top.description || top.message || top.event ||
+          // Younium describes the event in `action` ("Order status changed to
+          // invoiced", "Order changed", …).
+          description: top.action || top.description || top.message || top.event ||
                        top.type || top.eventType || null,
           raw: top,
         };
