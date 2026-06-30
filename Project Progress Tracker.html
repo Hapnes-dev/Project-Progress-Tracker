@@ -14183,6 +14183,30 @@
           .join("");
       }
 
+      // Tenant-wide field-definitions cache (5 min). Used to resolve the
+      // "Project Notes" field id even before it's attached to a given project:
+      // a freshly-created Rocketlane custom field doesn't appear in a project's
+      // includeAllFields until it has a value, so without this the first save
+      // could never find the fieldId (chicken-and-egg).
+      let rocketlaneTenantFieldsCache = null;
+      let rocketlaneTenantFieldsCacheAt = 0;
+      async function rocketlaneFindNotesFieldIdInTenant() {
+        try {
+          const now = Date.now();
+          if (!rocketlaneTenantFieldsCache || now - rocketlaneTenantFieldsCacheAt > 5 * 60 * 1000) {
+            const json = await rocketlaneRequestJson("GET", "/fields");
+            rocketlaneTenantFieldsCache = Array.isArray(json?.data) ? json.data
+              : Array.isArray(json) ? json
+              : Array.isArray(json?.fields) ? json.fields : [];
+            rocketlaneTenantFieldsCacheAt = now;
+          }
+          const fields = rocketlaneTenantFieldsCache || [];
+          const match = fields.find((f) => String(f?.fieldName ?? "").toLowerCase().replace(/\s+/g, "").startsWith("projectnotes"))
+            || fields.find((f) => /projectnote/i.test(String(f?.fieldName ?? "")));
+          return match ? match.fieldId : null;
+        } catch (_) { return null; }
+      }
+
       /** Fetch a project's notes field value via Rocketlane API. */
       async function rocketlaneFetchProjectNotes(rlProjectId) {
         const pid = String(rlProjectId ?? "").trim();
@@ -14194,12 +14218,18 @@
         );
         const project = json?.data ?? json;
         const found = rocketlaneFindProjectNotesField(project);
-        if (!found) return { fieldId: null, html: "", text: "" };
-        return {
-          fieldId: found.fieldId,
-          html: found.fieldValue,
-          text: rocketlaneHtmlToPlainText(found.fieldValue),
-        };
+        if (found) {
+          return {
+            fieldId: found.fieldId,
+            html: found.fieldValue,
+            text: rocketlaneHtmlToPlainText(found.fieldValue),
+          };
+        }
+        // Not attached to THIS project yet (created with no value here) — resolve
+        // the id from the tenant field list so reading (empty) + the first write
+        // still work. The field attaches to the project on that first write.
+        const tenantFieldId = await rocketlaneFindNotesFieldIdInTenant();
+        return { fieldId: tenantFieldId || null, html: "", text: "" };
       }
 
       /** Write a new value to the project's notes field. */
