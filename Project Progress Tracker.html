@@ -12056,6 +12056,15 @@
             "Order is only Partially delivered in Younium — not fully delivered yet.",
           );
         }
+        // "Partially paid" (status 10) is likewise not a finished state: invoiced
+        // but the balance isn't fully settled. Downgrade an otherwise-green
+        // verdict to yellow so the banner/chip stop reading "All good". The
+        // explanatory warning line is added in buildYouniumExtraWarnings so it
+        // shows even when the verdict is red for a worse reason (e.g. Draft sub).
+        if (out && out.color === "green" && out.deliveryStatus === "Partially paid") {
+          out.color = "yellow";
+          out.label = "Younium: — Partially paid";
+        }
         return out;
       }
       function youniumRelatedOrderStatusLabel(o, postedInvoiceCount) {
@@ -12078,7 +12087,6 @@
         switch (label) {
           case "Invoiced":
           case "Delivered":
-          case "Partially paid":
           case "Paid":
           case "Active":        return "youniumSubBadge-green";
           case "Cancelled":
@@ -12087,6 +12095,7 @@
           case "Not invoiced":
           case "Pending start":
           case "Partially delivered":
+          case "Partially paid":
           case "Created":       return "youniumSubBadge-yellow";
           default:              return "youniumSubBadge-gray";
         }
@@ -32740,6 +32749,13 @@
         if (linkMis && linkMis.message) {
           out.push(linkMis.message);
         }
+        // Surface "Partially paid" as an explicit warning line. Lives here (not
+        // only in the green→yellow downgrade) so it's visible even when the
+        // verdict is red for a worse reason — e.g. an invoiced + partially-paid
+        // order whose subscription is still Draft.
+        if (verdict?.deliveryStatus === "Partially paid") {
+          out.push("Order is only partially paid in Younium — full payment is still outstanding.");
+        }
         return out;
       }
 
@@ -32794,6 +32810,8 @@
           summaryText = "Action needed: " + (verdict.label?.replace(/^Younium:\s*[✗⚠✓]?\s*/, "") || "Younium needs attention.");
         } else if (verdict.color === "yellow" && verdict.deliveryStatus === "Partially delivered") {
           summaryText = "Partially delivered — the order isn't fully delivered in Younium yet (invoice + subscription otherwise fine).";
+        } else if (verdict.color === "yellow" && verdict.deliveryStatus === "Partially paid") {
+          summaryText = "Partially paid — the order is invoiced but not fully paid in Younium yet (subscription otherwise fine).";
         } else if (verdict.color === "yellow" && verdict.orderStatus === "Invoiced") {
           summaryText = "Pending — Order is Invoiced, waiting for Subscription to become Active.";
         } else if (verdict.color === "yellow" && verdict.orderStatus === "Order (not invoiced)") {
@@ -32828,8 +32846,12 @@
         // as in-progress (yellow). Only the order section's display changes — the
         // verdict/summary still key off verdict.orderStatus.
         const displayOrderStatus = verdict.deliveryStatus || verdict.orderStatus;
+        // "Partially …" (paid / delivered) is an in-progress state, not done —
+        // render it yellow with a leading em-dash, never the green ✓. The fully
+        // complete states "Paid" / "Delivered" / "Invoiced" stay green ✓.
+        const orderIsPartial = displayOrderStatus.startsWith("Partially");
         const orderIsGood = displayOrderStatus === "Invoiced" || displayOrderStatus === "Delivered"
-          || displayOrderStatus === "Partially paid" || displayOrderStatus === "Paid";
+          || displayOrderStatus === "Paid";
         const orderIsBad = ["Cancelled", "Expired"].includes(displayOrderStatus)
           || displayOrderStatus.startsWith("Draft")
           || displayOrderStatus.startsWith("Created");
@@ -32874,7 +32896,7 @@
           ["Order number",                verdict.orderNumber],
           ["Order name",                  orderName],
           ["Order status",                RAW('<strong style="color: ' + orderStatusColor + ';">' +
-                                          (orderIsGood ? "✓ " : "") +
+                                          (orderIsGood ? "✓ " : (orderIsPartial ? "— " : "")) +
                                           escHtml(displayOrderStatus) + '</strong>')],
           // Invoice status — hidden entirely when the order itself is in
           // a bad state (Draft, Cancelled, Expired). In those cases the
