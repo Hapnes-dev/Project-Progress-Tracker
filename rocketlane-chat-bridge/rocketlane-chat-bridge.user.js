@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.13.0
-// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.13.0: clicking a Rocketlane chat notification now opens the correct /projects/<id>/chat/<convId> URL instead of the blank /project-conversations/<id> route. v1.12.0: notifications fire ONLY for actual case responses, never your own task/status updates. Toggle via the Tampermonkey menu.)
+// @version      1.14.0
+// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.14.0: no Zendesk popup for a ticket you solved yourself — solved/closed tickets are skipped, so resolving a case no longer pops a notification for the customer's last reply. v1.13.0: clicking a Rocketlane chat notification now opens the correct /projects/<id>/chat/<convId> URL instead of the blank /project-conversations/<id> route. v1.12.0: notifications fire ONLY for actual case responses, never your own task/status updates. Toggle via the Tampermonkey menu.)
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
 // @supportURL   https://github.com/Hapnes-dev/Project-Progress-Tracker/issues
@@ -2369,7 +2369,13 @@
         const res = await gmZendeskRequest("GET", "/search.json?query=" + encodeURIComponent(q) + "&sort_by=updated_at&sort_order=desc");
         const tickets = ((res && res.results) || []).slice(0, 12);
         for (const t of tickets) {
-          if (String(t.status || "").toLowerCase() === "closed") continue;
+          // Skip tickets I've already resolved. "solved" or "closed" means the
+          // case is handled — don't pop a notification for one I just solved
+          // myself, even though the customer's message is the last public reply.
+          // (Zendesk reopens a solved ticket to "open" when the requester replies
+          // again, so a genuine new response still notifies.)
+          const st = String(t.status || "").toLowerCase();
+          if (st === "solved" || st === "closed") continue;
           let comments = null;
           try { comments = await gmZendeskRequest("GET", "/tickets/" + t.id + "/comments.json"); } catch (_) {}
           const list = (comments && comments.comments) || [];
