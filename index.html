@@ -2,6 +2,14 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <!-- SECURITY (defence in depth): block plugin-based injection (<object>/
+         <embed>) and <base>-tag hijacking. Deliberately NARROW — no script-src
+         or connect-src, because the app is 100% inline scripts and talks to a
+         user-configurable SQL endpoint, so a strict CSP would break normal use.
+         The main XSS defences are in JS (escHtml/RAW + DOMParser allowlist
+         sanitizers), and the privileged Rocketlane bridge uses GM_xmlhttpRequest
+         which bypasses page CSP anyway. iframes stay allowed (PDF preview). -->
+    <meta http-equiv="Content-Security-Policy" content="object-src 'none'; base-uri 'self'" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <!-- SECURITY: identifies this page as the legitimate tracker so the
          Tampermonkey bridge can scope its window.RocketlaneBridge expose
@@ -13407,25 +13415,36 @@
               if (qs) fullPath += (fullPath.includes("?") ? "&" : "?") + qs;
             }
             const url = /^https?:/i.test(fullPath) ? fullPath : (TENANT + fullPath);
-            const headers = { "api-key": key, accept: "application/json" };
-            const init = { method, headers };
-            if (body !== undefined && body !== null) {
-              headers["content-type"] = "application/json";
-              init.body = typeof body === "string" ? body : JSON.stringify(body);
-            }
-            try {
-              const res = await fetch(url, init);
-              const text = await res.text();
-              if (!res.ok) {
-                const err = new Error("HTTP " + res.status + ": " + text.slice(0, 300));
-                /** @type {any} */ (err).status = res.status;
-                throw err;
+            // SECURITY: only ever attach the Rocketlane api-key (a bearer secret)
+            // when the request really targets the tenant API origin. If a path
+            // ever resolves to another origin, DON'T do the direct fetch — fall
+            // through to the bridge (which pins the same origin) rather than leak
+            // the key via a cross-origin request. Relative paths always resolve
+            // to TENANT, so every legitimate call is unaffected. (Mirrors the
+            // bridge's gmRequest api-key pin.)
+            let __rlDirectOrigin = "";
+            try { __rlDirectOrigin = new URL(url).origin; } catch (_) {}
+            if (__rlDirectOrigin === "https://kiona.api.rocketlane.com") {
+              const headers = { "api-key": key, accept: "application/json" };
+              const init = { method, headers };
+              if (body !== undefined && body !== null) {
+                headers["content-type"] = "application/json";
+                init.body = typeof body === "string" ? body : JSON.stringify(body);
               }
-              return text ? JSON.parse(text) : null;
-            } catch (e) {
-              // If direct fetch fails (e.g., key invalid), fall through
-              // to the bridge path below — it has 401 auto-renewal.
-              console.debug("[Rocketlane API] direct fetch failed, trying bridge:", String(e?.message ?? e));
+              try {
+                const res = await fetch(url, init);
+                const text = await res.text();
+                if (!res.ok) {
+                  const err = new Error("HTTP " + res.status + ": " + text.slice(0, 300));
+                  /** @type {any} */ (err).status = res.status;
+                  throw err;
+                }
+                return text ? JSON.parse(text) : null;
+              } catch (e) {
+                // If direct fetch fails (e.g., key invalid), fall through
+                // to the bridge path below — it has 401 auto-renewal.
+                console.debug("[Rocketlane API] direct fetch failed, trying bridge:", String(e?.message ?? e));
+              }
             }
           }
         }
@@ -13612,6 +13631,15 @@
       async function rocketlaneProbeAbsolute(method, absoluteUrl) {
         const auth = getRocketlaneAuth();
         if (!auth) throw new Error("Missing Rocketlane API key or session key.");
+        // SECURITY: never attach the Rocketlane api-key (a bearer secret) to a
+        // non-Rocketlane origin. Callers build absoluteUrl from a hardcoded list
+        // of *.rocketlane.com bases; this guard ensures a future or mis-built
+        // URL can't exfiltrate the key to another host.
+        let __rlProbeHost = "";
+        try { __rlProbeHost = new URL(absoluteUrl).hostname.toLowerCase(); } catch (_) {}
+        if (!(__rlProbeHost === "rocketlane.com" || __rlProbeHost.endsWith(".rocketlane.com"))) {
+          throw new Error("Refusing to send Rocketlane api-key to non-Rocketlane origin: " + (__rlProbeHost || absoluteUrl));
+        }
         const res = await fetch(absoluteUrl, {
           method,
           headers: {
@@ -24737,7 +24765,10 @@
                   const isImage = mime.startsWith("image/");
                   if (isImage) {
                     const link = document.createElement("a");
-                    link.href = url;
+                    // Scheme-guard the Zendesk-supplied content_url (defence in
+                    // depth — reject any non-http(s) URL so a javascript: href
+                    // can never be clicked).
+                    link.href = toHttpUrl(url) || "#";
                     link.target = "_blank";
                     link.rel = "noopener noreferrer";
                     link.className = "zendeskMsgImgThumb";
@@ -24753,7 +24784,7 @@
                     row.appendChild(link);
                   } else {
                     const link = document.createElement("a");
-                    link.href = url;
+                    link.href = toHttpUrl(url) || "#";
                     link.target = "_blank";
                     link.rel = "noopener noreferrer";
                     link.className = "zendeskMsgFile";
