@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Rocketlane Chat Bridge
 // @namespace    https://kiona.rocketlane.com/
-// @version      1.14.0
-// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.14.0: no Zendesk popup for a ticket you solved yourself — solved/closed tickets are skipped, so resolving a case no longer pops a notification for the customer's last reply. v1.13.0: clicking a Rocketlane chat notification now opens the correct /projects/<id>/chat/<convId> URL instead of the blank /project-conversations/<id> route. v1.12.0: notifications fire ONLY for actual case responses, never your own task/status updates. Toggle via the Tampermonkey menu.)
+// @version      1.15.0
+// @description  Bridges Rocketlane + Zendesk + Oneflow + HubSpot + Younium APIs to the local Project Progress Tracker, bypassing CORS. (v1.15.0: security hardening — the Zendesk/Oneflow/HubSpot request helpers now pin their target origin before attaching the session CSRF/XSRF token, so a caller-supplied absolute URL can't redirect credentials to another @connect host. Matches the existing Rocketlane/Younium api-key/JWT pins; relative paths unaffected. v1.14.0: no Zendesk popup for a ticket you solved yourself — solved/closed tickets are skipped, so resolving a case no longer pops a notification for the customer's last reply. v1.13.0: clicking a Rocketlane chat notification now opens the correct /projects/<id>/chat/<convId> URL instead of the blank /project-conversations/<id> route. v1.12.0: notifications fire ONLY for actual case responses, never your own task/status updates. Toggle via the Tampermonkey menu.)
 // @author       Thomas
 // @homepageURL  https://github.com/Hapnes-dev/Project-Progress-Tracker
 // @supportURL   https://github.com/Hapnes-dev/Project-Progress-Tracker/issues
@@ -466,6 +466,15 @@
    */
   async function gmZendeskRequest(method, path, body) {
     const url = /^https?:/i.test(path) ? path : (ZENDESK_API + path);
+    // SECURITY: only ever send the Zendesk session cookie + CSRF token to the
+    // Zendesk origin. A caller-supplied absolute URL to another @connect host
+    // must not receive them. Relative paths always resolve to ZENDESK_API, so
+    // legitimate calls are unaffected. (Mirrors the Rocketlane/Younium pins.)
+    let __zdOrigin = "";
+    try { __zdOrigin = new URL(url).origin; } catch (_) {}
+    if (__zdOrigin !== ZENDESK_HOST) {
+      throw new Error("Refusing to send Zendesk credentials to non-Zendesk origin: " + (__zdOrigin || url));
+    }
     // For state-changing requests, Zendesk requires the CSRF token. We
     // get it from GM storage where the Zendesk-side capture wrote it.
     // GET requests don't need CSRF — only the session cookie.
@@ -621,6 +630,14 @@
    */
   async function gmOneflowRequest(method, path, body) {
     const url = /^https?:/i.test(path) ? path : (ONEFLOW_API + path);
+    // SECURITY: only ever send the Oneflow session cookie + XSRF token to the
+    // Oneflow origin. A caller-supplied absolute URL to another @connect host
+    // must not receive them. Relative paths always resolve to ONEFLOW_API.
+    let __ofOrigin = "";
+    try { __ofOrigin = new URL(url).origin; } catch (_) {}
+    if (__ofOrigin !== ONEFLOW_HOST) {
+      throw new Error("Refusing to send Oneflow credentials to non-Oneflow origin: " + (__ofOrigin || url));
+    }
     const upper = String(method ?? "GET").toUpperCase();
     const buildHeaders = () => {
       const headers = {};
@@ -780,6 +797,14 @@
     }
     if (!/[?&]portalId=/i.test(url)) {
       url += (url.includes("?") ? "&" : "?") + "portalId=" + encodeURIComponent(portalId);
+    }
+    // SECURITY: only send the HubSpot CSRF token + portalId to a HubSpot hublet
+    // origin. A caller-supplied absolute URL to another @connect host must not
+    // receive them. Relative paths resolve to the captured hublet host.
+    let __hsOrigin = "";
+    try { __hsOrigin = new URL(url).origin; } catch (_) {}
+    if (__hsOrigin !== "https://app.hubspot.com" && __hsOrigin !== "https://app-eu1.hubspot.com") {
+      throw new Error("Refusing to send HubSpot credentials to non-HubSpot origin: " + (__hsOrigin || url));
     }
 
     const upper = String(method ?? "GET").toUpperCase();
