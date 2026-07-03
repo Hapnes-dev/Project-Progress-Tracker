@@ -33743,12 +33743,18 @@
         const renderParties = (agreement) => {
           const parties = Array.isArray(agreement?.parties) ? agreement.parties : [];
           if (!parties.length) return '<em style="color: var(--muted);">no parties</em>';
+          // When the agreement itself is Signed (state 4) the document is
+          // complete — show every participant as signed. A party can be a
+          // non-signing viewer (participant.state 0) even on a fully-signed
+          // doc, so keying purely off participant.state would misleadingly
+          // show a "•" next to a Signed badge.
+          const docSigned = agreement?.state === 4;
           return parties.map((pt) => {
             const nm = escHtml(String(pt?.name || "Party"));
             const parts = Array.isArray(pt?.participants) ? pt.participants : [];
             const who = parts.length
               ? parts.map((x) => {
-                  const signed = x?.state === 1;
+                  const signed = docSigned || x?.state === 1;
                   const mark = signed
                     ? '<span style="color: var(--good);">✓</span>'
                     : '<span style="color: var(--warn);">•</span>';
