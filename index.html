@@ -7045,6 +7045,10 @@
                meta row between the Updated and RL sync chips when a
                project is selected. -->
           <button class="btn" id="btnYouniumStatus" type="button" title="Check Younium order + subscription status for the selected project">Younium: …</button>
+          <!-- btnOneflowStatus: same pattern as btnYouniumStatus — created here
+               at startup so the els cache finds it, then renderDetail() moves it
+               into the project meta row next to the Younium chip. -->
+          <button class="btn" id="btnOneflowStatus" type="button" title="Check whether the selected project's Oneflow document is signed">Oneflow: …</button>
           <button class="btn" id="btnImportCsv" type="button">Import CSV</button>
           <button class="btn primary" id="btnNew" type="button">+ New project</button>
         </div>
@@ -7452,6 +7456,25 @@
         <a class="btn" id="btnYouniumStatusOpenOrder" target="_blank" rel="noopener noreferrer" style="display: none;">Open Younium order</a>
         <a class="btn" id="btnYouniumStatusOpenYouniumSub" target="_blank" rel="noopener noreferrer" style="display: none;">Open Younium subscription</a>
         <a class="btn" id="btnYouniumStatusOpenSub" target="_blank" rel="noopener noreferrer" style="display: none;">Open Oneflow subscription</a>
+      </div>
+    </dialog>
+
+    <!-- Oneflow signing-status modal — mirrors dlgYouniumStatus and REUSES its
+         CSS classes (dlgYouniumStatus / youniumSummary / youniumSection / …) so
+         the two modals are visually identical. Only the ids differ. -->
+    <dialog id="dlgOneflowStatus" class="dlgYouniumStatus" aria-labelledby="dlgOneflowStatusTitle">
+      <div class="dlgHd dlgYouniumStatusHd">
+        <strong id="dlgOneflowStatusTitle">Oneflow status details</strong>
+        <span class="dlgYouniumStatusXBtn" id="closeOneflowHintTop" role="button" tabindex="0" aria-label="Close" title="Close">✕</span>
+      </div>
+      <div class="dlgYouniumStatusBody" id="dlgOneflowStatusBody">
+        <!-- Populated by openOneflowStatusModal() -->
+      </div>
+      <div class="dlgYouniumStatusFooter" id="dlgOneflowStatusFooter">
+        <button class="btn" type="button" id="btnOneflowStatusRefresh">Refresh status</button>
+        <button class="btn" type="button" id="btnOneflowStatusCopy">Copy summary</button>
+        <a class="btn" id="btnOneflowStatusOpenDoc" target="_blank" rel="noopener noreferrer" style="display: none;">Open Oneflow document</a>
+        <a class="btn" id="btnOneflowStatusOpenSub" target="_blank" rel="noopener noreferrer" style="display: none;">Open subscription</a>
       </div>
     </dialog>
 
@@ -21078,6 +21101,15 @@
         btnYouniumStatusOpenOrder: document.getElementById("btnYouniumStatusOpenOrder"),
         btnYouniumStatusOpenYouniumSub: document.getElementById("btnYouniumStatusOpenYouniumSub"),
         btnYouniumStatusOpenSub: document.getElementById("btnYouniumStatusOpenSub"),
+        // Oneflow signing-status checker (mirrors the Younium els above).
+        btnOneflowStatus: document.getElementById("btnOneflowStatus"),
+        dlgOneflowStatus: document.getElementById("dlgOneflowStatus"),
+        dlgOneflowStatusTitle: document.getElementById("dlgOneflowStatusTitle"),
+        dlgOneflowStatusBody: document.getElementById("dlgOneflowStatusBody"),
+        btnOneflowStatusRefresh: document.getElementById("btnOneflowStatusRefresh"),
+        btnOneflowStatusCopy: document.getElementById("btnOneflowStatusCopy"),
+        btnOneflowStatusOpenDoc: document.getElementById("btnOneflowStatusOpenDoc"),
+        btnOneflowStatusOpenSub: document.getElementById("btnOneflowStatusOpenSub"),
         saveState: document.getElementById("saveState"),
         saveError: document.getElementById("saveError"),
         loadMessage: document.getElementById("loadMessage"),
@@ -22189,6 +22221,9 @@
         if (typeof window.__refreshYouniumStatusBtn === "function") {
           try { window.__refreshYouniumStatusBtn(); } catch (_) {}
         }
+        if (typeof window.__refreshOneflowStatusBtn === "function") {
+          try { window.__refreshOneflowStatusBtn(); } catch (_) {}
+        }
 
         // Show "📁 Files" only when this project is linked to a Rocketlane project.
         if (els.btnOpenRocketlaneFiles) {
@@ -22380,6 +22415,10 @@
         // attached after the move.
         if (els.btnYouniumStatus) {
           meta.appendChild(els.btnYouniumStatus);
+        }
+        // Oneflow signing-status chip sits right after the Younium chip.
+        if (els.btnOneflowStatus) {
+          meta.appendChild(els.btnOneflowStatus);
         }
 
         const linkedRocketlaneProjectId = String(p.rocketlaneProjectId ?? "").trim();
@@ -33505,6 +33544,422 @@
 
       // Initial paint on load.
       refreshYouniumStatusButtonFaceForSelected();
+
+      // ══════════════════════════════════════════════════════════════════════
+      // Oneflow signing-status checker — mirrors the Younium status checker
+      // above (same toolbar chip + <dialog> modal + green/yellow/red verdict,
+      // reusing the youniumStatus* CSS classes). Answers ONE question: is the
+      // project's connected Oneflow document/order SIGNED?
+      //
+      // A project links an Oneflow ORDER document (p.oneflowUrl) and optionally
+      // a SUBSCRIPTION agreement (p.oneflowSubscriptionUrl). We fetch each via
+      // the SAME bridge/API handling as everything else (oneflowApiRequest →
+      // OneflowBridge, no key ever exposed), read the agreement lifecycle
+      // `state` (0 Draft, 1 Pending, 2 Overdue, 3 Declined, 4 Signed, 5
+      // Cancelled) and a per-participant sign state (participant.state 1 =
+      // signed, 0 = not signed), and surface the verdict.
+      // ══════════════════════════════════════════════════════════════════════
+      const oneflowStatusFetchInFlight = new Set();
+      const oneflowStatusFetchedThisSession = new Set();
+      let currentOneflowStatusProject = null;
+      let currentOneflowStatusVerdict = null;
+
+      // Parse the numeric agreement id out of a saved Oneflow link
+      // (…/documents/<id> or …/agreements/<id>), or a bare id.
+      function extractOneflowAgreementId(url) {
+        const s = String(url ?? "").trim();
+        if (!s) return "";
+        const m = s.match(/\/(?:documents|agreements)\/(\d+)/i);
+        if (m) return m[1];
+        if (/^\d+$/.test(s)) return s;
+        return "";
+      }
+
+      // Map an Oneflow lifecycle state to a verdict colour + labels.
+      function oneflowStateVerdict(stateNum) {
+        switch (stateNum) {
+          case 4:  return { color: "green",  short: "Signed",    summary: "Signed — all parties have signed the document in Oneflow." };
+          case 1:  return { color: "yellow", short: "Pending",   summary: "Pending — the document was sent for signing but not all parties have signed yet." };
+          case 2:  return { color: "yellow", short: "Overdue",   summary: "Overdue — sent for signing, but the signing period has lapsed." };
+          case 0:  return { color: "red",    short: "Draft",     summary: "Draft — the document has not been sent for signing yet." };
+          case 3:  return { color: "red",    short: "Declined",  summary: "Declined — a party declined to sign the document." };
+          case 5:  return { color: "red",    short: "Cancelled", summary: "Cancelled — the document was cancelled." };
+          default: return { color: "gray",   short: (ONEFLOW_STATE_LABEL[stateNum] || ("state " + stateNum)), summary: "Unknown Oneflow document state." };
+        }
+      }
+
+      async function oneflowFetchAgreementByUrl(url) {
+        const id = extractOneflowAgreementId(url);
+        if (!id) return { id: "", agreement: null, error: String(url || "").trim() ? "Couldn't read an Oneflow document id from the saved link." : "" };
+        try {
+          const agreement = await oneflowApiRequest("GET", "/agreements/" + encodeURIComponent(id));
+          return { id, agreement, error: "" };
+        } catch (e) {
+          return { id, agreement: null, error: "Couldn't fetch Oneflow document " + id + ": " + (e?.message ?? e) };
+        }
+      }
+
+      /**
+       * Compute the Oneflow signing verdict for a project. Returns:
+       *   { color, label, signed, problems[], lastCheckedAt,
+       *     order:{id,agreement,error}, sub:{id,agreement,error},
+       *     documentUrl, subDocumentUrl }
+       * The verdict follows the ORDER document (p.oneflowUrl); if there's no
+       * order link it falls back to the subscription agreement.
+       */
+      async function computeOneflowStatus(project) {
+        const orderUrl = String(project?.oneflowUrl ?? "").trim();
+        const subUrl   = String(project?.oneflowSubscriptionUrl ?? "").trim();
+        const lastCheckedAt = Date.now();
+
+        if (!orderUrl && !subUrl) {
+          return { color: "gray", label: "Oneflow: Missing", signed: null,
+            problems: ["No Oneflow document link saved on this project. Add one via Edit → 🔎 Find Oneflow."],
+            lastCheckedAt, order: { id: "", agreement: null, error: "" }, sub: { id: "", agreement: null, error: "" },
+            documentUrl: "", subDocumentUrl: "" };
+        }
+
+        const [order, sub] = await Promise.all([
+          orderUrl ? oneflowFetchAgreementByUrl(orderUrl) : Promise.resolve({ id: "", agreement: null, error: "" }),
+          subUrl   ? oneflowFetchAgreementByUrl(subUrl)   : Promise.resolve({ id: "", agreement: null, error: "" }),
+        ]);
+
+        const problems = [];
+        if (order.error) problems.push(order.error);
+        if (sub.error) problems.push(sub.error);
+
+        const primary = order.agreement || sub.agreement || null;
+        let color = "gray", label = "Oneflow: Error", signed = null;
+        if (primary) {
+          const v = oneflowStateVerdict(primary.state);
+          color = v.color;
+          signed = primary.state === 4;
+          const glyph = color === "green" ? "✓ " : (color === "yellow" ? "⏳ " : (color === "red" ? "✗ " : ""));
+          label = "Oneflow: " + glyph + v.short;
+          if (color !== "green") problems.unshift(v.summary);
+        } else if (!problems.length) {
+          problems.push("No Oneflow document found.");
+        }
+
+        return {
+          color, label, signed, problems, lastCheckedAt, order, sub,
+          documentUrl: order.id ? oneflowDocumentUrl(order.id) : "",
+          subDocumentUrl: sub.id ? oneflowDocumentUrl(sub.id) : "",
+        };
+      }
+
+      // ── Toolbar chip faces (mirror the Younium ones) ──
+      function setOneflowToolbarChecking() {
+        const btn = els.btnOneflowStatus;
+        if (!btn) return;
+        btn.className = "btn youniumStatusBtn youniumStatus-gray";
+        btn.textContent = "Oneflow: ⏳ Checking…";
+        btn.title = "Fetching latest Oneflow signing status…";
+      }
+      function applyOneflowVerdictToToolbar(project, verdict) {
+        const btn = els.btnOneflowStatus;
+        if (!btn) return;
+        const color = verdict?.color || "gray";
+        const label = verdict?.label || "Oneflow: …";
+        btn.className = "btn youniumStatusBtn youniumStatus-" + color;
+        btn.textContent = label;
+        const tooltipLines = [label];
+        if (verdict?.problems && verdict.problems.length) {
+          tooltipLines.push("");
+          for (const p of verdict.problems) tooltipLines.push("• " + p);
+        }
+        tooltipLines.push("");
+        tooltipLines.push("Click for details.");
+        btn.title = tooltipLines.join("\n");
+        if (project) {
+          project.oneflowStatus = {
+            color, label, signed: verdict?.signed,
+            problems: verdict?.problems || [], lastCheckedAt: verdict?.lastCheckedAt,
+          };
+          saveState(state);
+        }
+      }
+      function refreshOneflowStatusButtonFaceForSelected() {
+        const btn = els.btnOneflowStatus;
+        if (!btn) return;
+        const p = state.projects.find((x) => x.id === state.selectedProjectId);
+        if (!p) {
+          btn.className = "btn youniumStatusBtn youniumStatus-gray";
+          btn.textContent = "Oneflow: …";
+          btn.title = "Select a project to check Oneflow signing status";
+          btn.disabled = true;
+          return;
+        }
+        btn.disabled = false;
+        const cached = p.oneflowStatus;
+        const linkSaved = String(p.oneflowUrl || "").trim() || String(p.oneflowSubscriptionUrl || "").trim();
+        if (cached && cached.label) {
+          btn.className = "btn youniumStatusBtn youniumStatus-" + (cached.color || "gray");
+          btn.textContent = cached.label;
+          btn.title = "Click for Oneflow signing details" +
+            (cached.lastCheckedAt
+              ? " (last checked " + new Date(cached.lastCheckedAt).toLocaleString(UI_LOCALE) + ")"
+              : "");
+        } else {
+          btn.className = "btn youniumStatusBtn youniumStatus-gray";
+          btn.textContent = linkSaved ? "Oneflow: …" : "Oneflow: Missing";
+          btn.title = "Click to check whether the Oneflow document is signed";
+        }
+        // Background refresh once per project per session.
+        if (linkSaved && !oneflowStatusFetchInFlight.has(p.id) && !oneflowStatusFetchedThisSession.has(p.id)) {
+          oneflowStatusFetchInFlight.add(p.id);
+          setOneflowToolbarChecking();
+          computeOneflowStatus(p)
+            .then((verdict) => { applyOneflowVerdictToToolbar(p, verdict); })
+            .catch((err) => { console.warn("[Oneflow status] background fetch failed:", err); })
+            .finally(() => {
+              oneflowStatusFetchInFlight.delete(p.id);
+              oneflowStatusFetchedThisSession.add(p.id);
+            });
+        }
+      }
+
+      // ── Modal renderer ──
+      function renderOneflowStatusModalBody(verdict) {
+        currentOneflowStatusVerdict = verdict;
+        applyOneflowVerdictToToolbar(currentOneflowStatusProject, verdict);
+
+        const RAW = (h) => ({ __html: String(h) });
+        const fmtDate = (iso) => iso ? new Date(iso).toLocaleString(UI_LOCALE) : "—";
+        const fmtDateOnly = (iso) => iso ? new Date(iso).toLocaleDateString(UI_LOCALE) : "—";
+        const renderKV = (rows) =>
+          '<dl class="youniumKV">' +
+          rows
+            .filter(([, v]) => v !== "" && v !== null && v !== undefined)
+            .map(([k, v]) => {
+              const cell = (v && typeof v === "object" && "__html" in v) ? v.__html : escHtml(String(v));
+              return '<dt>' + escHtml(k) + '</dt><dd>' + cell + '</dd>';
+            })
+            .join("") +
+          '</dl>';
+
+        // Party / participant list — ✓ green for signed (participant.state === 1),
+        // • amber for not-yet-signed.
+        const renderParties = (agreement) => {
+          const parties = Array.isArray(agreement?.parties) ? agreement.parties : [];
+          if (!parties.length) return '<em style="color: var(--muted);">no parties</em>';
+          return parties.map((pt) => {
+            const nm = escHtml(String(pt?.name || "Party"));
+            const parts = Array.isArray(pt?.participants) ? pt.participants : [];
+            const who = parts.length
+              ? parts.map((x) => {
+                  const signed = x?.state === 1;
+                  const mark = signed
+                    ? '<span style="color: var(--good);">✓</span>'
+                    : '<span style="color: var(--warn);">•</span>';
+                  return mark + ' ' + escHtml(String(x?.email || x?.name || "—"));
+                }).join('<br>')
+              : '<span style="color: var(--muted);">—</span>';
+            return '<div style="margin-bottom: 4px;"><strong>' + nm + '</strong><br>' + who + '</div>';
+          }).join("");
+        };
+
+        // One agreement → KV rows (or a note row when absent).
+        const agreementKV = (res, savedUrl) => {
+          const a = res?.agreement;
+          if (!a) {
+            return renderKV([[savedUrl ? "Error" : "Note",
+              savedUrl ? (res?.error || "Couldn't load this document.") : "No link saved for this project."]]);
+          }
+          const v = oneflowStateVerdict(a.state);
+          const statusColor = v.color === "green" ? "var(--good)"
+            : (v.color === "red" ? "var(--bad)" : (v.color === "yellow" ? "var(--warn)" : "var(--muted)"));
+          const kind = classifyOneflowDocumentKind(a.name);
+          const link = a.id ? oneflowDocumentUrl(a.id) : "";
+          return renderKV([
+            ["Oneflow link",    RAW(link
+              ? '<a href="' + escHtml(toHttpUrl(link) || "#") + '" target="_blank" rel="noopener noreferrer">' + escHtml(link) + '</a>'
+              : '<em style="color: var(--muted);">none</em>')],
+            ["Document ID",     a.id || "—"],
+            ["Name",            a.name || "—"],
+            ["Kind",            kind === "subscription" ? "Subscription agreement" : "Order / offer"],
+            ["Signed?",         RAW('<strong style="color: ' + statusColor + ';">' +
+                                (v.color === "green" ? "✓ " : (v.color === "red" ? "✗ " : "")) + escHtml(v.short) + '</strong>')],
+            ["Sent for signing", fmtDate(a.publish_time)],
+            ["Signed date",     a.sign_time ? fmtDate(a.sign_time) : null],
+            ["Declined date",   a.decline_time ? fmtDate(a.decline_time) : null],
+            ["Cancelled date",  a.cancel_time ? fmtDate(a.cancel_time) : null],
+            ["Expires",         a.expire_date ? fmtDateOnly(a.expire_date) : null],
+            ["Created",         fmtDate(a.created_time)],
+            ["Updated",         fmtDate(a.updated_time)],
+            ["Parties",         RAW(renderParties(a))],
+          ]);
+        };
+
+        const sectionFor = (title, res, savedUrl) => {
+          const a = res?.agreement;
+          let badge;
+          if (a) {
+            const v = oneflowStateVerdict(a.state);
+            const cls = v.color === "green" ? "youniumSubBadge-green"
+              : (v.color === "red" ? "youniumSubBadge-red" : (v.color === "yellow" ? "youniumSubBadge-yellow" : "youniumSubBadge-gray"));
+            badge = '<span class="youniumSubBadge ' + cls + '">' + escHtml(v.short) + '</span>';
+          } else {
+            badge = '<span class="youniumSubBadge youniumSubBadge-gray">' + (savedUrl ? "error" : "none") + '</span>';
+          }
+          return '<div class="youniumSection">' +
+            '<div class="youniumSectionTitle">' + escHtml(title) + ' ' + badge + '</div>' +
+            agreementKV(res, savedUrl) +
+            '</div>';
+        };
+
+        let summaryText;
+        if (verdict.color === "green") summaryText = "Signed — the Oneflow document is fully signed by all parties.";
+        else if (verdict.color === "yellow") summaryText = (verdict.problems && verdict.problems[0]) || "Pending — waiting for signatures in Oneflow.";
+        else if (verdict.color === "red") summaryText = (verdict.problems && verdict.problems[0]) || "Not signed — the Oneflow document isn't signed.";
+        else summaryText = (verdict.problems && verdict.problems[0]) || "No Oneflow document link saved on this project.";
+
+        const warnings = verdict.problems || [];
+        const orderSaved = String(currentOneflowStatusProject?.oneflowUrl || "").trim();
+        const subSaved   = String(currentOneflowStatusProject?.oneflowSubscriptionUrl || "").trim();
+
+        els.dlgOneflowStatusBody.innerHTML =
+          '<div class="youniumSummary youniumStatus-' + verdict.color + '">' +
+            escHtml(summaryText) +
+          '</div>' +
+          (warnings.length
+            ? '<div class="youniumWarnings"><strong>Warnings</strong><ul>' +
+              warnings.map((w) => '<li>' + escHtml(w) + '</li>').join("") + '</ul></div>'
+            : "") +
+          sectionFor("Document / order", verdict.order, orderSaved) +
+          sectionFor("Subscription agreement", verdict.sub, subSaved);
+
+        if (els.btnOneflowStatusOpenDoc) {
+          if (verdict.documentUrl) {
+            els.btnOneflowStatusOpenDoc.href = toHttpUrl(verdict.documentUrl) || "#";
+            els.btnOneflowStatusOpenDoc.style.display = "";
+          } else els.btnOneflowStatusOpenDoc.style.display = "none";
+        }
+        if (els.btnOneflowStatusOpenSub) {
+          if (verdict.subDocumentUrl) {
+            els.btnOneflowStatusOpenSub.href = toHttpUrl(verdict.subDocumentUrl) || "#";
+            els.btnOneflowStatusOpenSub.style.display = "";
+          } else els.btnOneflowStatusOpenSub.style.display = "none";
+        }
+      }
+
+      async function openOneflowStatusModal() {
+        const p = state.projects.find((x) => x.id === state.selectedProjectId);
+        if (!p) return;
+        currentOneflowStatusProject = p;
+        currentOneflowStatusVerdict = null;
+        setOneflowToolbarChecking();
+        els.dlgOneflowStatusBody.innerHTML =
+          '<div style="padding: 24px; text-align: center; color: var(--muted); font-style: italic;">Checking Oneflow…</div>';
+        if (els.btnOneflowStatusOpenDoc) els.btnOneflowStatusOpenDoc.style.display = "none";
+        if (els.btnOneflowStatusOpenSub) els.btnOneflowStatusOpenSub.style.display = "none";
+        if (els.dlgOneflowStatusTitle) els.dlgOneflowStatusTitle.textContent = "Oneflow status details · " + p.name;
+        els.dlgOneflowStatus.showModal();
+        try {
+          const verdict = await computeOneflowStatus(p);
+          renderOneflowStatusModalBody(verdict);
+        } catch (e) {
+          els.dlgOneflowStatusBody.innerHTML =
+            '<div class="youniumWarnings">Error checking Oneflow status: ' + escHtml(e?.message ?? e) + '</div>';
+        }
+      }
+
+      // Toolbar toggle: click while open closes it (guaranteed close path).
+      els.btnOneflowStatus?.addEventListener("click", () => {
+        if (els.dlgOneflowStatus?.open) forceCloseOneflowDialog("toolbar-toggle");
+        else openOneflowStatusModal();
+      });
+
+      // ── Close handling — same nuclear/capture-phase approach as Younium,
+      // because the user's environment swallows in-dialog clicks/Esc. ──
+      function forceCloseOneflowDialog(label) {
+        const dlg = document.getElementById("dlgOneflowStatus");
+        if (!dlg) return;
+        try { dlg.close(); } catch (_) {}
+        try { dlg.removeAttribute("open"); } catch (_) {}
+        try { dlg.style.display = "none"; setTimeout(() => { dlg.style.display = ""; }, 50); } catch (_) {}
+        try { dlg.dispatchEvent(new Event("cancel", { cancelable: true })); } catch (_) {}
+        try { dlg.dispatchEvent(new Event("close")); } catch (_) {}
+      }
+      function closeIfTargetIsOneflowCloseHint(ev) {
+        const t = ev.target;
+        if (!t || !t.closest) return;
+        const dlg = document.getElementById("dlgOneflowStatus");
+        if (!dlg || !dlg.open) return;
+        if (t.closest("#closeOneflowHintTop")) forceCloseOneflowDialog("hint-click[" + ev.type + "]");
+      }
+      ["click", "mousedown", "pointerdown"].forEach((t) => document.addEventListener(t, closeIfTargetIsOneflowCloseHint, true));
+      ["click", "mousedown", "pointerdown", "mouseup", "pointerup", "touchend"].forEach((t) => window.addEventListener(t, closeIfTargetIsOneflowCloseHint, true));
+      els.dlgOneflowStatus?.addEventListener("click", (ev) => {
+        if (ev.target === els.dlgOneflowStatus && els.dlgOneflowStatus.open) forceCloseOneflowDialog("backdrop");
+      });
+      document.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape" && els.dlgOneflowStatus?.open) forceCloseOneflowDialog("esc");
+      }, true);
+      document.addEventListener("click", (ev) => {
+        const dlg = document.getElementById("dlgOneflowStatus");
+        if (!dlg || !dlg.open) return;
+        if (!dlg.contains(ev.target) && ev.target !== dlg) forceCloseOneflowDialog("outside-click");
+      }, true);
+      try {
+        window.closeOneflowModal = function closeOneflowModal() {
+          const dlg = document.getElementById("dlgOneflowStatus");
+          if (!dlg) return "Oneflow modal not found in DOM";
+          if (!dlg.open) return "Already closed";
+          dlg.close();
+          return "Closed";
+        };
+      } catch (_) {}
+
+      els.btnOneflowStatusRefresh?.addEventListener("click", async () => {
+        const p = currentOneflowStatusProject;
+        if (!p) return;
+        oneflowStatusFetchedThisSession.delete(p.id);
+        setOneflowToolbarChecking();
+        els.dlgOneflowStatusBody.innerHTML =
+          '<div style="padding: 24px; text-align: center; color: var(--muted); font-style: italic;">Refreshing…</div>';
+        try {
+          const fresh = await computeOneflowStatus(p);
+          renderOneflowStatusModalBody(fresh);
+        } catch (e) {
+          els.dlgOneflowStatusBody.innerHTML =
+            '<div class="youniumWarnings">Refresh failed: ' + escHtml(e?.message ?? e) + '</div>';
+        }
+      });
+
+      els.btnOneflowStatusCopy?.addEventListener("click", async () => {
+        const p = currentOneflowStatusProject;
+        const v = currentOneflowStatusVerdict;
+        if (!p || !v) return;
+        const oa = v.order?.agreement, sa = v.sub?.agreement;
+        const line = (lbl, a) => a
+          ? (lbl + ": " + oneflowStateVerdict(a.state).short + " — " + (a.name || "") +
+             (a.sign_time ? " (signed " + new Date(a.sign_time).toLocaleDateString(UI_LOCALE) + ")" : ""))
+          : (lbl + ": (no link)");
+        const lines = [
+          "Oneflow status — " + p.name,
+          "Verdict: " + (v.label || "?"),
+          line("Order / offer", oa),
+          line("Subscription", sa),
+          "Oneflow URL: " + (p.oneflowUrl || "(none)"),
+          (v.problems && v.problems.length ? "Issues:\n  - " + v.problems.join("\n  - ") : ""),
+        ].filter(Boolean);
+        const text = lines.join("\n");
+        try {
+          await navigator.clipboard.writeText(text);
+          const btn = els.btnOneflowStatusCopy;
+          const orig = btn.textContent;
+          btn.textContent = "Copied ✓";
+          setTimeout(() => { btn.textContent = orig; }, 1500);
+        } catch (e) {
+          console.warn("[Oneflow status] copy failed:", e);
+          alert(text);
+        }
+      });
+
+      // Expose so renderDetail() can repaint the chip on every selection.
+      window.__refreshOneflowStatusBtn = refreshOneflowStatusButtonFaceForSelected;
+      refreshOneflowStatusButtonFaceForSelected();
 
       els.btnCloseCsv.addEventListener("click", () => els.dlgCsv.close());
       els.btnCancelCsv.addEventListener("click", () => els.dlgCsv.close());
