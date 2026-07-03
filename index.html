@@ -7812,25 +7812,6 @@
         return notesEmpty && isTodo;
       }
 
-      // Old auto-seed remnant: a local-only "Customers approval" task that the
-      // tracker's (since-removed) auto-seeding added but that was NEVER pushed
-      // to Rocketlane. Smart-grouping re-buckets it into a phantom "Service"
-      // group (not a real Rocketlane phase) on every load. Recognised here so a
-      // load-time migration can drop it. ONLY the bare preset version matches —
-      // a task that synced to Rocketlane (meta.rocketlaneTaskId), was worked
-      // (has notes), or was completed is left untouched.
-      function isLeftoverCustomersApprovalSeedTask(task) {
-        const textKey = String(task?.text ?? "")
-          .trim()
-          .toLowerCase()
-          .replace(/\s+/g, " ");
-        if (textKey !== "customers approval" && textKey !== "customer approval") return false;
-        const noRocketlaneLink = !String(task?.meta?.rocketlaneTaskId ?? "").trim();
-        const notesEmpty = !String(task?.notes ?? "").trim();
-        const isTodo = normalizeTaskStatus(task?.status) === "todo";
-        return noRocketlaneLink && notesEmpty && isTodo;
-      }
-
       function isDeprecatedHeatingDocumentationChecklistTask(task) {
         const textKey = String(task?.text ?? "")
           .trim()
@@ -19922,26 +19903,33 @@
             else delete p.tasksByArea.uncategorized;
           }
 
-          // Drop leftover local-only "Customers approval" seed tasks (old
-          // auto-seed remnants that were never in Rocketlane) so the phantom
-          // "Service" group they form disappears. Never remove one that has a
-          // local subtask pointing at it. pruneEmptyCategories() below then
-          // clears the now-empty "Service" category. Idempotent — runs on every
-          // load, so the group stays gone even before the state is re-saved.
+          // The tracker historically bucketed "Customers approval" (and other
+          // stray "service" tasks) into a standalone "Service" group, which
+          // isn't a real Rocketlane phase. Those belong under "Handover to
+          // service" — fold the whole "service" area into that category so the
+          // phantom "Service" group never shows and the tasks are preserved.
+          // Idempotent (runs every load); pruneEmptyCategories() clears leftovers.
           {
-            const localParentIds = new Set();
-            for (const areaKey of Object.keys(p.tasksByArea)) {
-              for (const t of (p.tasksByArea[areaKey] ?? [])) {
-                const pid = String(t?.meta?.parentLocalTaskId ?? "").trim();
-                if (pid) localParentIds.add(pid);
+            const hoKey = slugifyKey("Handover to service"); // "handover_to_service"
+            const svc = Array.isArray(p.tasksByArea.service) ? p.tasksByArea.service : null;
+            if (svc && svc.length && hoKey !== "service") {
+              p.tasksByArea[hoKey] = Array.isArray(p.tasksByArea[hoKey]) ? p.tasksByArea[hoKey] : [];
+              const seenIds = new Set(p.tasksByArea[hoKey].map((t) => String(t?.id ?? "")));
+              for (const t of svc) {
+                if (!seenIds.has(String(t?.id ?? ""))) p.tasksByArea[hoKey].push(t);
               }
-            }
-            for (const areaKey of Object.keys(p.tasksByArea)) {
-              const list = p.tasksByArea[areaKey];
-              if (!Array.isArray(list) || !list.length) continue;
-              p.tasksByArea[areaKey] = list.filter(
-                (t) => !(isLeftoverCustomersApprovalSeedTask(t) && !localParentIds.has(String(t?.id ?? ""))),
-              );
+              delete p.tasksByArea.service;
+              p.areaLabels = p.areaLabels ?? {};
+              delete p.areaLabels.service;
+              p.areaLabels[hoKey] = p.areaLabels[hoKey] || "Handover to service";
+              if (p.hiddenCategories && p.hiddenCategories.service !== undefined) {
+                if (p.hiddenCategories[hoKey] === undefined) p.hiddenCategories[hoKey] = p.hiddenCategories.service;
+                delete p.hiddenCategories.service;
+              }
+              if (p.expandedCategories && p.expandedCategories.service !== undefined) {
+                if (p.expandedCategories[hoKey] === undefined) p.expandedCategories[hoKey] = p.expandedCategories.service;
+                delete p.expandedCategories.service;
+              }
             }
           }
 
@@ -29321,7 +29309,8 @@
           return { key: "network", label: "Network" };
         }
         if (/(?:^|\s)customers? approval\b/.test(blob)) {
-          return { key: "service", label: "Service" };
+          // "Customers approval" is a handover step, not its own "Service" phase.
+          return { key: slugifyKey("Handover to service"), label: "Handover to service" };
         }
         const directMatches = [
           ["handover to service", "Handover to service"],
@@ -29334,7 +29323,8 @@
           ["documentation", "Documentation"],
           ["handover", "Handover to service"],
           ["integration", "Integration"],
-          ["service", "Service"],
+          // "service" is not its own phase — fold it into "Handover to service".
+          ["service", "Handover to service"],
         ];
         for (const [needle, label] of directMatches) {
           if (blob.includes(needle)) return { key: slugifyKey(label), label };
