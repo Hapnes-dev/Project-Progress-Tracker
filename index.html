@@ -19903,12 +19903,41 @@
             else delete p.tasksByArea.uncategorized;
           }
 
-          // The tracker historically bucketed "Customers approval" (and other
-          // stray "service" tasks) into a standalone "Service" group, which
-          // isn't a real Rocketlane phase. Those belong under "Handover to
-          // service" — fold the whole "service" area into that category so the
-          // phantom "Service" group never shows and the tasks are preserved.
-          // Idempotent (runs every load); pruneEmptyCategories() clears leftovers.
+          // Tasks must mirror Rocketlane — a task that is NOT linked to a
+          // Rocketlane task (no meta.rocketlaneTaskId) and matches the old
+          // auto-seed's "Customers approval" text is a local-only remnant the
+          // since-removed seeding left in saved state. It doesn't exist in
+          // Rocketlane, so drop it entirely (per owner decision 2026-07-03).
+          // Guards: a properly-synced task with a rocketlaneTaskId is never
+          // touched, and neither is one that has a local subtask pointing at
+          // it. Idempotent — runs on every load.
+          {
+            const localParentIds = new Set();
+            for (const areaKey of Object.keys(p.tasksByArea)) {
+              for (const t of (p.tasksByArea[areaKey] ?? [])) {
+                const pid = String(t?.meta?.parentLocalTaskId ?? "").trim();
+                if (pid) localParentIds.add(pid);
+              }
+            }
+            const isLocalOnlyCustomersApproval = (t) => {
+              const textKey = String(t?.text ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+              if (textKey !== "customers approval" && textKey !== "customer approval") return false;
+              if (String(t?.meta?.rocketlaneTaskId ?? "").trim()) return false; // real RL task — keep
+              if (localParentIds.has(String(t?.id ?? ""))) return false;        // has children — keep
+              return true;
+            };
+            for (const areaKey of Object.keys(p.tasksByArea)) {
+              const list = p.tasksByArea[areaKey];
+              if (!Array.isArray(list) || !list.length) continue;
+              p.tasksByArea[areaKey] = list.filter((t) => !isLocalOnlyCustomersApproval(t));
+            }
+          }
+
+          // Any remaining "service"-area tasks (real Rocketlane tasks that the
+          // old keyword rules bucketed there) belong under "Handover to
+          // service" — a standalone "Service" group isn't a Rocketlane phase.
+          // Fold the area over (merge + dedup); pruneEmptyCategories() clears
+          // the leftover key. Idempotent.
           {
             const hoKey = slugifyKey("Handover to service"); // "handover_to_service"
             const svc = Array.isArray(p.tasksByArea.service) ? p.tasksByArea.service : null;
