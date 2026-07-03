@@ -7812,6 +7812,25 @@
         return notesEmpty && isTodo;
       }
 
+      // Old auto-seed remnant: a local-only "Customers approval" task that the
+      // tracker's (since-removed) auto-seeding added but that was NEVER pushed
+      // to Rocketlane. Smart-grouping re-buckets it into a phantom "Service"
+      // group (not a real Rocketlane phase) on every load. Recognised here so a
+      // load-time migration can drop it. ONLY the bare preset version matches —
+      // a task that synced to Rocketlane (meta.rocketlaneTaskId), was worked
+      // (has notes), or was completed is left untouched.
+      function isLeftoverCustomersApprovalSeedTask(task) {
+        const textKey = String(task?.text ?? "")
+          .trim()
+          .toLowerCase()
+          .replace(/\s+/g, " ");
+        if (textKey !== "customers approval" && textKey !== "customer approval") return false;
+        const noRocketlaneLink = !String(task?.meta?.rocketlaneTaskId ?? "").trim();
+        const notesEmpty = !String(task?.notes ?? "").trim();
+        const isTodo = normalizeTaskStatus(task?.status) === "todo";
+        return noRocketlaneLink && notesEmpty && isTodo;
+      }
+
       function isDeprecatedHeatingDocumentationChecklistTask(task) {
         const textKey = String(task?.text ?? "")
           .trim()
@@ -19901,6 +19920,29 @@
             }
             if (keepUncategorized.length) p.tasksByArea.uncategorized = keepUncategorized;
             else delete p.tasksByArea.uncategorized;
+          }
+
+          // Drop leftover local-only "Customers approval" seed tasks (old
+          // auto-seed remnants that were never in Rocketlane) so the phantom
+          // "Service" group they form disappears. Never remove one that has a
+          // local subtask pointing at it. pruneEmptyCategories() below then
+          // clears the now-empty "Service" category. Idempotent — runs on every
+          // load, so the group stays gone even before the state is re-saved.
+          {
+            const localParentIds = new Set();
+            for (const areaKey of Object.keys(p.tasksByArea)) {
+              for (const t of (p.tasksByArea[areaKey] ?? [])) {
+                const pid = String(t?.meta?.parentLocalTaskId ?? "").trim();
+                if (pid) localParentIds.add(pid);
+              }
+            }
+            for (const areaKey of Object.keys(p.tasksByArea)) {
+              const list = p.tasksByArea[areaKey];
+              if (!Array.isArray(list) || !list.length) continue;
+              p.tasksByArea[areaKey] = list.filter(
+                (t) => !(isLeftoverCustomersApprovalSeedTask(t) && !localParentIds.has(String(t?.id ?? ""))),
+              );
+            }
           }
 
           pruneEmptyCategories(p);
