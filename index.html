@@ -30099,6 +30099,32 @@
           return "";
         };
 
+        // Deep-link for a notification group.
+        //
+        // GOTCHA (do not regress): for chat groups the API's `key.uri` is
+        // "/project-conversations/<convId>", which is a DEAD route — it opens a
+        // blank page in Rocketlane. The real chat URL is
+        // "/projects/<projectId>/chat/<conversationId>". The conversation id is
+        // the SAME number in both forms; only the project id has to be found.
+        // (The bridge's own desktop notifier fixed this in v1.13.0 —
+        // `collectRocketlane` — but the in-app drawer kept using the raw uri.)
+        //
+        // Every other group type (tasks, projects, users/timesheets) has a
+        // working `key.uri`, so those pass through untouched. If either id is
+        // missing we return the old URL rather than emit "/projects/undefined/…".
+        const notifGroupUrl = (group) => {
+          const uri = String(group?.key?.uri ?? "");
+          const fallback = uri ? "https://kiona.rocketlane.com" + uri : "";
+          const uriConvId = /^\/project-conversations\/(\d+)\b/.exec(uri)?.[1];
+          if (group?.key?.type !== "project-conversations" && !uriConvId) return fallback;
+          const conv = group?.conversation ?? {};
+          const convId = conv?.conversationId ?? group?.key?.projectConversationId ?? uriConvId;
+          const projId = conv?.project?.id ?? group?.notifications?.[0]?.meta?.projectId;
+          if (!convId || !projId) return fallback;
+          return "https://kiona.rocketlane.com/projects/"
+            + encodeURIComponent(String(projId)) + "/chat/" + encodeURIComponent(String(convId));
+        };
+
         // Rocketlane stores emojis as <span class="emoji">:shortcode:</span>.
         // Map the common shortcodes back to their Unicode characters so the
         // preview shows 😊 instead of literal ":blush:".
@@ -30778,9 +30804,9 @@
             head.appendChild(aside);
 
             head.addEventListener("click", () => {
-              const uri = String(group?.key?.uri ?? "");
-              if (!uri) return;
-              window.open("https://kiona.rocketlane.com" + uri, "_blank", "noopener,noreferrer");
+              const url = notifGroupUrl(group);
+              if (!url) return;
+              window.open(url, "_blank", "noopener,noreferrer");
             });
             card.appendChild(head);
 
@@ -30823,7 +30849,7 @@
                 text.appendChild(document.createTextNode(" "));
                 const a = document.createElement("a");
                 a.textContent = titleHint;
-                a.href = "https://kiona.rocketlane.com" + (group?.key?.uri ?? "");
+                a.href = notifGroupUrl(group);
                 a.target = "_blank";
                 a.rel = "noopener noreferrer";
                 a.addEventListener("click", (ev) => ev.stopPropagation());
@@ -30869,9 +30895,9 @@
 
               item.addEventListener("click", (ev) => {
                 ev.stopPropagation();
-                const uri = String(group?.key?.uri ?? "");
-                if (!uri) return;
-                window.open("https://kiona.rocketlane.com" + uri, "_blank", "noopener,noreferrer");
+                const url = notifGroupUrl(group);
+                if (!url) return;
+                window.open(url, "_blank", "noopener,noreferrer");
               });
               // Right-click → read the full comment/message in a fullscreen popup.
               item.title = "Left-click: open in Rocketlane · Right-click: read fullscreen";
