@@ -12105,7 +12105,11 @@
         const invoicesKnown = typeof postedInvoiceCount === "number";
         if (Number.isFinite(tsCancelled) && tsCancelled <= now) return "Cancelled";
         if (o?.status === 5 || o?.status === 0)                  return "Draft";
-        if (o?.status === 1)                                     return "Created";
+        // status 1 = Created ONLY while the number still looks like a draft;
+        // an activated order keeps status 1 with a real O-###### number.
+        if (o?.status === 1 &&
+            (!String(o?.orderNumber || "").trim() || /^draft\b/i.test(String(o?.orderNumber || "").trim())))
+                                                                 return "Created";
         const delivered = youniumDeliveryStatusLabel(o?.status); // 7/8 — Younium's header badge
         if (delivered)                                           return delivered;
         if (invoicesKnown && postedInvoiceCount > 0)             return "Invoiced";
@@ -12280,7 +12284,15 @@
             const isExpired      = Number.isFinite(tsEnd) && tsEnd <= now && !order.isAutoRenewed && !order.isRenewed;
             const startsInFuture = Number.isFinite(tsStart) && tsStart > now;
             const isRawDraft     = order.status === 5;
-            const isRawCreated   = order.status === 1;
+            // status 1 means "not finalized" ONLY while the order number still
+            // looks like a draft. Once the draft is activated Younium assigns a
+            // real number (O-######) but the status FIELD stays 1 while the UI
+            // badge reads "Active" (verified live on O-015444 / plant 10113:
+            // API status 1, UI "Active"). Same heuristic the subscription
+            // branch has always used.
+            const orderNumberLooksDraftMain =
+              !String(order.orderNumber || "").trim() || /^draft\b/i.test(String(order.orderNumber || "").trim());
+            const isRawCreated   = order.status === 1 && orderNumberLooksDraftMain;
 
             const invoices = await youniumFetchInvoicesForOrder(order.orderNumber);
             const postedInvoices = (invoices || []).filter(youniumInvoiceIsPosted);
@@ -12291,7 +12303,10 @@
             else if (isRawCreated)                out.orderStatus = "Created (not finalized)";
             else if (postedInvoices.length > 0)   out.orderStatus = "Invoiced";
             else if (startsInFuture)              out.orderStatus = "Order (pending start)";
-            else if (order.isLastVersion)         out.orderStatus = "Order (not invoiced)";
+            // Reached only by an ACTIVATED order (real number, started, latest
+            // version, nothing invoiced yet) — Younium's badge calls this
+            // "Active", so mirror it. (Previously "Order (not invoiced)".)
+            else if (order.isLastVersion)         out.orderStatus = "Active";
             else                                  out.orderStatus = "Draft (outdated version)";
             // Younium's own header shows the DELIVERY state (status 7/8 = Partially
             // delivered / Delivered). Surface that as the displayed order status; the
@@ -12806,8 +12821,14 @@
         // status 5 means the order is saved as Draft in Younium itself
         // — should never go to invoicing in that state. Flag explicitly
         // and treat as red regardless of isLastVersion.
+        // status 1 counts as "not finalized" ONLY while the order number
+        // still looks like a draft — an activated order keeps status 1 but
+        // gets a real O-###### number and Younium's UI shows "Active"
+        // (verified live on O-015444). Mirrors the subscription heuristic.
         const isRawDraft = order.status === 5;
-        const isRawCreated = order.status === 1;
+        const orderNumberLooksDraftSaved =
+          !String(order.orderNumber || "").trim() || /^draft\b/i.test(String(order.orderNumber || "").trim());
+        const isRawCreated = order.status === 1 && orderNumberLooksDraftSaved;
 
         if (isCancelled) {
           out.orderStatus = "Cancelled";
@@ -12820,7 +12841,9 @@
         } else if (startsInFuture) {
           out.orderStatus = "Order (pending start)";
         } else if (order.isLastVersion) {
-          out.orderStatus = "Order (not invoiced)";
+          // Activated (real number), started, latest version, not invoiced
+          // yet — Younium's badge says "Active", so mirror it.
+          out.orderStatus = "Active";
         } else {
           out.orderStatus = "Draft (outdated version)";
         }
@@ -32971,8 +32994,8 @@
           summaryText = "Partially paid — the order is invoiced but not fully paid in Younium yet (subscription otherwise fine).";
         } else if (verdict.color === "yellow" && verdict.orderStatus === "Invoiced") {
           summaryText = "Pending — Order is Invoiced, waiting for Subscription to become Active.";
-        } else if (verdict.color === "yellow" && verdict.orderStatus === "Order (not invoiced)") {
-          summaryText = "Pending — Order hasn't been invoiced yet.";
+        } else if (verdict.color === "yellow" && (verdict.orderStatus === "Active" || verdict.orderStatus === "Order (not invoiced)")) {
+          summaryText = "Pending — Order is Active in Younium, awaiting the first posted invoice.";
         } else if (verdict.color === "yellow" && verdict.orderStatus === "Order (pending start)") {
           summaryText = "Pending — Subscription starts " + (order?.effectiveStartDate || "").slice(0, 10) + ".";
         } else if (verdict.color === "yellow") {
@@ -33008,7 +33031,7 @@
         // complete states "Paid" / "Delivered" / "Invoiced" stay green ✓.
         const orderIsPartial = displayOrderStatus.startsWith("Partially");
         const orderIsGood = displayOrderStatus === "Invoiced" || displayOrderStatus === "Delivered"
-          || displayOrderStatus === "Paid";
+          || displayOrderStatus === "Paid" || displayOrderStatus === "Active";
         const orderIsBad = ["Cancelled", "Expired"].includes(displayOrderStatus)
           || displayOrderStatus.startsWith("Draft")
           || displayOrderStatus.startsWith("Created");
@@ -33151,7 +33174,10 @@
           const isExpired      = Number.isFinite(tsEnd) && tsEnd <= now && !o.isAutoRenewed && !o.isRenewed;
           const startsInFuture = Number.isFinite(tsStart) && tsStart > now;
           const isRawDraft   = o.status === 5;
-          const isRawCreated = o.status === 1;
+          // status 1 = "not finalized" only while the number looks like a
+          // draft (activated orders keep status 1 with a real O-###### number).
+          const isRawCreated = o.status === 1 &&
+            (!String(o.orderNumber || "").trim() || /^draft\b/i.test(String(o.orderNumber || "").trim()));
           let statusLbl;
           if      (isCancelled)           statusLbl = "Cancelled";
           else if (isExpired)             statusLbl = "Expired";
@@ -33159,9 +33185,9 @@
           else if (isRawCreated)          statusLbl = "Created (not finalized)";
           else if (postedInvoices.length) statusLbl = "Invoiced";
           else if (startsInFuture)        statusLbl = "Order (pending start)";
-          else if (o.isLastVersion)       statusLbl = "Order (not invoiced)";
+          else if (o.isLastVersion)       statusLbl = "Active"; // activated + started, not invoiced yet — Younium's badge
           else                            statusLbl = "Draft (outdated version)";
-          const isInvoiced = statusLbl === "Invoiced";
+          const isInvoiced = statusLbl === "Invoiced" || statusLbl === "Active";
           const isBad = ["Cancelled", "Expired"].includes(statusLbl) ||
             statusLbl.startsWith("Draft") || statusLbl.startsWith("Created");
           const statusColor = isInvoiced ? "var(--good)" : (isBad ? "var(--bad)" : "var(--warn)");
