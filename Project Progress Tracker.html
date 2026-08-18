@@ -26026,6 +26026,38 @@
           // not on the category header itself.
           // tools.appendChild(addSubtaskBtn);  // intentionally not rendered on category
           void addSubtaskBtn;
+          // "✓ Complete all" — bulk-complete every open task in this category.
+          // Only rendered while the category has at least one open task. Each
+          // task goes through setTaskStatus so the Rocketlane sync, dead-link
+          // cleanup, and revert-on-failure behave exactly like a manual click.
+          const openTasksNow = (p.tasksByArea?.[area] ?? [])
+            .filter((t) => normalizeTaskStatus(t?.status) !== "completed");
+          if (openTasksNow.length) {
+            const completeAllBtn = document.createElement("button");
+            completeAllBtn.className = "btn";
+            completeAllBtn.type = "button";
+            completeAllBtn.textContent = "✓ Complete all";
+            completeAllBtn.title = "Mark all " + openTasksNow.length +
+              " open task(s) in this category as completed (syncs to Rocketlane)";
+            completeAllBtn.addEventListener("click", () => {
+              const open = (p.tasksByArea?.[area] ?? [])
+                .filter((t) => normalizeTaskStatus(t?.status) !== "completed");
+              if (!open.length) return;
+              if (!confirm(
+                "Complete all " + open.length + " open task(s) in '" + labelForArea(area, p) + "'?\n\n" +
+                "Each completion syncs to Rocketlane.",
+              )) return;
+              // Subtasks first, then parents — completing a parent while its
+              // children are open can be rejected by Rocketlane.
+              const isSub = (t) => !!(
+                String(t?.meta?.parentLocalTaskId ?? "").trim() ||
+                String(t?.meta?.parentTaskId ?? "").trim()
+              );
+              const ordered = [...open.filter(isSub), ...open.filter((t) => !isSub(t))];
+              for (const t of ordered) setTaskStatus(p.id, area, t.id, "completed");
+            });
+            tools.appendChild(completeAllBtn);
+          }
           tools.appendChild(addBtn);
 
           title.appendChild(h);
