@@ -12204,13 +12204,23 @@
               return out;
             }
 
-            // Pick the most-recent order (sort by modified, then created).
+            // Pick the most-recent order (sort by modified, then created) —
+            // but PREFER a non-subscription document for the Order/Offer slot.
+            // Subscription agreements are named "… Abonnementsavtale" in this
+            // tenant (same convention classifyOneflowDocumentKind keys on) and
+            // belong in the SUBSCRIPTION section below, not on top. Without
+            // this, a freshly-activated Abonnementsavtale (newest modified)
+            // hijacked the Order/Offer section while the real store order sat
+            // under "Other orders" (seen on plant 10113). Fall back to the
+            // newest order when the plant only has the subscription agreement.
             const sorted = allOrders.slice().sort((a, b) => {
               const ta = Date.parse(a?.modified || a?.created || 0) || 0;
               const tb = Date.parse(b?.modified || b?.created || 0) || 0;
               return tb - ta;
             });
-            const primarySummary = sorted[0];
+            const looksLikeSubscriptionAgreement = (o) =>
+              /\babonnementsavtale\b|\bsubscription agreement\b|\bsubscription\b/i.test(String(o?.description || ""));
+            const primarySummary = sorted.find((o) => !looksLikeSubscriptionAgreement(o)) || sorted[0];
             let order;
             try { order = await youniumFetchOrderDetails(primarySummary.id); }
             catch (e) {
