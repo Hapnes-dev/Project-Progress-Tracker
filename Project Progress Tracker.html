@@ -2411,13 +2411,19 @@
         display: block;
       }
 
-      .statusPicker.open.up .statusMenu {
+      /* While open the menu lives in <body> (see the picker's open()), so no
+         ancestor overflow can clip it. Placement — left/width from the button,
+         top or bottom depending on which side has room — is set inline. */
+      .statusMenu.portaled {
+        position: fixed;
+        display: block;
+        left: auto;
+        right: auto;
         top: auto;
-        bottom: calc(100% + 4px);
       }
 
-      /* Prevent "flash" when we measure and flip */
-      .statusPicker.measuring .statusMenu {
+      /* Prevent "flash" when we measure and place */
+      .statusMenu.measuring {
         visibility: hidden;
       }
 
@@ -7958,29 +7964,7 @@
       }
 
       // One global "open status menu" controller (prevents multiple open menus)
-      // Smallest rectangle a task's status menu can actually be painted in: the
-      // viewport intersected with every ancestor that clips its overflow. The
-      // menu is `position: absolute` inside the row, so ANY such ancestor cuts
-      // it — in practice `.collapsibleSection`, which carries `overflow: hidden`
-      // for its max-height collapse animation and sits much closer to the row
-      // than the `.panel` the flip logic used to measure against. A collapsed
-      // (zero-height) ancestor is ignored: nothing is visible inside it anyway,
-      // and letting it win would collapse the limits onto a single line.
-      function statusMenuClipRect(el) {
-        let top = 0;
-        let bottom = window.innerHeight;
-        for (let n = el.parentElement; n && n !== document.body; n = n.parentElement) {
-          const cs = window.getComputedStyle(n);
-          if (cs.overflowX === "visible" && cs.overflowY === "visible") continue;
-          const r = n.getBoundingClientRect();
-          if (r.height <= 0) continue;
-          top = Math.max(top, r.top);
-          bottom = Math.min(bottom, r.bottom);
-        }
-        return { top, bottom };
-      }
-
-      let openStatusPicker = /** @type {{ root: HTMLElement, close: () => void } | null} */ (null);
+      let openStatusPicker = /** @type {{ root: HTMLElement, menu?: HTMLElement, close: () => void } | null} */ (null);
       function closeOpenStatusPicker() {
         if (!openStatusPicker) return;
         openStatusPicker.close();
@@ -7991,6 +7975,10 @@
         if (!openStatusPicker) return;
         const target = /** @type {any} */ (e.target);
         if (openStatusPicker.root.contains(target)) return;
+        // While open, the menu is portaled to <body>, so it is no longer inside
+        // the picker — clicking it (a scrollbar, the padding between options)
+        // must not count as an outside click.
+        if (openStatusPicker.menu && openStatusPicker.menu.contains(target)) return;
         closeOpenStatusPicker();
       });
 
@@ -26554,46 +26542,77 @@
 
               const open = () => {
                 closeOpenStatusPicker();
-                st.classList.add("open", "measuring");
+                st.classList.add("open");
                 stBtn.setAttribute("aria-expanded", "true");
-                
-                // Open the menu toward whichever side has room, measured against
-                // every ancestor that clips overflow — not just the panel. When
-                // neither side fits, cap the height so the menu scrolls instead
-                // of having its first options cut off by the category section.
-                window.requestAnimationFrame(() => {
-                  try {
-                    const btnRect = stBtn.getBoundingClientRect();
-                    const menuRect = stMenu.getBoundingClientRect();
-                    const menuH = menuRect.height || stMenu.scrollHeight || 0;
 
-                    const GAP = 4;  // matches the 4px offset in .statusMenu's top/bottom
-                    const EDGE = 8; // breathing room against the clipping edge
-                    const clip = statusMenuClipRect(st);
-                    const spaceBelow = (clip.bottom - EDGE) - (btnRect.bottom + GAP);
-                    const spaceAbove = (btnRect.top - GAP) - (clip.top + EDGE);
+                // Portal the menu to <body> and position it as `fixed`, the same
+                // pattern the mention picker uses. As an absolutely-positioned
+                // child of the row it was clipped by any ancestor with a
+                // non-visible overflow — in practice `.collapsibleSection`, which
+                // carries `overflow: hidden` for its max-height collapse
+                // animation and is often barely taller than the category list, so
+                // a menu flipped upward lost its first options behind the
+                // section's top edge. Out in <body> nothing can clip it, and the
+                // only limit left is the viewport.
+                stMenu.classList.add("portaled", "measuring");
+                document.body.appendChild(stMenu);
 
-                    const shouldFlipUp = menuH > 0 && spaceBelow < menuH && spaceAbove > spaceBelow;
-                    st.classList.toggle("up", shouldFlipUp);
-
-                    // Only cap when the menu genuinely doesn't fit, so the normal
-                    // case keeps its natural height and shows no scrollbar. The
-                    // 88px floor keeps at least two options usable in a very
-                    // short section rather than shrinking to an unreadable strip.
-                    const room = shouldFlipUp ? spaceAbove : spaceBelow;
-                    stMenu.style.maxHeight = menuH > room ? Math.max(88, Math.floor(room)) + "px" : "";
-                  } catch (e) {
-                    // ignore - keep default direction
-                  } finally {
-                    st.classList.remove("measuring");
+                const place = () => {
+                  const btnRect = stBtn.getBoundingClientRect();
+                  const menuH = stMenu.offsetHeight || stMenu.scrollHeight || 0;
+                  const GAP = 4;  // same 4px offset the anchored menu used
+                  const EDGE = 8; // breathing room against the viewport edge
+                  const spaceBelow = window.innerHeight - EDGE - (btnRect.bottom + GAP);
+                  const spaceAbove = (btnRect.top - GAP) - EDGE;
+                  // Prefer downward; flip up only when the menu doesn't fit below
+                  // AND there is genuinely more room above.
+                  const up = menuH > spaceBelow && spaceAbove > spaceBelow;
+                  const room = Math.max(88, Math.floor(up ? spaceAbove : spaceBelow));
+                  // Cap only when the menu can't fit, so the normal case keeps its
+                  // natural height and shows no scrollbar.
+                  stMenu.style.maxHeight = menuH > room ? room + "px" : "";
+                  stMenu.style.width = Math.round(btnRect.width) + "px";
+                  stMenu.style.left = Math.round(btnRect.left) + "px";
+                  if (up) {
+                    stMenu.style.top = "";
+                    stMenu.style.bottom = Math.round(window.innerHeight - btnRect.top + GAP) + "px";
+                  } else {
+                    stMenu.style.bottom = "";
+                    stMenu.style.top = Math.round(btnRect.bottom + GAP) + "px";
                   }
+                };
+
+                // Prevent the "flash" while we measure and place.
+                window.requestAnimationFrame(() => {
+                  try { place(); } catch (e) { /* keep the default placement */ }
+                  finally { stMenu.classList.remove("measuring"); }
                 });
+
+                // A fixed menu doesn't follow its button, so any scroll or resize
+                // closes it rather than leaving it stranded mid-page. Scrolling
+                // *inside* the menu (when it was capped to the viewport) is not
+                // such a move — the capture listener sees those events too.
+                const onViewportChange = (ev) => {
+                  if (ev && ev.target && stMenu.contains(/** @type {any} */ (ev.target))) return;
+                  closeOpenStatusPicker();
+                };
+                window.addEventListener("scroll", onViewportChange, true);
+                window.addEventListener("resize", onViewportChange);
 
                 openStatusPicker = {
                   root: st,
+                  menu: stMenu,
                   close: () => {
+                    window.removeEventListener("scroll", onViewportChange, true);
+                    window.removeEventListener("resize", onViewportChange);
                     st.classList.remove("open", "up", "measuring");
-                    stMenu.style.maxHeight = ""; // drop the fit-to-space cap
+                    stMenu.classList.remove("portaled", "measuring");
+                    stMenu.style.maxHeight = "";
+                    stMenu.style.width = "";
+                    stMenu.style.left = "";
+                    stMenu.style.top = "";
+                    stMenu.style.bottom = "";
+                    st.appendChild(stMenu); // back out of <body>, into the row
                     stBtn.setAttribute("aria-expanded", "false");
                   },
                 };
@@ -27457,6 +27476,9 @@
         // window position around the inner renders keeps the page rock
         // steady whatever else is happening in the background.
         const sx = window.scrollX, sy = window.scrollY;
+        // An open status menu is portaled to <body>; a render rebuilds the rows
+        // underneath it, so close it first or the menu is left orphaned there.
+        closeOpenStatusPicker();
         renderOwnerStatusOverview();
         renderList();
         renderDetail();
