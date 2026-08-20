@@ -17879,6 +17879,24 @@
         const pending = rocketlaneTaskSampleInFlight.get(pid);
         if (pending) return pending;
         const job = (async () => {
+          // Cheap path first: the PROJECT-SCOPED task list, one request, ~350ms.
+          // The legacy path below probes up to five filter keys against the
+          // GLOBAL /tasks endpoint, and each probe measured 5.4-7.0s on this
+          // tenant — about 37 seconds of probing before the first task of a
+          // session could be created (the create itself takes ~0.5s).
+          try {
+            const json = await rocketlaneFetchJson("/projects/" + encodeURIComponent(pid) + "/tasks", {});
+            const { data } = rocketlaneUnwrapList(json);
+            const sample = Array.isArray(data) && data.length ? data[0] : null;
+            // A project with no tasks yet has no shape to learn from, and the
+            // legacy probe can't do better — cache the miss instead of paying
+            // for it again. The verified create body doesn't need the sample.
+            rocketlaneTaskSampleCache.set(pid, sample);
+            return sample;
+          } catch (e) {
+            if (e instanceof TypeError) throw e;
+            // Fall through to the legacy global-/tasks probe.
+          }
           const key = await rocketlaneDetectTasksProjectFilterKey(pid);
           const params = { pageSize: 1 };
           // @ts-ignore
