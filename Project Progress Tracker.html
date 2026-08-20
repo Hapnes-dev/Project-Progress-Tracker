@@ -1379,11 +1379,15 @@
       }
 
       /* A task on a Rocketlane-linked project that hasn't reached Rocketlane.
-         Warn-colored rather than bad: it is being retried, not lost. */
+         Warn-colored rather than bad: it is being retried, not lost. Sits on its
+         own line under the task title — the task-text column is narrow, so an
+         inline chip would eat the title's width. */
       .tag.notInRocketlane {
-        margin-left: 8px;
+        align-self: flex-start;
+        margin-top: 4px;
         padding: 2px 8px;
         font-size: 10px;
+        white-space: nowrap;
         color: var(--warn);
         background: var(--warn-soft);
       }
@@ -26776,10 +26780,15 @@
               label.textContent = taskDisplayText(t.text);
               topLine.appendChild(label);
 
+              txt.appendChild(topLine);
+
               // Every task on a linked project must exist in Rocketlane. Mark the
               // ones whose push hasn't landed — rocketlaneReconcileUnsyncedTasks
               // retries them on each sync and drops them after
-              // ROCKETLANE_MAX_TASK_PUSH_ATTEMPTS rejections.
+              // ROCKETLANE_MAX_TASK_PUSH_ATTEMPTS rejections. On its own line
+              // BELOW the title: .topLine is a flex row and the task-text column
+              // is narrow (~120px), so an inline badge squeezed the title down to
+              // one character per line.
               if (String(p.rocketlaneProjectId ?? "").trim() && !String(t?.meta?.rocketlaneTaskId ?? "").trim()) {
                 const unsynced = document.createElement("span");
                 unsynced.className = "tag notInRocketlane";
@@ -26789,10 +26798,8 @@
                   ? "Rocketlane rejected this " + attempts + " of " + ROCKETLANE_MAX_TASK_PUSH_ATTEMPTS +
                     " times: " + String(t?.meta?.rlPushError || "") + "\nRetried on every sync, then removed."
                   : "Not created in Rocketlane yet — retried on every sync.";
-                topLine.appendChild(unsynced);
+                txt.appendChild(unsynced);
               }
-
-              txt.appendChild(topLine);
               const metaBits = [];
               if (t.meta?.phase) metaBits.push("Phase: " + t.meta.phase);
               if (t.meta?.status) metaBits.push("Status: " + t.meta.status);
