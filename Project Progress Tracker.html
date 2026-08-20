@@ -1378,6 +1378,16 @@
         font-weight: 500;
       }
 
+      /* A task on a Rocketlane-linked project that hasn't reached Rocketlane.
+         Warn-colored rather than bad: it is being retried, not lost. */
+      .tag.notInRocketlane {
+        margin-left: 8px;
+        padding: 2px 8px;
+        font-size: 10px;
+        color: var(--warn);
+        background: var(--warn-soft);
+      }
+
       @keyframes assistPulse {
         0%, 100% {
           box-shadow: 0 0 0 0 rgba(251, 191, 36, 0);
@@ -16216,6 +16226,17 @@
           }
           persistRlSyncAt();
 
+          // A task on a linked project must exist in Rocketlane. The import
+          // above keeps tasks that have no Rocketlane id, so re-push them here —
+          // this costs nothing (and issues no request) when there are none.
+          for (const localProject of linked) {
+            try {
+              await rocketlaneReconcileUnsyncedTasks(localProject);
+            } catch (e) {
+              console.warn("[RL reconcile]", localProject?.name, e?.message ?? e);
+            }
+          }
+
           const taskChanges =
             Number(result?.tasksAdded ?? 0) + Number(result?.tasksUpdated ?? 0) + Number(result?.tasksRemoved ?? 0);
           const projectChanges = Number(result?.projectsChanged ?? 0);
@@ -26683,6 +26704,22 @@
               label.textContent = taskDisplayText(t.text);
               topLine.appendChild(label);
 
+              // Every task on a linked project must exist in Rocketlane. Mark the
+              // ones whose push hasn't landed — rocketlaneReconcileUnsyncedTasks
+              // retries them on each sync and drops them after
+              // ROCKETLANE_MAX_TASK_PUSH_ATTEMPTS rejections.
+              if (String(p.rocketlaneProjectId ?? "").trim() && !String(t?.meta?.rocketlaneTaskId ?? "").trim()) {
+                const unsynced = document.createElement("span");
+                unsynced.className = "tag notInRocketlane";
+                unsynced.textContent = "not in Rocketlane";
+                const attempts = Number(t?.meta?.rlPushAttempts || 0);
+                unsynced.title = attempts
+                  ? "Rocketlane rejected this " + attempts + " of " + ROCKETLANE_MAX_TASK_PUSH_ATTEMPTS +
+                    " times: " + String(t?.meta?.rlPushError || "") + "\nRetried on every sync, then removed."
+                  : "Not created in Rocketlane yet — retried on every sync.";
+                topLine.appendChild(unsynced);
+              }
+
               txt.appendChild(topLine);
               const metaBits = [];
               if (t.meta?.phase) metaBits.push("Phase: " + t.meta.phase);
@@ -27556,6 +27593,10 @@
         const rlProjectId = String(p.rocketlaneProjectId ?? "").trim();
         if (rlProjectId) {
           (async () => {
+            // Claim the task while its create is in flight so a sync tick landing
+            // mid-request doesn't push the same task a second time. Released in
+            // the finally below, after which the reconcile pass owns it.
+            rocketlaneTaskPushInFlight.add(String(task.id));
             try {
               const phaseName = labelForArea(area, p);
               let phase = null;
@@ -27566,6 +27607,7 @@
                 const msg =
                   e instanceof TypeError ? "Network/CORS error." : String(e?.message ?? e ?? "Unknown error.");
                 rocketlaneShowMessage("Rocketlane: could not create category. " + msg, "error");
+                rocketlaneScheduleReconcile(p);
                 return;
               }
 
@@ -27576,6 +27618,7 @@
                 const msg =
                   e instanceof TypeError ? "Network/CORS error." : String(e?.message ?? e ?? "Unknown error.");
                 rocketlaneShowMessage("Rocketlane: could not create task. " + msg, "error");
+                rocketlaneScheduleReconcile(p);
                 return;
               }
               const rlTaskId = rocketlaneTaskId(created);
@@ -27616,10 +27659,17 @@
                     })();
                   }
                 }
+              } else {
+                // 201 without an id — the task is not in Rocketlane, so let the
+                // reconcile pass push it rather than leaving it local.
+                rocketlaneScheduleReconcile(p);
               }
             } catch (e) {
               const msg = e instanceof TypeError ? "Network/CORS error." : String(e?.message ?? e ?? "Unknown error.");
               rocketlaneShowMessage("Rocketlane: could not create task. " + msg, "error");
+              rocketlaneScheduleReconcile(p);
+            } finally {
+              rocketlaneTaskPushInFlight.delete(String(task.id));
             }
           })();
         }
@@ -27664,6 +27714,9 @@
         const rlProjectId = String(p.rocketlaneProjectId ?? "").trim();
         if (rlProjectId) {
           (async () => {
+            // Claimed while the create is in flight; afterwards the reconcile
+            // pass owns any subtask that didn't reach Rocketlane.
+            rocketlaneTaskPushInFlight.add(String(task.id));
             try {
               const phaseName = labelForArea(area, p);
               let parentRlTaskId = String(parent?.meta?.rocketlaneTaskId ?? "").trim();
@@ -27772,6 +27825,10 @@
             } catch (e) {
               const msg = e instanceof TypeError ? "Network/CORS error." : String(e?.message ?? e ?? "Unknown error.");
               rocketlaneShowMessage("Rocketlane: could not create subtask. " + msg, "error");
+            } finally {
+              rocketlaneTaskPushInFlight.delete(String(task.id));
+              // Marked "not in Rocketlane" until the reconcile pass lands it.
+              if (!String(task?.meta?.rocketlaneTaskId ?? "").trim()) rocketlaneScheduleReconcile(p);
             }
           })();
         }
@@ -28407,7 +28464,17 @@
         // existing one — so re-running after you delete tasks (or an earlier
         // half-create) tops it up instead of skipping. Matching is by normalized
         // text (dash/space/case-insensitive) so "— 30 pcs" vs "- 30 pcs" don't dupe.
-        const norm = (s) => String(s ?? "").trim().toLowerCase().replace(/[–—−]/g, "-").replace(/\s+/g, " ");
+        //
+        // The normalization is also PREFIX-INSENSITIVE. A task that has come back
+        // from a Rocketlane pull is stored with the prefix rocketlaneTaskText()
+        // renders — "[<phase>] <name>", and "-> " for a subtask — while the desired
+        // set below is built from bare Rocketlane names. Comparing the raw strings
+        // meant a re-run did not recognise the tasks this preset had created itself
+        // and added a second local row for each (upstream stayed clean, because the
+        // Rocketlane-side dedup index is keyed on the clean name). taskDisplayText()
+        // strips exactly those two prefixes and is the same helper the UI renders
+        // with, so both sides normalize identically.
+        const norm = (s) => taskDisplayText(s).toLowerCase().replace(/[–—−]/g, "-").replace(/\s+/g, " ");
         const created = [];     // labels of brand-new categories
         const backfilled = [];  // { label, count } for existing categories topped up
         const syncBatch = [];   // { key, label, jobItems }
@@ -28558,9 +28625,12 @@
           });
           showLoadMessage(
             failTasks > 0
-              ? "Rocketlane: " + okTasks + " task(s) synced, " + failTasks + " failed (kept locally)."
+              ? "Rocketlane: " + okTasks + " task(s) synced, " + failTasks + " failed — retrying."
               : "Rocketlane: all " + okTasks + " task(s) synced.",
           );
+          // Anything that didn't make it stays marked "not in Rocketlane" and is
+          // re-pushed by the reconcile pass instead of quietly living on locally.
+          if (failTasks > 0) rocketlaneScheduleReconcile(p);
         })();
       }
 
@@ -28976,6 +29046,178 @@
         paint(true);
         return { okTasks, failTasks, phase };
       }
+      // ─────────────────────────────────────────────────────────────────────
+      // Policy: every task on a Rocketlane-linked project must EXIST in
+      // Rocketlane. The tracker mirrors Rocketlane — it is not a second place to
+      // keep work. A create can still fail (API hiccup, a rejected body shape),
+      // and the remote-sync sweep deliberately keeps tasks that have no
+      // Rocketlane id (rocketlaneImportProjectsIntoTracker: `if (!rid) keep`),
+      // so without this pass a single failed push leaves a local-only task in
+      // the tracker forever.
+      //
+      // The pass re-pushes anything unsynced, LINKING to an existing upstream
+      // task of the same name rather than creating a duplicate, and drops a task
+      // locally once Rocketlane has rejected it ROCKETLANE_MAX_TASK_PUSH_ATTEMPTS
+      // times. A network/CORS failure, a missing api key, or a failed dedup
+      // fetch never counts as an attempt and never creates: being offline must
+      // not delete anyone's work, nor duplicate it.
+      const ROCKETLANE_MAX_TASK_PUSH_ATTEMPTS = 3;
+      // Local task ids with a create in flight right now, so a sync tick landing
+      // mid-create doesn't push the same task a second time.
+      const rocketlaneTaskPushInFlight = new Set();
+      let rocketlaneReconcileTimer = /** @type {number | undefined} */ (undefined);
+      /** Re-run the reconcile shortly after a failed push, once per burst. */
+      function rocketlaneScheduleReconcile(project, delayMs) {
+        if (!project || !String(project?.rocketlaneProjectId ?? "").trim()) return;
+        if (rocketlaneReconcileTimer) window.clearTimeout(rocketlaneReconcileTimer);
+        rocketlaneReconcileTimer = window.setTimeout(() => {
+          rocketlaneReconcileTimer = undefined;
+          void rocketlaneReconcileUnsyncedTasks(project).catch((e) => console.warn("[RL reconcile]", e));
+        }, Math.max(0, Number(delayMs ?? 8000)));
+      }
+      async function rocketlaneReconcileUnsyncedTasks(project) {
+        const empty = { created: 0, linked: 0, dropped: 0, failed: 0 };
+        const rlPid = String(project?.rocketlaneProjectId ?? "").trim();
+        if (!rlPid) return empty; // unlinked project — local tasks are legitimate
+        /** @type {{areaKey: string, task: any}[]} */
+        const pending = [];
+        for (const [areaKey, list] of Object.entries(project.tasksByArea || {})) {
+          for (const t of (Array.isArray(list) ? list : [])) {
+            if (String(t?.meta?.rocketlaneTaskId ?? "").trim()) continue;
+            if (rocketlaneTaskPushInFlight.has(String(t?.id ?? ""))) continue;
+            pending.push({ areaKey, task: t });
+          }
+        }
+        // Nothing to do: costs no requests, so this is safe on every sync tick.
+        if (!pending.length) return empty;
+        if (!getRocketlaneApiKey()) return { ...empty, skipped: "missing_api_key" };
+
+        const nrm = (s) => String(s ?? "").trim().toLowerCase().replace(/[–—−]/g, "-").replace(/\s+/g, " ");
+        // Index what's already upstream so a re-push links instead of duplicating.
+        // If this fetch fails we cannot tell "missing" from "already there", so
+        // we create nothing and try again on the next tick.
+        const topByKey = new Map(); // nrm(phase) + " " + nrm(name) -> rlTaskId
+        const subByKey = new Map(); // parentRlId + " " + nrm(name)  -> rlTaskId
+        try {
+          for (const rt of (await rocketlaneFetchAllTasksForProject(rlPid)) || []) {
+            const rid = String(rocketlaneTaskId(rt) || "").trim();
+            if (!rid) continue;
+            const par = String(rocketlaneTaskParentTaskId(rt) || "").trim();
+            if (par) subByKey.set(par + " " + nrm(rocketlaneTaskName(rt)), rid);
+            else topByKey.set(nrm(rocketlaneTaskPhase(rt)) + " " + nrm(rocketlaneTaskName(rt)), rid);
+          }
+        } catch (e) {
+          console.warn("[RL reconcile] task index unavailable, skipping this round:", e?.message ?? e);
+          return { ...empty, skipped: "index_unavailable" };
+        }
+
+        // Phase per category, resolved once — the PROMISE is cached, so two
+        // parallel pushes into the same category can't create two phases.
+        const phasePromises = new Map();
+        const getPhase = (areaKey) => {
+          if (!phasePromises.has(areaKey)) {
+            phasePromises.set(areaKey, rocketlaneGetOrCreatePhase(rlPid, labelForArea(areaKey, project)));
+          }
+          return phasePromises.get(areaKey);
+        };
+
+        let created = 0, linked = 0, failed = 0;
+        /** @type {{areaKey: string, task: any}[]} */
+        const drops = [];
+        const link = (t, rid, phase, parentRlId) => {
+          t.meta = t.meta ?? {};
+          t.meta.rocketlaneTaskId = rid;
+          t.meta.rocketlaneProjectId = rlPid;
+          t.meta.rocketlanePhase = rocketlanePhaseName(phase);
+          if (parentRlId) t.meta.parentTaskId = parentRlId;
+          delete t.meta.rlPushAttempts;
+          delete t.meta.rlPushError;
+        };
+        const pushOne = async (entry, parentRlId) => {
+          const { areaKey, task } = entry;
+          const localId = String(task?.id ?? "");
+          rocketlaneTaskPushInFlight.add(localId);
+          try {
+            const phase = await getPhase(areaKey);
+            const key = parentRlId
+              ? parentRlId + " " + nrm(task.text)
+              : nrm(rocketlanePhaseName(phase)) + " " + nrm(task.text);
+            const dupe = parentRlId ? subByKey.get(key) : topByKey.get(key);
+            if (dupe) { link(task, dupe, phase, parentRlId); linked++; return; }
+            const madeTask = await rocketlaneCreateTaskInRocketlane(
+              rlPid, phase, task.text, parentRlId || undefined, { private: !!task.private },
+            );
+            const rid = String(rocketlaneTaskId(madeTask) ?? "").trim();
+            if (!rid) throw new Error("Rocketlane returned no task id.");
+            link(task, rid, phase, parentRlId);
+            if (parentRlId) subByKey.set(key, rid); else topByKey.set(key, rid);
+            created++;
+          } catch (e) {
+            failed++;
+            // Offline / CORS / bridge down: not this task's fault. Never counts.
+            if (e instanceof TypeError) {
+              console.warn("[RL reconcile] network error, will retry:", task?.text, e?.message ?? e);
+              return;
+            }
+            task.meta = task.meta ?? {};
+            const attempts = Number(task.meta.rlPushAttempts || 0) + 1;
+            task.meta.rlPushAttempts = attempts;
+            task.meta.rlPushError = String(e?.message ?? e);
+            console.warn("[RL reconcile] Rocketlane rejected task (attempt " + attempts + "):", task?.text, e);
+            if (attempts >= ROCKETLANE_MAX_TASK_PUSH_ATTEMPTS) drops.push(entry);
+          } finally {
+            rocketlaneTaskPushInFlight.delete(localId);
+          }
+        };
+
+        // Parents first — a subtask needs its parent's Rocketlane id to nest under.
+        const parents = pending.filter((x) => !String(x.task?.meta?.parentLocalTaskId ?? "").trim());
+        const subs = pending.filter((x) => String(x.task?.meta?.parentLocalTaskId ?? "").trim());
+        await runWithConcurrency(parents, 4, (entry) => pushOne(entry, ""));
+        await runWithConcurrency(subs, 4, (entry) => {
+          const parentLocalId = String(entry.task?.meta?.parentLocalTaskId ?? "");
+          const list = project.tasksByArea?.[entry.areaKey] || [];
+          const parent = list.find((x) => String(x?.id ?? "") === parentLocalId);
+          const parentRlId = String(parent?.meta?.rocketlaneTaskId ?? "").trim();
+          // Parent still unsynced → leave the child for the next round rather
+          // than creating it loose in the phase.
+          if (!parentRlId) { failed++; return Promise.resolve(); }
+          return pushOne(entry, parentRlId);
+        });
+
+        let dropped = 0;
+        for (const d of drops) {
+          const list = project.tasksByArea?.[d.areaKey];
+          if (!Array.isArray(list)) continue;
+          const localId = String(d.task?.id ?? "");
+          // A dropped parent takes its still-unsynced children with it; a child
+          // that DID reach Rocketlane is kept and left where it is.
+          project.tasksByArea[d.areaKey] = list.filter((x) => {
+            const isTarget = String(x?.id ?? "") === localId;
+            const isLooseChild =
+              String(x?.meta?.parentLocalTaskId ?? "") === localId &&
+              !String(x?.meta?.rocketlaneTaskId ?? "").trim();
+            if (isTarget || isLooseChild) { dropped++; return false; }
+            return true;
+          });
+        }
+        if (dropped) {
+          const last = String(drops[drops.length - 1]?.task?.text ?? "");
+          rocketlaneShowMessage(
+            "Removed " + dropped + " task(s) Rocketlane rejected " + ROCKETLANE_MAX_TASK_PUSH_ATTEMPTS +
+            " times — a task that isn't in Rocketlane isn't kept here. Last: \"" + last + "\"",
+            "error",
+          );
+        }
+        if (created || linked || dropped) {
+          // Local-only touch: linking ids back is not a change to push upstream.
+          touchProjectLocal(project.id);
+          saveState(state);
+          render();
+        }
+        return { created, linked, dropped, failed };
+      }
+
       // Mirror a category REMOVAL to Rocketlane by deleting the matching phase
       // (Rocketlane cascades its tasks). Uses the stored phase id when present,
       // else matches by phase name. Best-effort + async.
