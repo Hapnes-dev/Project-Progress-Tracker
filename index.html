@@ -2389,7 +2389,12 @@
         border: 1px solid var(--hairline-strong);
         background: #0f1424;
         border-radius: 12px;
-        overflow: hidden;
+        /* Vertically scrollable so a menu that can't fit between the button and
+           the nearest clipping ancestor (a collapsed-animation .collapsibleSection,
+           the .panel) is capped by the open() measurement and scrolled, never cut
+           off. `auto` means no scrollbar in the normal, fits-fine case. */
+        overflow: hidden auto;
+        overscroll-behavior: contain;
         display: none;
         z-index: 1500;
         box-shadow: 0 18px 40px rgba(0, 0, 0, 0.6);
@@ -7953,6 +7958,28 @@
       }
 
       // One global "open status menu" controller (prevents multiple open menus)
+      // Smallest rectangle a task's status menu can actually be painted in: the
+      // viewport intersected with every ancestor that clips its overflow. The
+      // menu is `position: absolute` inside the row, so ANY such ancestor cuts
+      // it — in practice `.collapsibleSection`, which carries `overflow: hidden`
+      // for its max-height collapse animation and sits much closer to the row
+      // than the `.panel` the flip logic used to measure against. A collapsed
+      // (zero-height) ancestor is ignored: nothing is visible inside it anyway,
+      // and letting it win would collapse the limits onto a single line.
+      function statusMenuClipRect(el) {
+        let top = 0;
+        let bottom = window.innerHeight;
+        for (let n = el.parentElement; n && n !== document.body; n = n.parentElement) {
+          const cs = window.getComputedStyle(n);
+          if (cs.overflowX === "visible" && cs.overflowY === "visible") continue;
+          const r = n.getBoundingClientRect();
+          if (r.height <= 0) continue;
+          top = Math.max(top, r.top);
+          bottom = Math.min(bottom, r.bottom);
+        }
+        return { top, bottom };
+      }
+
       let openStatusPicker = /** @type {{ root: HTMLElement, close: () => void } | null} */ (null);
       function closeOpenStatusPicker() {
         if (!openStatusPicker) return;
@@ -26530,23 +26557,31 @@
                 st.classList.add("open", "measuring");
                 stBtn.setAttribute("aria-expanded", "true");
                 
-                // Flip the menu up if it would be clipped by the panel bottom.
+                // Open the menu toward whichever side has room, measured against
+                // every ancestor that clips overflow — not just the panel. When
+                // neither side fits, cap the height so the menu scrolls instead
+                // of having its first options cut off by the category section.
                 window.requestAnimationFrame(() => {
                   try {
                     const btnRect = stBtn.getBoundingClientRect();
                     const menuRect = stMenu.getBoundingClientRect();
                     const menuH = menuRect.height || stMenu.scrollHeight || 0;
 
-                    const panel = st.closest(".panel");
-                    const panelRect = panel ? panel.getBoundingClientRect() : null;
-                    const topLimit = Math.max(0, panelRect ? panelRect.top : 0) + 8;
-                    const bottomLimit = Math.min(window.innerHeight, panelRect ? panelRect.bottom : window.innerHeight) - 8;
+                    const GAP = 4;  // matches the 4px offset in .statusMenu's top/bottom
+                    const EDGE = 8; // breathing room against the clipping edge
+                    const clip = statusMenuClipRect(st);
+                    const spaceBelow = (clip.bottom - EDGE) - (btnRect.bottom + GAP);
+                    const spaceAbove = (btnRect.top - GAP) - (clip.top + EDGE);
 
-                    const spaceBelow = bottomLimit - btnRect.bottom;
-                    const spaceAbove = btnRect.top - topLimit;
-
-                    const shouldFlipUp = menuH > 0 && spaceBelow < menuH && spaceAbove >= menuH;
+                    const shouldFlipUp = menuH > 0 && spaceBelow < menuH && spaceAbove > spaceBelow;
                     st.classList.toggle("up", shouldFlipUp);
+
+                    // Only cap when the menu genuinely doesn't fit, so the normal
+                    // case keeps its natural height and shows no scrollbar. The
+                    // 88px floor keeps at least two options usable in a very
+                    // short section rather than shrinking to an unreadable strip.
+                    const room = shouldFlipUp ? spaceAbove : spaceBelow;
+                    stMenu.style.maxHeight = menuH > room ? Math.max(88, Math.floor(room)) + "px" : "";
                   } catch (e) {
                     // ignore - keep default direction
                   } finally {
@@ -26558,6 +26593,7 @@
                   root: st,
                   close: () => {
                     st.classList.remove("open", "up", "measuring");
+                    stMenu.style.maxHeight = ""; // drop the fit-to-space cap
                     stBtn.setAttribute("aria-expanded", "false");
                   },
                 };
