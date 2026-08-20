@@ -20052,6 +20052,60 @@
             }
           }
 
+          // One Rocketlane task = one local row. Before the "From order info"
+          // preset matched prefix-insensitively it failed to recognise the tasks
+          // it had created itself (they come back from a pull as "[<phase>]
+          // <name>") and added a second local row for each. Upstream stayed
+          // clean — the Rocketlane-side dedup index is keyed on the bare name, so
+          // the new row LINKED to the existing task — which is why the leftovers
+          // are two local rows carrying one meta.rocketlaneTaskId. Nothing else in
+          // the app supports that shape: the import's existingTaskByRlId map holds
+          // a single row per id, so the second one is never updated again.
+          //
+          // Collapse them: first row wins; content the survivor is missing is
+          // carried over rather than dropped; local subtasks pointing at a removed
+          // row are re-pointed at the survivor. Runs before pruneEmptyCategories so
+          // a category left empty by the collapse is cleaned up in the same pass.
+          // Idempotent — a state with no duplicates is untouched.
+          {
+            const survivorByRlId = new Map(); // rlTaskId -> kept task
+            const remap = new Map();          // removed local id -> kept local id
+            for (const areaKey of Object.keys(p.tasksByArea)) {
+              const list = p.tasksByArea[areaKey];
+              if (!Array.isArray(list) || !list.length) continue;
+              const keep = [];
+              for (const t of list) {
+                const rid = String(t?.meta?.rocketlaneTaskId ?? "").trim();
+                if (!rid) { keep.push(t); continue; }
+                const survivor = survivorByRlId.get(rid);
+                if (!survivor) { survivorByRlId.set(rid, t); keep.push(t); continue; }
+                if (!String(survivor.privateNote ?? "").trim() && String(t?.privateNote ?? "").trim()) {
+                  survivor.privateNote = t.privateNote;
+                }
+                if (!String(survivor.notes ?? "").trim() && String(t?.notes ?? "").trim()) {
+                  survivor.notes = t.notes;
+                }
+                if (t?.meta?.qcChecklist && !survivor?.meta?.qcChecklist) {
+                  survivor.meta = survivor.meta ?? {};
+                  survivor.meta.qcChecklist = t.meta.qcChecklist;
+                }
+                const fromId = String(t?.id ?? "").trim();
+                const toId = String(survivor?.id ?? "").trim();
+                if (fromId && toId) remap.set(fromId, toId);
+              }
+              p.tasksByArea[areaKey] = keep;
+            }
+            if (remap.size) {
+              for (const areaKey of Object.keys(p.tasksByArea)) {
+                for (const t of (p.tasksByArea[areaKey] ?? [])) {
+                  const parentId = String(t?.meta?.parentLocalTaskId ?? "").trim();
+                  const moved = parentId ? remap.get(parentId) : "";
+                  if (moved) t.meta.parentLocalTaskId = moved;
+                }
+              }
+            }
+          }
+
           pruneEmptyCategories(p);
 
           p.status = normalizeStatus(p.status ?? "proposed");
@@ -28542,15 +28596,39 @@
             const rlIdOf = (t) => String((t && t.meta && t.meta.rocketlaneTaskId) || "").trim();
             const topByNorm = new Map();     // norm(text) -> top-level task obj
             const subsOfParent = new Map();  // parentLocalId -> Map(norm subtext -> sub obj)
+            // A subtask this preset created carries meta.parentLocalTaskId, but one
+            // that has come back from a Rocketlane pull only carries the upstream
+            // meta.parentTaskId. Resolve that to the local row so an imported
+            // subtask is filed under its parent — otherwise it lands in topByNorm,
+            // where (now that norm() drops the "-> " prefix) it could stand in for a
+            // desired TOP-LEVEL task of the same name and suppress its creation.
+            const localByRlId = new Map();
             for (const t of arr) {
-              const pidv = t.meta && t.meta.parentLocalTaskId;
-              if (pidv) {
-                const pk = String(pidv);
+              const rid = rlIdOf(t);
+              if (rid) localByRlId.set(rid, t);
+            }
+            const parentLocalIdOf = (t) => {
+              const own = String((t && t.meta && t.meta.parentLocalTaskId) || "").trim();
+              if (own) return own;
+              const upstream = String((t && t.meta && t.meta.parentTaskId) || "").trim();
+              const parent = upstream ? localByRlId.get(upstream) : null;
+              return parent ? String(parent.id) : "";
+            };
+            const isSubtaskShaped = (t) =>
+              !!(String((t && t.meta && t.meta.parentLocalTaskId) || "").trim() ||
+                String((t && t.meta && t.meta.parentTaskId) || "").trim() ||
+                /^(?:->|↳)\s/.test(String((t && t.text) || "")));
+            for (const t of arr) {
+              const pk = parentLocalIdOf(t);
+              if (pk) {
                 if (!subsOfParent.has(pk)) subsOfParent.set(pk, new Map());
                 subsOfParent.get(pk).set(norm(t.text), t);
-              } else {
-                topByNorm.set(norm(t.text), t);
+                continue;
               }
+              // Subtask whose parent isn't in this category: keep it out of the
+              // top-level index rather than let it satisfy a parent-level match.
+              if (isSubtaskShaped(t)) continue;
+              topByNorm.set(norm(t.text), t);
             }
             const jobItems = [];
             let queued = 0; // tasks to create/link in Rocketlane for this category
