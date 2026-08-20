@@ -17847,19 +17847,33 @@
       // dominated batch creates ("From order info", multiple subtasks). Cleared by
       // rocketlaneClearProjectCreateCaches when the project is (re)synced.
       const rocketlaneTaskSampleCache = new Map(); // projectId -> sample task | null
+      // In-flight lookups are shared too: task creates now run several at a time,
+      // and without this the first parallel batch would each fire the same sample
+      // GET before any of them had filled the cache.
+      const rocketlaneTaskSampleInFlight = new Map(); // projectId -> Promise
       async function rocketlaneFetchTaskSampleForProject(projectId) {
         const pid = String(projectId ?? "").trim();
         if (!pid) return null;
         if (rocketlaneTaskSampleCache.has(pid)) return rocketlaneTaskSampleCache.get(pid);
-        const key = await rocketlaneDetectTasksProjectFilterKey(pid);
-        const params = { pageSize: 1 };
-        // @ts-ignore
-        params[key] = pid;
-        const json = await rocketlaneFetchJson("/tasks", params);
-        const { data } = rocketlaneUnwrapList(json);
-        const sample = Array.isArray(data) && data.length ? data[0] : null;
-        rocketlaneTaskSampleCache.set(pid, sample);
-        return sample;
+        const pending = rocketlaneTaskSampleInFlight.get(pid);
+        if (pending) return pending;
+        const job = (async () => {
+          const key = await rocketlaneDetectTasksProjectFilterKey(pid);
+          const params = { pageSize: 1 };
+          // @ts-ignore
+          params[key] = pid;
+          const json = await rocketlaneFetchJson("/tasks", params);
+          const { data } = rocketlaneUnwrapList(json);
+          const sample = Array.isArray(data) && data.length ? data[0] : null;
+          rocketlaneTaskSampleCache.set(pid, sample);
+          return sample;
+        })();
+        rocketlaneTaskSampleInFlight.set(pid, job);
+        try {
+          return await job;
+        } finally {
+          rocketlaneTaskSampleInFlight.delete(pid);
+        }
       }
 
       const MAX_PHASES_PAGES = 20;
@@ -17884,7 +17898,14 @@
               list.push(ph);
             }
           }
-          if (list.length) return list;
+          // An empty list is a real answer: a project with no phases yet. It used
+          // to fall through to the legacy query below, which costs SIX sequential
+          // requests this tenant answers with 400 — and because every one of them
+          // throws, the whole call threw, so rocketlaneGetOrCreatePhase could never
+          // create the FIRST phase in such a project (every category/task create
+          // failed with "could not create category"). Only a failed request falls
+          // through now.
+          return list;
         } catch (e) {
           if (e instanceof TypeError) throw e;
           // Fall through to legacy public-API filtered query
@@ -28522,10 +28543,19 @@
         const phaseOpts = { private: !!(opts && opts.private), startDate: opts && opts.startDate, dueDate: opts && opts.dueDate };
         void (async () => {
           let okTasks = 0, failTasks = 0;
-          for (const b of syncBatch) {
-            const r = await syncCreateCategoryWithTasks(p, b.key, b.label, b.jobItems, phaseOpts);
+          // Fetch the project's Rocketlane tasks ONCE for the whole run. Each
+          // category used to pull the full list itself just to dedup against it,
+          // so a three-category order paid for three identical fetches before it
+          // created anything.
+          let allTasks = null;
+          try { allTasks = await rocketlaneFetchAllTasksForProject(rlPid); } catch (_) { allTasks = null; }
+          const batchOpts = allTasks ? { ...phaseOpts, allTasks } : phaseOpts;
+          // Two categories at a time, four tasks in flight inside each: enough to
+          // hide the round-trip latency without hammering the tenant API.
+          await runWithConcurrency(syncBatch, 2, async (b) => {
+            const r = await syncCreateCategoryWithTasks(p, b.key, b.label, b.jobItems, batchOpts);
             if (r) { okTasks += r.okTasks; failTasks += r.failTasks; }
-          }
+          });
           showLoadMessage(
             failTasks > 0
               ? "Rocketlane: " + okTasks + " task(s) synced, " + failTasks + " failed (kept locally)."
@@ -28826,6 +28856,28 @@
       // syncCreateCategoryPhase only makes the phase, which left every task/subtask
       // local-only (they never appeared in Rocketlane). Sequential on purpose:
       // a subtask needs its parent's freshly-created Rocketlane id to nest under.
+      // Run `worker` over `items` with at most `limit` in flight. Used to create
+      // Rocketlane tasks several at a time instead of one round trip after
+      // another — task creates are independent POSTs, so the batch takes about
+      // as long as the slowest few rather than the sum of all of them. The limit
+      // is deliberately small: the tenant API is shared with everyone else's
+      // session, and a burst buys nothing once the link is saturated.
+      async function runWithConcurrency(items, limit, worker) {
+        const list = Array.from(items || []);
+        if (!list.length) return;
+        let cursor = 0;
+        const runners = Array.from({ length: Math.min(Math.max(1, limit), list.length) }, async () => {
+          while (cursor < list.length) {
+            const i = cursor++;
+            await worker(list[i], i);
+          }
+        });
+        await Promise.all(runners);
+      }
+
+      /** @param {{allTasks?: any[]}} [opts] opts.allTasks: the project's Rocketlane
+       * tasks, prefetched once by the caller so a multi-category run doesn't
+       * refetch the whole list per category. */
       async function syncCreateCategoryWithTasks(project, areaKey, label, jobItems, opts) {
         const rlPid = String(project?.rocketlaneProjectId ?? "").trim();
         if (!rlPid) return { okTasks: 0, failTasks: 0, phase: null };
@@ -28851,7 +28903,7 @@
         const rlTopByName = new Map();  // nrm(name) -> rlTaskId
         const rlSubByKey = new Map();   // parentRlId + " " + nrm(name) -> rlTaskId
         try {
-          const allRl = await rocketlaneFetchAllTasksForProject(rlPid);
+          const allRl = (opts && Array.isArray(opts.allTasks)) ? opts.allTasks : await rocketlaneFetchAllTasksForProject(rlPid);
           for (const rt of (allRl || [])) {
             const rid = String(rocketlaneTaskId(rt) || "").trim();
             if (!rid) continue;
@@ -28868,7 +28920,19 @@
         };
         const taskOpts = { private: !!(opts && opts.private) };
         let okTasks = 0, failTasks = 0;
-        for (const it of (jobItems || [])) {
+        // Items run several at a time (a parent's own subtasks still run after it,
+        // since they need its Rocketlane id). Repaint at most every 400ms while
+        // that happens: saveState + render on every single task made a batch pay
+        // a full state serialize and DOM rebuild per round trip.
+        let lastPaint = 0;
+        const paint = (force) => {
+          const now = performance.now();
+          if (!force && now - lastPaint < 400) return;
+          lastPaint = now;
+          saveState(state);
+          render();
+        };
+        await runWithConcurrency(jobItems || [], 4, async (it) => {
           // Backfill of an EXISTING parent (it.parentExists) skips creating the
           // parent and nests the missing sub-bullets under its existing Rocketlane
           // id (it.parentRlId); a new parent is created OR linked to an upstream dupe.
@@ -28907,9 +28971,9 @@
               } catch (e) { failTasks++; console.warn("order-info: subtask create failed:", subT.text, e); }
             }
           }
-          saveState(state);
-          render();
-        }
+          paint(false);
+        });
+        paint(true);
         return { okTasks, failTasks, phase };
       }
       // Mirror a category REMOVAL to Rocketlane by deleting the matching phase
