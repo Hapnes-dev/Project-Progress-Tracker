@@ -16177,26 +16177,30 @@
         try {
           /** @type {any[]} */
           const projectsForImport = [];
-          for (const localProject of linked) {
-            const rlPid = String(localProject?.rocketlaneProjectId ?? "").trim();
-            if (!rlPid) continue;
-            let remoteProject = null;
+          // Project details, several at a time. This was one request after
+          // another: on 29 linked projects it accounted for ~11.6s of a 28.4s
+          // tick, all of it waiting. Results are written back BY INDEX, so the
+          // import order — and with it every local state change — is unchanged.
+          const detailTargets = linked
+            .map((localProject) => ({ localProject, rlPid: String(localProject?.rocketlaneProjectId ?? "").trim() }))
+            .filter((t) => t.rlPid);
+          const details = new Array(detailTargets.length).fill(null);
+          await runWithConcurrency(detailTargets, 5, async (t, i) => {
             try {
-              remoteProject = await rocketlaneFetchProjectById(rlPid);
+              details[i] = await rocketlaneFetchProjectById(t.rlPid);
             } catch (e) {
-              console.warn("Rocketlane project fetch by id failed", rlPid, e);
+              console.warn("Rocketlane project fetch by id failed", t.rlPid, e);
             }
-            if (remoteProject) {
-              projectsForImport.push(remoteProject);
-              continue;
-            }
+          });
+          detailTargets.forEach((t, i) => {
+            if (details[i]) { projectsForImport.push(details[i]); return; }
             // Fallback object so we can still sync tasks even if project details request fails.
             projectsForImport.push({
-              projectId: rlPid,
-              projectName: String(localProject?.name ?? "").trim(),
-              dueDate: String(localProject?.due ?? "").trim(),
+              projectId: t.rlPid,
+              projectName: String(t.localProject?.name ?? "").trim(),
+              dueDate: String(t.localProject?.due ?? "").trim(),
             });
-          }
+          });
 
           if (!projectsForImport.length) {
             return { skipped: true, reason: "no_importable_projects" };
@@ -18705,6 +18709,43 @@
           const mine = (Array.isArray(projects) ? projects : []).slice();
           mine.sort((a, b) => rocketlaneProjectName(a).localeCompare(rocketlaneProjectName(b)));
 
+          // ── Prefetch each project's phases + tasks, several at a time ──
+          // The merge loop below must stay sequential (it mutates local state and
+          // the order decides the outcome), but its two fetches per project do
+          // not: they only read Rocketlane. Firing them ahead behind a small pool
+          // turns 2 x N serial round trips into N/5 waves. Every result is
+          // captured as {ok,v,e} so a failure surfaces at the same place in the
+          // loop as before, with the same handling.
+          const rlPrefetch = new Map();
+          {
+            const jobs = [];
+            for (const rp of mine) {
+              const pid = String(rocketlaneProjectId(rp) ?? "").trim();
+              if (!pid || rlPrefetch.has(pid)) continue;
+              const settle = {};
+              rlPrefetch.set(pid, {
+                phases: new Promise((res) => { settle.phases = res; }),
+                tasks: new Promise((res) => { settle.tasks = res; }),
+              });
+              jobs.push({ pid, settle });
+            }
+            // Not awaited: the loop awaits each entry as it reaches that project.
+            void runWithConcurrency(jobs, 5, async (job) => {
+              try { job.settle.phases({ ok: true, v: await rocketlaneFetchPhasesForProject(job.pid) }); }
+              catch (e) { job.settle.phases({ ok: false, e }); }
+              try { job.settle.tasks({ ok: true, v: await rocketlaneFetchAllTasksForProject(job.pid) }); }
+              catch (e) { job.settle.tasks({ ok: false, e }); }
+            }).finally(() => {
+              // Backstop: if the pool ever ends early, settle whatever is still
+              // pending. Resolving an already-resolved promise is a no-op, and
+              // without this the merge loop would await a promise forever.
+              for (const job of jobs) {
+                job.settle.phases({ ok: false, e: new Error("Rocketlane prefetch did not complete.") });
+                job.settle.tasks({ ok: false, e: new Error("Rocketlane prefetch did not complete.") });
+              }
+            });
+          }
+
           if (!mine.length) {
             if (!silent) setRocketlaneStatus(`No projects found for ${userName}.`, "info");
             return {
@@ -18972,9 +19013,12 @@
 
             if (!silent) setRocketlaneStatus(`(${i + 1}/${mine.length}) ${rlName} - fetching tasks...`, "info");
             const phaseNameById = new Map();
+            const pre = rlPrefetch.get(rlPid);
             // Fetch phases once to preserve Rocketlane phase order in the HTML categories
             try {
-              const phases = await rocketlaneFetchPhasesForProject(rlPid);
+              const phasesRes = pre ? await pre.phases : { ok: true, v: await rocketlaneFetchPhasesForProject(rlPid) };
+              if (!phasesRes.ok) throw phasesRes.e;
+              const phases = phasesRes.v;
               const order = [];
               const labels = local.areaLabels ?? {};
               for (const ph of phases) {
@@ -18996,12 +19040,14 @@
 
             let rlTasks = [];
             try {
-              rlTasks = await rocketlaneFetchAllTasksForProject(rlPid, (p) => {
-                if (manageSeq && seq !== rocketlaneImportSeq) return;
-                if (silent) return;
-                const total = p.total ? `/${p.total}` : "";
-                setRocketlaneStatus(`(${i + 1}/${mine.length}) ${rlName} - tasks page ${p.page} (${p.fetched}${total})`, "info");
-              });
+              // Prefetched above; the per-page progress line is gone with it —
+              // the whole list is already in hand by the time we get here.
+              const tasksRes = pre ? await pre.tasks : { ok: true, v: await rocketlaneFetchAllTasksForProject(rlPid) };
+              if (!tasksRes.ok) throw tasksRes.e;
+              rlTasks = tasksRes.v;
+              if (!silent && (!manageSeq || seq === rocketlaneImportSeq)) {
+                setRocketlaneStatus(`(${i + 1}/${mine.length}) ${rlName} - ${rlTasks.length} task(s)`, "info");
+              }
             } catch (e) {
               taskErrors += 1;
               console.warn("Rocketlane tasks fetch failed for project", rlPid, e);
