@@ -17691,7 +17691,13 @@
         return rocketlaneNormalizeStatusLabelKey(lbl);
       }
 
-      async function rocketlaneUpdateTaskStatus(rocketlaneTaskId, localStatus) {
+      // The tenant's "status" field id is the same for every task, so it only has
+      // to be read once per session. With it cached, a status change is PUT +
+      // verify instead of GET + PUT + verify — the pre-read measured ~350ms of a
+      // ~1.5s round (three requests). Cleared by nothing: a tenant doesn't
+      // renumber its fields mid-session, and a wrong id falls back below.
+      let rocketlaneStatusFieldId = "";
+      async function rocketlaneUpdateTaskStatus(rocketlaneTaskId, localStatus, opts) {
         const id = String(rocketlaneTaskId ?? "").trim();
         if (!id) throw new Error("Missing Rocketlane taskId.");
         const desiredKey = rocketlaneDesiredStatusKeyForLocal(localStatus);
@@ -17699,8 +17705,19 @@
         const desiredLabel = String(known?.label ?? rocketlaneLocalStatusToRocketlaneLabel(localStatus)).trim();
         const token = rocketlaneStatusToken(desiredLabel);
 
-        const currentTask = await rocketlaneGetTaskById(id);
-        rocketlaneLearnTaskStatus(currentTask);
+        // Skip the pre-read only on the session-key path, where the body is
+        // {fields:[{fieldId, fieldValue}]} and needs nothing else from the task.
+        const forceRead = !!(opts && opts.forceRead);
+        const skipPreRead = !forceRead && !!getSavedSessionKey() && !!rocketlaneStatusFieldId;
+        let currentTask = null;
+        if (!skipPreRead) {
+          currentTask = await rocketlaneGetTaskById(id);
+          rocketlaneLearnTaskStatus(currentTask);
+          const sf = Array.isArray(currentTask?.fields)
+            ? currentTask.fields.find((f) => f?.fieldColumnName === "status" || (f?.fieldName === "Status" && f?.fieldId))
+            : null;
+          if (sf?.fieldId) rocketlaneStatusFieldId = String(sf.fieldId);
+        }
 
         const curName = String(currentTask?.taskName ?? currentTask?.name ?? "").trim();
         const base = curName ? { taskName: curName } : {};
@@ -17723,12 +17740,15 @@
 
         // v1 API (session key): use fields array with fieldId (only method that works).
         if (getSavedSessionKey()) {
+          // Field id from this task when we read it, otherwise the one cached
+          // from the first status change of the session.
           const statusField = Array.isArray(currentTask?.fields)
             ? currentTask.fields.find((f) => f?.fieldColumnName === "status" || (f?.fieldName === "Status" && f?.fieldId))
             : null;
-          if (statusField?.fieldId) {
+          const statusFieldId = statusField?.fieldId ?? (rocketlaneStatusFieldId || "");
+          if (statusFieldId) {
             for (const v of values) {
-              pushBody({ fields: [{ fieldId: statusField.fieldId, fieldValue: v }] });
+              pushBody({ fields: [{ fieldId: statusFieldId, fieldValue: v }] });
             }
           }
           // Fallback: try plain string (accepted but may be silently ignored)
@@ -17770,6 +17790,15 @@
         // If PUT returned 2xx but status did not change, treat as failure.
         const finalKey = await verify().catch(() => "");
         if (finalKey === desiredKey) return true;
+
+        // Nothing worked while we were trusting the cached field id — it may be
+        // stale or wrong for this task type. Drop it and retry once the long way,
+        // reading the task first. Costs an extra round trip in the rare failure
+        // case; saves one on every ordinary status change.
+        if (skipPreRead) {
+          rocketlaneStatusFieldId = "";
+          return await rocketlaneUpdateTaskStatus(id, localStatus, { forceRead: true });
+        }
 
         throw lastErr ?? new Error("Rocketlane task status update failed.");
       }
