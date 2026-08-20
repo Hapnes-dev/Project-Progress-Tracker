@@ -28093,6 +28093,23 @@
         const t = String(text || "");
         return ORDER_INFO_PROMOTE_RULES.find((r) => r.re.test(t)) || null;
       }
+      // Module headers that carry real deliverables but are not a discipline of
+      // their own, so they have no entry in ORDER_INFO_MODULE_MAP. Without a rule
+      // here the whole module — header AND line items — is dropped silently.
+      // Every line item under a matching header is promoted into the named preset
+      // instead. "IWMAC Modul: Add-on" collects one-off setup jobs such as
+      // "IWMAC Setup: Direct integration, waterpump" (seen on project 10242,
+      // Bunnpris Alexander Kiellands plass), which is plant-room work, so the
+      // module's items are merged into Machine Room. Headers that are dropped on
+      // purpose — "IWMAC Modul: Basic", "IWMAC Product: Drivers" — stay out of
+      // this list.
+      const ORDER_INFO_HEADER_PROMOTE_RULES = [
+        { re: /IWMAC\s*Modul:\s*Add[\s-]*on/i, presetKey: "machine_room" },
+      ];
+      function orderInfoHeaderPromoteFor(headerText) {
+        const t = String(headerText || "");
+        return ORDER_INFO_HEADER_PROMOTE_RULES.find((r) => r.re.test(t)) || null;
+      }
       // FLAT line-item classifier — used ONLY when the order info has NO
       // "IWMAC Modul:/Product:" headers (e.g. a pasted "HubSpot line items:"
       // list). Each item is routed to a discipline category by keyword; order
@@ -28248,6 +28265,24 @@
               if (orderInfoIsLicenseItem(item.text)) continue; // IWMAC License: always skipped
               const key = orderInfoClassifyDiscipline(item.text);
               if (!key) continue;
+              if (!promotedByPreset.has(key)) promotedByPreset.set(key, []);
+              promotedByPreset.get(key).push(item);
+            }
+            pm.items = [];
+            continue;
+          }
+          // Header-level promotion (e.g. "IWMAC Modul: Add-on" → Machine Room):
+          // the module maps to no preset of its own, so promote every one of its
+          // line items into the target preset rather than losing them with the
+          // unmapped header. An item's own promote rule still wins over the
+          // header's, so an "Integration Gateway" listed under Add-on still lands
+          // in Refrigeration. The target category is created by the promote-
+          // fallback loop below even when its own IWMAC module isn't in the order.
+          const headerRule = orderInfoHeaderPromoteFor(pm.headerText);
+          if (headerRule) {
+            for (const item of (pm.items || [])) {
+              if (orderInfoIsLicenseItem(item.text)) continue; // IWMAC License: always skipped
+              const key = (orderInfoPromoteRuleFor(item.text) || headerRule).presetKey;
               if (!promotedByPreset.has(key)) promotedByPreset.set(key, []);
               promotedByPreset.get(key).push(item);
             }
