@@ -20330,6 +20330,18 @@
 
           pruneEmptyCategories(p);
 
+          // Phase ids left behind by a category that no longer exists (3214 still
+          // carried areaPhaseIds.refrigeration_freezing long after its tasks had
+          // moved to refrigeration_and_freezing_systems). The id is only a cache
+          // — rocketlaneGetOrCreatePhase re-resolves by name — so dropping it
+          // costs nothing and keeps one category to one phase. After the prune,
+          // so a category removed just above takes its id with it.
+          if (p.areaPhaseIds && Object.keys(p.tasksByArea ?? {}).length) {
+            for (const k of Object.keys(p.areaPhaseIds)) {
+              if (!(k in p.tasksByArea)) delete p.areaPhaseIds[k];
+            }
+          }
+
           p.status = normalizeStatus(p.status ?? "proposed");
           p.createdAt = p.createdAt ?? nowISO();
           p.updatedAt = p.updatedAt ?? nowISO();
