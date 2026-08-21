@@ -18793,6 +18793,9 @@
           let created = 0;
           let updated = 0;
           let projectsChanged = 0;
+          // Projects already in the tracker under a different owner group, whose
+          // owner this import deliberately left alone.
+          let ownerKept = 0;
           let tasksAdded = 0;
           let tasksUpdated = 0;
           let tasksRemoved = 0;
@@ -18881,7 +18884,19 @@
               // Keep user's local fields, but update basic identity fields
               local.name = rlName;
               if (customerName) local.client = customerName;
-              if (!preserveLocalOwner && trackerOwnerName) local.owner = trackerOwnerName;
+              // Importing someone else's list must NOT take over a project you
+              // already track. `local.owner` is the tracker's GROUPING owner
+              // (the Owner Workload buckets), so overwriting it here moved every
+              // shared project into the picked user's group — importing two of a
+              // colleague's projects silently reassigned the one already in the
+              // tracker, and "Select all" on their 55 would have moved 23 of
+              // yours. It is now only filled in when empty. The real Rocketlane
+              // owner is refreshed separately just below, and a deliberate
+              // hand-over is still one rename on the project itself.
+              if (!preserveLocalOwner && trackerOwnerName) {
+                if (!String(local.owner ?? "").trim()) local.owner = trackerOwnerName;
+                else if (normalizeOwnerGroupKey(local.owner) !== normalizeOwnerGroupKey(trackerOwnerName)) ownerKept += 1;
+              }
               // The REAL Rocketlane project owner is tracked separately from the
               // (grouping) owner and is always refreshed when Rocketlane reports
               // one — even on the silent resync (preserveLocalOwner) — so the
@@ -19432,6 +19447,7 @@
             selected: mine.length,
             created,
             updated,
+            ownerKept,
             projectsChanged,
             tasksAdded,
             tasksUpdated,
@@ -19448,6 +19464,7 @@
             `Created: ${created}`,
             `Updated: ${updated}`,
             `Projects changed: ${projectsChanged}`,
+            ownerKept ? `Kept existing owner on: ${ownerKept}` : "",
             `Tasks added: ${tasksAdded}`,
             `Tasks updated: ${tasksUpdated}`,
             `Tasks removed: ${tasksRemoved}`,
