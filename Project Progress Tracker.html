@@ -19557,6 +19557,18 @@
         return s || "untitled";
       }
 
+      // Area key for a category preset. It must be what the Rocketlane import
+      // will derive from the phase name — slugifyKey(phaseName) — or the same
+      // category ends up under two keys and renders as two cards with the same
+      // title. CATEGORY_PRESETS.key is NOT that for two of them
+      // ("refrigeration_freezing" vs "refrigeration_and_freezing_systems",
+      // "heating_system" vs "heating_system_vgv"), so derive it from the label.
+      // Existing projects that already carry the old key are repaired on load by
+      // the same-label merge in normalizeLoadedState.
+      function presetAreaKey(preset) {
+        return slugifyKey(String(preset?.label ?? "")) || String(preset?.key ?? "");
+      }
+
       function ensureUniqueKey(existingKeys, preferredKey) {
         let k = preferredKey;
         let n = 2;
@@ -20248,6 +20260,70 @@
                   const moved = parentId ? remap.get(parentId) : "";
                   if (moved) t.meta.parentLocalTaskId = moved;
                 }
+              }
+            }
+          }
+
+          // ── Two categories, one label ────────────────────────────────────
+          // A preset category is keyed by CATEGORY_PRESETS.key while the
+          // Rocketlane import keys the same category by slugifyKey(phaseName).
+          // Those agree for most presets but NOT for
+          //   refrigeration_freezing  vs refrigeration_and_freezing_systems
+          //   heating_system          vs heating_system_vgv
+          // so a project that got its category from "From order info" and then
+          // synced grew a SECOND card with the identical title — one holding the
+          // tasks, one empty ("Refrigeration and freezing systems" twice on
+          // 3214 - Meny Lambertseter). Merge them by normalized label: the key
+          // with the most tasks wins, the others' tasks move in (deduped by
+          // Rocketlane id, then by text), and areaPhaseIds / areaOrder follow.
+          {
+            const nrmLabel = (s) => String(s ?? "").trim().toLowerCase().replace(/[–—−]/g, "-").replace(/\s+/g, " ");
+            const byLabel = new Map(); // label -> areaKey[]
+            for (const areaKey of Object.keys(p.tasksByArea ?? {})) {
+              const label = nrmLabel(labelForArea(areaKey, p));
+              if (!label) continue;
+              if (!byLabel.has(label)) byLabel.set(label, []);
+              byLabel.get(label).push(areaKey);
+            }
+            for (const keys of byLabel.values()) {
+              if (keys.length < 2) continue;
+              // Keep the fullest one; on a tie keep the earliest in areaOrder so
+              // the card doesn't jump around.
+              const order = Array.isArray(p.areaOrder) ? p.areaOrder : [];
+              keys.sort((a, b) => {
+                const n = (p.tasksByArea[b] ?? []).length - (p.tasksByArea[a] ?? []).length;
+                if (n) return n;
+                const ia = order.indexOf(a), ib = order.indexOf(b);
+                return (ia < 0 ? 1e9 : ia) - (ib < 0 ? 1e9 : ib);
+              });
+              const winner = keys[0];
+              const list = (p.tasksByArea[winner] = Array.isArray(p.tasksByArea[winner]) ? p.tasksByArea[winner] : []);
+              const seenRl = new Set(list.map((t) => String(t?.meta?.rocketlaneTaskId ?? "").trim()).filter(Boolean));
+              const seenText = new Set(list.map((t) => nrmLabel(t?.text)));
+              for (const loser of keys.slice(1)) {
+                for (const t of (p.tasksByArea[loser] ?? [])) {
+                  const rid = String(t?.meta?.rocketlaneTaskId ?? "").trim();
+                  if (rid ? seenRl.has(rid) : seenText.has(nrmLabel(t?.text))) continue;
+                  if (rid) seenRl.add(rid); else seenText.add(nrmLabel(t?.text));
+                  list.push(t);
+                }
+                delete p.tasksByArea[loser];
+                if (p.areaLabels) delete p.areaLabels[loser];
+                // A phase id recorded under the losing key still points at the
+                // right Rocketlane phase — keep it if the winner has none.
+                if (p.areaPhaseIds?.[loser]) {
+                  if (!p.areaPhaseIds[winner]) p.areaPhaseIds[winner] = p.areaPhaseIds[loser];
+                  delete p.areaPhaseIds[loser];
+                }
+                if (Array.isArray(p.areaOrder)) {
+                  const at = p.areaOrder.indexOf(loser);
+                  if (at >= 0) {
+                    if (!p.areaOrder.includes(winner)) p.areaOrder[at] = winner;
+                    else p.areaOrder.splice(at, 1);
+                  }
+                }
+                if (p.expandedCategories && loser in p.expandedCategories) delete p.expandedCategories[loser];
+                if (p.hiddenCategories && loser in p.hiddenCategories) delete p.hiddenCategories[loser];
               }
             }
           }
@@ -28749,7 +28825,7 @@
           if (!existingKey) {
             // NEW category — create it with every desired task + subtask.
             const existingKeys = new Set(Object.keys(p.tasksByArea ?? {}));
-            const key = ensureUniqueKey(existingKeys, preset.key);
+            const key = ensureUniqueKey(existingKeys, presetAreaKey(preset));
             p.tasksByArea[key] = [];
             p.areaLabels = p.areaLabels ?? {};
             p.areaLabels[key] = preset.label;
@@ -29045,7 +29121,7 @@
           }
           const isExisting = !!key;
           if (!key) {
-            const preferredKey = preset ? preset.key : ("custom_" + slugifyKey(label));
+            const preferredKey = preset ? presetAreaKey(preset) : ("custom_" + slugifyKey(label));
             const existing = new Set(Object.keys(p.tasksByArea ?? {}));
             key = ensureUniqueKey(existing, preferredKey);
             p.areaLabels = p.areaLabels ?? {};
