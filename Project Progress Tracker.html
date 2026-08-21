@@ -1319,6 +1319,23 @@
         margin-left: 4px;
       }
 
+      /* Marks the owner group that always sorts first ("yours"). Dimmed until
+         pinned so it doesn't compete with the owner name. */
+      .ownerGroupHeader .ownerPinBtn {
+        flex: 0 0 auto;
+        margin-left: 6px;
+        padding: 0 4px;
+        border: none;
+        background: none;
+        font-size: 11px;
+        line-height: 1;
+        cursor: pointer;
+        opacity: 0.25;
+        filter: grayscale(1);
+      }
+      .ownerGroupHeader .ownerPinBtn:hover { opacity: 0.7; }
+      .ownerGroupHeader .ownerPinBtn.pinned { opacity: 1; filter: none; }
+
 
       .card {
         border: 1px solid var(--border);
@@ -7754,6 +7771,21 @@
       }
       // UI-only, per-browser preference. Never written to shared SQL state.
       const collapsedOwnerGroups = loadCollapsedOwnerGroupsFromLocal();
+
+      // "My" owner group — the one that stays at the TOP of the project list no
+      // matter whose projects get imported next. Owner groups otherwise sort
+      // alphabetically, so importing a colleague whose name sorts before yours
+      // pushed your whole list below theirs and read as "all my projects
+      // disappeared". Per browser, like the other UI preferences; defaults to
+      // the biggest group the first time a list is rendered.
+      const MY_OWNER_GROUP_STORAGE_KEY = "progress_tracker_my_owner_group_v1";
+      let myOwnerGroupKey = (() => {
+        try { return String(localStorage.getItem(MY_OWNER_GROUP_STORAGE_KEY) ?? ""); } catch (e) { return ""; }
+      })();
+      function setMyOwnerGroup(ownerKey) {
+        myOwnerGroupKey = ownerKey ? normalizeOwnerGroupKey(ownerKey) : "";
+        try { localStorage.setItem(MY_OWNER_GROUP_STORAGE_KEY, myOwnerGroupKey); } catch (e) { /* storage full — keep it in memory */ }
+      }
 
       function clamp(n, a, b) {
         return Math.max(a, Math.min(b, n));
@@ -22249,8 +22281,23 @@
           groupedByOwner[ownerKey].push(p);
         }
 
-        // Sort owners alphabetically, with "No owner" at the end
+        // Pick "my" group once — the biggest one — so a colleague's import can
+        // never push your own projects down the page.
+        if (!myOwnerGroupKey) {
+          let best = "";
+          let bestCount = 0;
+          for (const [k, arr] of Object.entries(groupedByOwner)) {
+            if (k === "No owner") continue;
+            if (arr.length > bestCount) { best = k; bestCount = arr.length; }
+          }
+          if (best) setMyOwnerGroup(best);
+        }
+
+        // Your own group first, then the rest alphabetically, "No owner" last.
         const ownerKeys = Object.keys(groupedByOwner).sort((a, b) => {
+          const aMine = !!myOwnerGroupKey && normalizeOwnerGroupKey(a) === myOwnerGroupKey;
+          const bMine = !!myOwnerGroupKey && normalizeOwnerGroupKey(b) === myOwnerGroupKey;
+          if (aMine !== bMine) return aMine ? -1 : 1;
           if (a === "No owner") return 1;
           if (b === "No owner") return -1;
           return a.localeCompare(b);
@@ -22300,6 +22347,24 @@
           ownerName.appendChild(ownerCollapse);
           ownerName.appendChild(ownerNameText);
           ownerName.appendChild(ownerCount);
+
+          // Pin: which group counts as yours and therefore renders first.
+          const isMineGroup = !!myOwnerGroupKey && ownerGroupKey === myOwnerGroupKey;
+          const pinBtn = document.createElement("button");
+          pinBtn.type = "button";
+          pinBtn.className = "ownerPinBtn" + (isMineGroup ? " pinned" : "");
+          pinBtn.textContent = "📌";
+          pinBtn.title = isMineGroup
+            ? "Your group — always listed first. Click to unpin."
+            : 'List "' + ownerKey + '" first (mark it as yours)';
+          pinBtn.setAttribute("aria-pressed", isMineGroup ? "true" : "false");
+          pinBtn.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setMyOwnerGroup(isMineGroup ? "" : ownerKey);
+            renderList();
+          });
+          ownerName.appendChild(pinBtn);
 
           // Quick-sort buttons on the right side of the owner header.
           // They drive the global sort dropdown so the chosen mode also
