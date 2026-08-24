@@ -7746,6 +7746,13 @@
       function normalizeOwnerGroupKey(ownerName) {
         return String(ownerName ?? "").trim() || "No owner";
       }
+      // The name a project GROUPS under (project list + Owner Workload):
+      // the REAL Rocketlane project owner when a sync has captured it,
+      // falling back to the local/importing owner (p.owner) until then.
+      // Keeps grouping consistent with the detail panel's Owner chip.
+      function projectGroupOwnerName(p) {
+        return String(p?.rocketlaneOwnerName || "").trim() || String(p?.owner || "").trim();
+      }
       function loadCollapsedOwnerGroupsFromLocal() {
         const out = new Set();
         try {
@@ -8529,7 +8536,12 @@
         const nextOwnerValue = nextOwnerKey === "No owner" ? "" : nextOwnerKey;
         let changed = 0;
         for (const p of state.projects) {
-          const pOwnerKey = normalizeOwnerGroupKey((p.owner || "").trim() || "No owner");
+          // Membership follows the GROUP key (real Rocketlane owner first) so
+          // the rename targets the projects the user actually right-clicked.
+          // Note: the rename writes the LOCAL p.owner only; a project whose
+          // real owner is synced from Rocketlane keeps grouping under that
+          // name (owner mirrors Rocketlane — renames aren't pushed back).
+          const pOwnerKey = normalizeOwnerGroupKey(projectGroupOwnerName(p) || "No owner");
           if (pOwnerKey !== fromOwnerKey) continue;
           if ((p.owner || "").trim() === nextOwnerValue) continue;
           p.owner = nextOwnerValue;
@@ -21971,7 +21983,10 @@
         /** @type {Record<string, { ownerKey: string, load: string | null, projectCount: number, activeCount: number, taskInProgressCount: number, taskInProgressRefs: { projectId: string, areaKey: string, taskId: string }[], taskWaitingPartnerCount: number, taskWaitingPartnerRefs: { projectId: string, areaKey: string, taskId: string }[], taskBlockedCount: number, taskBlockedRefs: { projectId: string, areaKey: string, taskId: string }[], needAssistanceCount: number, needAssistanceRefs: { projectId: string, areaKey: string, taskId: string }[] }>} */
         const byOwner = {};
         for (const p of state.projects ?? []) {
-          const ownerKey = (p.owner || "").trim() || "No owner";
+          // Same group key as the project list: real Rocketlane owner first.
+          // Bonus: real-owner names match the Rocketlane member names the
+          // team-workload merge below keys on, so counts line up.
+          const ownerKey = projectGroupOwnerName(p) || "No owner";
           if (!byOwner[ownerKey]) {
             byOwner[ownerKey] = {
               ownerKey,
@@ -22359,10 +22374,12 @@
         els.projectList.innerHTML = "";
         els.listEmpty.style.display = list.length ? "none" : "block";
 
-        // Group projects by owner
+        // Group projects by the REAL Rocketlane project owner (falls back to
+        // the importing owner until a sync captures it) — same name the
+        // detail panel's Owner chip shows.
         const groupedByOwner = {};
         for (const p of list) {
-          const ownerKey = (p.owner || "").trim() || "No owner";
+          const ownerKey = projectGroupOwnerName(p) || "No owner";
           if (!groupedByOwner[ownerKey]) {
             groupedByOwner[ownerKey] = [];
           }
@@ -22851,19 +22868,14 @@
         }
 
         // Owner chip shows the REAL Rocketlane project owner when known
-        // (p.rocketlaneOwnerName), falling back to the local grouping owner
-        // (p.owner) until a sync captures it. Project-list / Owner-Workload
-        // grouping still uses p.owner — only this display follows the real owner.
-        const ownerDisplayName = String(p.rocketlaneOwnerName || "").trim() || String(p.owner || "").trim();
+        // (p.rocketlaneOwnerName), falling back to the local owner (p.owner)
+        // until a sync captures it. The project list + Owner Workload group by
+        // the SAME name (projectGroupOwnerName), so chip and grouping agree.
+        const ownerDisplayName = projectGroupOwnerName(p);
         if (ownerDisplayName) {
           const ow = document.createElement("span");
           ow.className = "tag";
           ow.textContent = "Owner: " + ownerDisplayName;
-          const groupOwner = String(p.owner || "").trim();
-          if (String(p.rocketlaneOwnerName || "").trim() && groupOwner &&
-              ownerDisplayName.toLowerCase() !== groupOwner.toLowerCase()) {
-            ow.title = 'Rocketlane project owner — grouped under "' + groupOwner + '" in your list/overview.';
-          }
           meta.appendChild(ow);
         }
 
