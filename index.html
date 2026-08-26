@@ -28577,6 +28577,19 @@
       // this list.
       const ORDER_INFO_HEADER_PROMOTE_RULES = [
         { re: /IWMAC\s*Modul:\s*Add[\s-]*on/i, presetKey: "machine_room" },
+        // "IWMAC Product: Images" carries the image deliverables ("IWMAC Image —
+        // 3 pcs" with sub-bullets like Nytt oversiktsbilde / Nytt maskinbilde /
+        // VGV/AC). Overview/machine/VGV image work is Machine Room discipline —
+        // same reasoning as the "System image - Machinery" item-promote rule.
+        // Seen dropped on project 8013 (COOP EXTRA Verdal).
+        { re: /IWMAC\s*Product:\s*Images?\b/i, presetKey: "machine_room" },
+        // "IWMAC Modul: Smart Function" is a licensed add-on whose deliverables
+        // (Switch-løsning på endedisker, fuktighetssensor/karmvarmestyring på
+        // frysetorg, programming hours) are refrigeration-floor work → merge
+        // into Refrigeration. Its only line item is usually the "IWMAC License:
+        // Smart Function" carrier — kept because it has sub-deliverables (see
+        // the license skip below). Seen dropped on project 8013.
+        { re: /IWMAC\s*Modul:\s*Smart\s*Function/i, presetKey: "refrigeration_freezing" },
       ];
       function orderInfoHeaderPromoteFor(headerText) {
         const t = String(headerText || "");
@@ -28603,13 +28616,21 @@
         const t = String(text || "");
         return (ORDER_INFO_FLAT_CLASSIFY.find((r) => r.re.test(t)) || {}).key || null;
       }
-      // "IWMAC License" and "IWMAC License: <discipline>" line items are ALWAYS
-      // skipped (never become tasks) — the license is implied by the discipline
-      // category itself, not a deliverable. Applied to both the flat HubSpot
-      // line-items path and the module path. Anchored on the start so it never
-      // matches an item that merely mentions "license" mid-text.
+      // "IWMAC License" and "IWMAC License: <discipline>" line items are skipped
+      // (never become tasks) — the license is implied by the discipline category
+      // itself, not a deliverable. EXCEPTION: a license line that carries its own
+      // sub-bullets (e.g. "IWMAC License: Smart Function" with "Smart Function
+      // programming per hour" / "Switch-løsning på endedisker" under it) is the
+      // CARRIER of real deliverables — dropping it would silently discard them
+      // (seen on project 8013), so it is kept, subtasks and all. Bare licenses
+      // ("IWMAC License: Ventilation — 1 pcs", no subs) still skip. Applied to
+      // both the flat HubSpot line-items path and the module path. Anchored on
+      // the start so it never matches an item merely mentioning "license".
       function orderInfoIsLicenseItem(text) {
         return /^\s*IWMAC\s*License\b/i.test(String(text || ""));
+      }
+      function orderInfoSkipAsLicense(item) {
+        return orderInfoIsLicenseItem(item?.text) && !((item?.subs || []).length);
       }
       // Parse the order-info HTML into modules → line items → sub-bullets.
       // Shape: <p><strong>IWMAC Modul: X</strong></p><ul>…</ul>. Sub-bullets come
@@ -28734,7 +28755,7 @@
           // promote-fallback plan loop below — same path the module flow uses.
           if (pm.flat) {
             for (const item of (pm.items || [])) {
-              if (orderInfoIsLicenseItem(item.text)) continue; // IWMAC License: always skipped
+              if (orderInfoSkipAsLicense(item)) continue; // bare IWMAC License (no subs): skipped
               const key = orderInfoClassifyDiscipline(item.text);
               if (!key) continue;
               if (!promotedByPreset.has(key)) promotedByPreset.set(key, []);
@@ -28753,7 +28774,7 @@
           const headerRule = orderInfoHeaderPromoteFor(pm.headerText);
           if (headerRule) {
             for (const item of (pm.items || [])) {
-              if (orderInfoIsLicenseItem(item.text)) continue; // IWMAC License: always skipped
+              if (orderInfoSkipAsLicense(item)) continue; // bare IWMAC License (no subs): skipped
               const key = (orderInfoPromoteRuleFor(item.text) || headerRule).presetKey;
               if (!promotedByPreset.has(key)) promotedByPreset.set(key, []);
               promotedByPreset.get(key).push(item);
@@ -28763,7 +28784,7 @@
           }
           const keep = [];
           for (const item of (pm.items || [])) {
-            if (orderInfoIsLicenseItem(item.text)) continue; // IWMAC License: always skipped
+            if (orderInfoSkipAsLicense(item)) continue; // bare IWMAC License (no subs): skipped
             const rule = orderInfoPromoteRuleFor(item.text);
             if (rule) {
               if (!promotedByPreset.has(rule.presetKey)) promotedByPreset.set(rule.presetKey, []);
