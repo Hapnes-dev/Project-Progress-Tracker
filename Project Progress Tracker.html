@@ -12030,6 +12030,31 @@
           return full || staleOrder;
         } catch (_) { return staleOrder; }
       }
+      /**
+       * AUTO-FIX a saved Younium link that pointed at an outdated order
+       * version: rewrite it to the resolved CURRENT version's URL and persist,
+       * so the project heals itself instead of warning the user to re-save
+       * (requested after 10242's activated subscription kept a draft link).
+       * Only fires when the slot already HAS a saved link (never invents one),
+       * and only persists when the project actually lives in state — the
+       * throwaway objects used by tests/probes are mutated but never saved.
+       */
+      function youniumAutoFixSavedLink(project, field, currentOrder, out) {
+        try {
+          const id = String(currentOrder?.id || "").trim();
+          if (!id || !project) return;
+          if (!String(project[field] || "").trim()) return; // no saved link to fix
+          const url = "https://eu.younium.com/orders/" + id;
+          if (project[field] === url) return;
+          project[field] = url;
+          (out.autoFixedLinks = out.autoFixedLinks || []).push(field);
+          const inState = typeof state === "object" && Array.isArray(state?.projects) &&
+            state.projects.some((x) => x && (x === project || x.id === project.id));
+          if (inState) {
+            try { touchProjectLocal(project.id); saveState(state); } catch (_) {}
+          }
+        } catch (_) {}
+      }
       async function youniumFetchInvoicesForOrder(orderNumber) {
         const bridge = window.YouniumBridge;
         if (!bridge?.getInvoicesForOrder) return [];
@@ -12334,6 +12359,7 @@
                       if (cur && cur.id !== fetched.id) {
                         out.subscriptionSupersededFrom = { id: fetched.id, orderNumber: fetched.orderNumber };
                         fetched = cur;
+                        youniumAutoFixSavedLink(project, "youniumSubscriptionUrl", fetched, out);
                       }
                     } catch (e) { dbg("no-link path: subscription current-version resolution failed", e); }
                   }
@@ -12663,6 +12689,8 @@
               out.supersededFrom = { id: order.id, orderNumber: order.orderNumber, version: order.version };
               order = current;
               out.links.saved = "https://eu.younium.com/orders/" + order.id;
+              // Heal the project: point the saved link at the current version.
+              youniumAutoFixSavedLink(project, "youniumUrl", order, out);
             }
           } catch (e) { dbg("current-version resolution failed", e); }
         }
@@ -12700,6 +12728,9 @@
                     });
                     out.subscriptionSupersededFrom = { id: subFetched.id, orderNumber: subFetched.orderNumber };
                     subFetched = subCurrent;
+                    // Heal the project: point the saved subscription link at
+                    // the activated current version.
+                    youniumAutoFixSavedLink(project, "youniumSubscriptionUrl", subFetched, out);
                   }
                 } catch (e) { dbg("subscription current-version resolution failed", e); }
               }
@@ -33789,18 +33820,26 @@
           out.push("Order is only partially paid in Younium — full payment is still outstanding.");
         }
         // The saved link(s) pointed at an OUTDATED order version; the verdict
-        // auto-followed the version chain to the current one. Tell the user so
-        // the modal's content doesn't look mismatched with their saved link,
-        // and nudge them to refresh it.
+        // auto-followed the version chain to the current one AND (when the slot
+        // had a saved link) auto-updated the stored link to it. Report what
+        // happened; only nudge for a manual re-save when the auto-fix couldn't
+        // apply (no saved link in that slot to rewrite).
+        const fixed = verdict?.autoFixedLinks || [];
         if (verdict?.supersededFrom) {
-          out.push("Saved Younium link points at an outdated order version (" +
-            (verdict.supersededFrom.orderNumber || verdict.supersededFrom.id) +
-            ") — showing the current version instead. Consider re-saving the link via Edit.");
+          const from = verdict.supersededFrom.orderNumber || verdict.supersededFrom.id;
+          out.push(fixed.includes("youniumUrl")
+            ? "Saved Younium link pointed at an outdated order version (" + from +
+              ") — auto-updated it to the current version."
+            : "Saved Younium link points at an outdated order version (" + from +
+              ") — showing the current version instead. Consider re-saving the link via Edit.");
         }
         if (verdict?.subscriptionSupersededFrom) {
-          out.push("Saved subscription link points at an outdated order version (" +
-            (verdict.subscriptionSupersededFrom.orderNumber || verdict.subscriptionSupersededFrom.id) +
-            ") — showing the activated version instead. Consider re-saving the link via Edit.");
+          const from = verdict.subscriptionSupersededFrom.orderNumber || verdict.subscriptionSupersededFrom.id;
+          out.push(fixed.includes("youniumSubscriptionUrl")
+            ? "Saved subscription link pointed at an outdated draft version (" + from +
+              ") — auto-updated it to the activated version."
+            : "Saved subscription link points at an outdated order version (" + from +
+              ") — showing the activated version instead. Consider re-saving the link via Edit.");
         }
         return out;
       }
