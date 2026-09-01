@@ -12324,7 +12324,19 @@
               const sc = classifyLinkUrl(subUrlSaved);
               if (sc?.platform === "younium" && sc.recordId && sc.recordType === "order") {
                 try {
-                  const fetched = await youniumFetchOrderDetails(sc.recordId);
+                  let fetched = await youniumFetchOrderDetails(sc.recordId);
+                  // Follow an outdated subscription version to the current one
+                  // (same as the saved-URL branch — a draft activated as a new
+                  // version must not keep reporting "Draft (not activated)").
+                  if (fetched && fetched.isLastVersion === false) {
+                    try {
+                      const cur = await youniumResolveCurrentVersion(fetched, project);
+                      if (cur && cur.id !== fetched.id) {
+                        out.subscriptionSupersededFrom = { id: fetched.id, orderNumber: fetched.orderNumber };
+                        fetched = cur;
+                      }
+                    } catch (e) { dbg("no-link path: subscription current-version resolution failed", e); }
+                  }
                   if (fetched) {
                     const pm = findIwmacSubscriptionItem(fetched);
                     subMatch = pm ?? { item: null, productName: "Subscription (saved URL)" };
@@ -12672,7 +12684,25 @@
           const subClassified = classifyLinkUrl(subUrlSaved);
           if (subClassified?.platform === "younium" && subClassified.recordId && subClassified.recordType === "order") {
             try {
-              const subFetched = await youniumFetchOrderDetails(subClassified.recordId);
+              let subFetched = await youniumFetchOrderDetails(subClassified.recordId);
+              // The saved subscription link may point at an OUTDATED version —
+              // a draft that was later ACTIVATED as a new version with its own
+              // id/number (seen on 10242: saved draft 1da83238…, activated
+              // O-015506 986f9b76…). Same version-follow as the primary order,
+              // else the modal keeps reporting "Draft (not activated)" forever.
+              if (subFetched && subFetched.isLastVersion === false) {
+                try {
+                  const subCurrent = await youniumResolveCurrentVersion(subFetched, project);
+                  if (subCurrent && subCurrent.id !== subFetched.id) {
+                    dbg("saved subscription link is an outdated version — resolved to current", {
+                      from: { id: subFetched.id, number: subFetched.orderNumber },
+                      to: { id: subCurrent.id, number: subCurrent.orderNumber },
+                    });
+                    out.subscriptionSupersededFrom = { id: subFetched.id, orderNumber: subFetched.orderNumber };
+                    subFetched = subCurrent;
+                  }
+                } catch (e) { dbg("subscription current-version resolution failed", e); }
+              }
               if (subFetched) {
                 const productMatch = findIwmacSubscriptionItem(subFetched);
                 subMatch = productMatch ?? { item: null, productName: "Subscription (saved URL)" };
@@ -33757,6 +33787,20 @@
         // order whose subscription is still Draft.
         if (verdict?.deliveryStatus === "Partially paid") {
           out.push("Order is only partially paid in Younium — full payment is still outstanding.");
+        }
+        // The saved link(s) pointed at an OUTDATED order version; the verdict
+        // auto-followed the version chain to the current one. Tell the user so
+        // the modal's content doesn't look mismatched with their saved link,
+        // and nudge them to refresh it.
+        if (verdict?.supersededFrom) {
+          out.push("Saved Younium link points at an outdated order version (" +
+            (verdict.supersededFrom.orderNumber || verdict.supersededFrom.id) +
+            ") — showing the current version instead. Consider re-saving the link via Edit.");
+        }
+        if (verdict?.subscriptionSupersededFrom) {
+          out.push("Saved subscription link points at an outdated order version (" +
+            (verdict.subscriptionSupersededFrom.orderNumber || verdict.subscriptionSupersededFrom.id) +
+            ") — showing the activated version instead. Consider re-saving the link via Edit.");
         }
         return out;
       }
