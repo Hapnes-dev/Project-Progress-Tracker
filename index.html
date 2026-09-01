@@ -1299,10 +1299,14 @@
         font-size: 12px;
       }
 
+      /* Truncate a long owner name instead of letting it spill over the "(N)" count beside it.
+         With overflow:visible the flex box shrank but the text did not, so names like
+         "Thomas Kvalvåg (Hapnes)" printed straight through the count. */
       .ownerGroupHeader .ownerNameText {
         min-width: 0;
         white-space: nowrap;
-        overflow: visible;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       /* Push workload tag and count to the right, with space after the name */
@@ -22515,6 +22519,9 @@
           ownerHeader.setAttribute("role", "button");
           ownerHeader.tabIndex = 0;
           ownerHeader.setAttribute("aria-expanded", isOwnerCollapsed ? "false" : "true");
+          ownerHeader.title = isOwnerCollapsed
+            ? "Click to show " + projects.length + " project" + (projects.length === 1 ? "" : "s")
+            : "Click to hide these projects";
           
           const ownerIcon = document.createElement("span");
           ownerIcon.className = "ownerIcon";
@@ -22540,9 +22547,13 @@
           // already appears in the Owner Workload Overview at the top of
           // the page. Showing it twice was redundant.
 
+          // Just the number. It used to read "(16 hidden)" while a line underneath repeated
+          // "16 project(s) hidden. Click owner to expand." — the same count stated twice, and the
+          // longer text is what collided with the owner name. The chevron and aria-expanded already
+          // say whether the group is open.
           const ownerCount = document.createElement("span");
           ownerCount.className = "ownerCount";
-          ownerCount.textContent = "(" + projects.length + (isOwnerCollapsed ? " hidden" : "") + ")";
+          ownerCount.textContent = "(" + projects.length + ")";
 
           ownerName.appendChild(ownerCollapse);
           ownerName.appendChild(ownerNameText);
@@ -22633,15 +22644,10 @@
           
           els.projectList.appendChild(ownerHeader);
 
-          if (isOwnerCollapsed) {
-            const collapsedInfo = document.createElement("div");
-            collapsedInfo.className = "hint";
-            collapsedInfo.textContent =
-              projects.length + " project(s) hidden. Click owner to expand.";
-            collapsedInfo.style.margin = "0 0 6px 32px";
-            els.projectList.appendChild(collapsedInfo);
-            continue;
-          }
+          // Collapsed groups are just their header now: the chevron, the "(N)" count and the header
+          // tooltip carry it. The old hint line cost a full row per collapsed owner and repeated the
+          // count that already sits next to the name.
+          if (isOwnerCollapsed) continue;
 
           // Render projects for this owner
           for (const p of projects) {
