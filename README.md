@@ -14,6 +14,8 @@ Prefer a local copy? Download `Project Progress Tracker.html` and open it from y
 
 ### Project management
 - **Project list with status pills**, team-group workload sections (Team kulde + Others), sorting & filtering, plant ID quick-link to PANG.
+- **Owner lanes group by the REAL Rocketlane project owner** — the same name the detail panel's "Owner:" chip shows, not whoever imported the project. The owner is backfilled for **all** projects from the `/projects/lightV1` payload on every load (`projectGroupOwnerName`), so lanes match Rocketlane ownership automatically; your own lane sorts first.
+- **✓ Complete all** button on each task-category header (shown only while the category has open tasks): confirms, then completes every open task through the same per-task path as a manual click — each completion syncs to Rocketlane, subtasks complete before parents.
 - **Per-project detail view**: notes, status, due dates, custom links (Oneflow / Younium / HubSpot), task categories with **one-level sub-tasks** (a subtask can't have its own subtask; created subtasks sync to Rocketlane in the parent's phase), expandable task notes & descriptions, in-progress / blocked / waiting-on-partner / need-assistance status.
 - **Per-project toolbar shortcuts**: 🚀 Rocketlane, 📁 Files, 📦 Order info, ☄️ PANG (plant control), 👥 BAF (user database), Edit, Remove.
 - **📁 Files popover** lets you **upload** to the project's **General Shared Files** — an **⬆ Upload** button (header) or **drag-and-drop** files anywhere on the popover (dashed outline on hover). Works even on a project with no files yet. Needs bridge **v1.9.16+** (it creates the attachment with `sourceType:FOLDER` then links it into the folder, mirroring Rocketlane's own 2-step flow). It also has a **⬇ Download all (N)** button — prompts you to choose a destination folder **each time** via the File System Access API (`showDirectoryPicker`, starting at the last-used folder for a quick one-click), then writes every project attachment into a per-project, **date-stamped** subfolder there (named `<project name> <YYYY-MM-DD>`). Filename collisions auto-resolve as `name (1).ext`, `name (2).ext`. Falls back to per-file `<a download>` on browsers without the API.
@@ -105,7 +107,19 @@ A status chip in the project header meta row (between the **Updated** and **RL s
 
 **Audit attribution** (bridge v1.9.11+): `Created by` and `Last updated by` rows come from the Younium event log endpoint (`GET /api/eventlog/order/id/{id}`). First/latest events sorted by timestamp.
 
-**Read-only**: the modal never writes to Younium. No invoicing, no activation, no link overwrites.
+**Activated orders read "Active", not "Created (not finalized)"**: Younium keeps `status: 1` on an order after draft activation — only the real `O-######` number and the UI badge change. Status 1 counts as "not finalized" only while the order number still looks like a draft; an activated, started, not-yet-invoiced order shows **✓ Active** (green) with the invoice row carrying the actionable state. Payment/delivery header statuses surface too: **Partially paid / Paid / Partially delivered / Delivered** (partials render yellow with an em-dash).
+
+**Order/Offer slot prefers the real order**: when no Younium link is saved and the plant's orders are discovered by `plant_id`, the newest **non-subscription** document becomes the Order/Offer section; the "… Abonnementsavtale" goes in the Subscription section (it previously hijacked both).
+
+**Outdated version auto-heal**: activation creates a NEW order version with a new id, so a saved link can go stale. Both the order and subscription links follow the version chain (`youniumResolveCurrentVersion`: plant + description + account match) to the current version, and the tracker **auto-rewrites the saved link** to it — reported in the Warnings panel ("auto-updated it to the activated version"). It only rewrites a slot that already had a link, and never touches Younium itself.
+
+**Never writes to Younium**: the modal reads only — no invoicing, no activation. The only thing it edits is the project's own saved link (the auto-heal above).
+
+### Oneflow status chip (per project)
+
+A sibling chip next to the Younium one answering a single question: **is the project's Oneflow document signed?** Same UI pattern (colored chip → fullscreen modal, reusing the Younium modal's styling), driven by the agreement lifecycle `state`: **4 Signed → green ✓**, 1 Pending / 2 Overdue → yellow ⏳, 0 Draft / 3 Declined / 5 Cancelled → red ✗.
+
+The modal shows a **Document / order** section (from `oneflowUrl`) and a **Subscription agreement** section (from `oneflowSubscriptionUrl`) — each with Signed?, sent/signed/expiry dates, and the **Parties** with a per-participant ✓ (on a fully-signed agreement every participant shows ✓, since a non-signing viewer keeps `state 0` even when the document is complete). Footer: Refresh, Copy summary, Open document/subscription. Background-checks once per project per session; verdict cached on `project.oneflowStatus`. Read-only against Oneflow.
 
 ### Per-platform bridges (Tampermonkey userscript v1.9.11+)
 
