@@ -35256,7 +35256,21 @@
         if (step.hint) {
           const h = document.createElement("div");
           h.style.cssText = "color: var(--muted2); font-size: 12px;";
-          h.textContent = step.hint;
+          // Linkify http(s) URLs in the hint (e.g. the AM Counter link on Q14)
+          // — DOM-built anchors, scheme fixed by the regex, so no injection.
+          for (const part of String(step.hint).split(/(https?:\/\/[^\s]+)/g)) {
+            if (/^https?:\/\//.test(part)) {
+              const link = document.createElement("a");
+              link.href = part;
+              link.textContent = part;
+              link.target = "_blank";
+              link.rel = "noopener noreferrer";
+              link.style.color = "var(--accent)";
+              h.appendChild(link);
+            } else if (part) {
+              h.appendChild(document.createTextNode(part));
+            }
+          }
           wrap.appendChild(h);
         }
         if (step.type === "choice") {
