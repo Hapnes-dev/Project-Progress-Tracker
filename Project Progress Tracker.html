@@ -16496,6 +16496,40 @@
        * @returns {Promise<{ok: boolean, members: number, activeProjects: number}>}
        */
       async function rocketlaneAggregateTeamWorkloadFromLight(projects) {
+        // ── Real-owner backfill ──
+        // The lightV1 payload carries every project's OWNER (projectOwner with
+        // first/last name), and this aggregation runs on every load — so use
+        // the same single pass to stamp rocketlaneOwnerName onto every tracked
+        // project. Without this, only projects touched by a full sync (or
+        // selected once) had their real owner captured, and the rest kept
+        // grouping under the IMPORTING user's lane instead of the actual
+        // project owner's. Rocketlane is authoritative: overwrite a differing
+        // name, never clear one (empty owner in the payload leaves it alone).
+        try {
+          const ownerByRlPid = new Map();
+          for (const pr of projects) {
+            const rlPid = String(pr?.projectId ?? "").trim();
+            if (!rlPid) continue;
+            const o = pr?.projectOwner;
+            const nm = [String(o?.firstName ?? "").trim(), String(o?.lastName ?? "").trim()]
+              .filter(Boolean).join(" ").trim() || rocketlaneProjectOwnerName(pr) || "";
+            if (nm) ownerByRlPid.set(rlPid, nm);
+          }
+          let ownersChanged = 0;
+          for (const lp of (state?.projects ?? [])) {
+            const rlPid = String(lp?.rocketlaneProjectId ?? "").trim();
+            if (!rlPid) continue;
+            const nm = ownerByRlPid.get(rlPid);
+            if (!nm || nm === String(lp.rocketlaneOwnerName || "").trim()) continue;
+            lp.rocketlaneOwnerName = nm;
+            ownersChanged += 1;
+          }
+          if (ownersChanged) {
+            console.log("[TeamWorkload] backfilled real project owner on " + ownersChanged + " project(s) from lightV1");
+            saveState(state);
+            render(); // regroup the owner lanes immediately
+          }
+        } catch (e) { console.warn("[TeamWorkload] owner backfill failed:", e); }
         /** @type {Record<string, {firstName:string,lastName:string,fullName:string,total:number,inProgress:number,projectIds:string[],inProgressProjectIds:string[]}>} */
         const byUserId = {};
         let activeCount = 0;
