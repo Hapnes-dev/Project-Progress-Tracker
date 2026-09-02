@@ -35105,7 +35105,8 @@
           { key: "q16", type: "fields", label: "16. Tilleggsinformasjon",
             fields: [
               { k: "internt",   label: "Hvem har gjort leveransen internt", def: projectGroupOwnerName(p) || "" },
-              { k: "bestiller", label: "Hvem er bestiller", def: "" },
+              // Bestiller = the project's partner (the "Partner: …" chip, p.client).
+              { k: "bestiller", label: "Hvem er bestiller", def: String(p.client || "") },
               { k: "g4",        label: "Er det brukt 4G", def: "" },
               { k: "annet",     label: "Annen relevant informasjon", def: "" },
             ] },
