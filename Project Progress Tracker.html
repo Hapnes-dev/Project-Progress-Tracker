@@ -35411,12 +35411,13 @@
           // route the ticket to the right group.
           console.warn("[zendesk] handover macro lookup failed, using defaults:", e?.message ?? e);
         }
-        // Internal note, not a public reply: the requester is the agent creating
-        // it, and a public comment would mail the checklist straight back out.
+        // Public reply, per the delivery team's workflow — the checklist is the
+        // handover itself, not a side note. The requester is the agent creating
+        // the ticket, so the notification lands with them.
         const res = await zendeskApiRequest("POST", "/tickets.json", {
           ticket: {
             subject: String(subject || "").trim() || "Avblokkering og Overlevering",
-            comment: { html_body: String(html || ""), public: false },
+            comment: { html_body: String(html || ""), public: true },
             group_id: groupId,
             tags,
             status: "open",
@@ -35577,7 +35578,7 @@
         const already = String(a.zendeskTicketId ?? "").trim();
         if (!confirm(
           "Opprette Zendesk-sak?\n\n" + subject +
-          "\n\nGruppe: IWMAC Support · Status: Open\nSjekklisten legges inn som intern notat." +
+          "\n\nGruppe: IWMAC Support · Status: Open\nSjekklisten legges inn som offentlig svar." +
           (already ? "\n\nOBS: denne overleveringen har allerede sak #" + already + " — dette blir en NY sak." : "")
         )) return;
         const label = btn.textContent;
