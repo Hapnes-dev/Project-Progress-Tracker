@@ -4404,6 +4404,28 @@
         .projectStatusMenu { background: #ffffff; }
       }
 
+      /* Right-click menu on a project card ("🚚 Delivery to service").
+         Floating panels are opaque by convention — it used to paint itself with
+         var(--panel), which is rgba(255,255,255,.06), so the card underneath
+         showed straight through the menu. */
+      .projectCtxMenu {
+        background: #0f1424;
+        border: 1px solid var(--hairline-strong);
+        box-shadow: var(--shadow-lg);
+        border-radius: var(--radius-lg);
+      }
+      .projectCtxMenu .projectCtxItem {
+        color: var(--text);
+        background: transparent;
+      }
+      .projectCtxMenu .projectCtxItem:hover,
+      .projectCtxMenu .projectCtxItem:focus-visible {
+        background: var(--accent-soft);
+      }
+      @media (prefers-color-scheme: light) {
+        .projectCtxMenu { background: #ffffff; }
+      }
+
       /* QC checklist + preset panel */
       .qcChecklist, .presetPanel {
         background: var(--surface-1);
@@ -35556,16 +35578,15 @@
       window.__openProjectContextMenu = function (ev, p) {
         closeProjectContextMenu();
         const m = document.createElement("div");
-        m.style.cssText = "position: fixed; z-index: 10000; background: var(--panel, #16181d); " +
-          "border: 1px solid var(--hairline, #2a2d34); border-radius: 10px; padding: 6px; " +
-          "box-shadow: 0 10px 30px rgba(0,0,0,.45); min-width: 200px;";
+        // Colours live in .projectCtxMenu — an opaque panel, like every other
+        // floating surface here. Only the placement is inline.
+        m.className = "projectCtxMenu";
+        m.style.cssText = "position: fixed; z-index: 10000; padding: 6px; min-width: 200px;";
         const item = document.createElement("button");
         item.type = "button";
-        item.className = "btn";
+        item.className = "btn projectCtxItem";
         item.textContent = "🚚 Delivery to service";
-        item.style.cssText = "display: block; width: 100%; text-align: left; border: none; background: transparent;";
-        item.addEventListener("mouseenter", () => { item.style.background = "var(--accent-soft, rgba(110,231,255,.12))"; });
-        item.addEventListener("mouseleave", () => { item.style.background = "transparent"; });
+        item.style.cssText = "display: block; width: 100%; text-align: left; border: none;";
         item.addEventListener("click", () => {
           closeProjectContextMenu();
           openDeliveryToServiceWizard(p);
