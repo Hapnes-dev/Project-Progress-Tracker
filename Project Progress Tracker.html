@@ -35069,6 +35069,22 @@
         s = s.replace(/\s*:\s*[^:]*$/, "");
         return s.trim() || "Anleggsnavn";
       }
+      // Q14 asks whether the number of systems on the order still matches the
+      // original sales order, which means checking AM Counter against the
+      // project's Younium subscription — so the hint carries both links rather
+      // than making you go find the subscription yourself. Prefers the saved
+      // subscription link, falls back to the plain Younium order link, and says
+      // so when neither is on the project. Hints are linkified, so a bare URL
+      // renders as a clickable link.
+      function deliveryYouniumHint(p) {
+        const base = "Bruk AM Counter: http://toolbox.iwmac.local/am_counter/ for å sjekke om det stemmer med posisjonene i Younium.";
+        const sub = String(p?.youniumSubscriptionUrl ?? "").trim();
+        const order = String(p?.youniumUrl ?? "").trim();
+        if (sub) return base + " Younium-abonnement: " + sub;
+        if (order) return base + " Ingen abonnementslenke lagret — Younium-ordre: " + order;
+        return base + " Ingen Younium-lenke lagret på prosjektet (legg den inn i Rediger-dialogen).";
+      }
+
       function deliveryWizardSteps(p, a) {
         const whenNo5 = () => a.q5 === "Nei";
         return [
@@ -35100,7 +35116,7 @@
             hint: "Hvis det er standard ventilasjon, skal dette alltid legges inn dersom ventilasjon er inkludert i ordren." },
           { key: "q14", type: "choice", options: JA_NEI,
             label: "14. Er det gjort endringer av antall systemer på ordre iht opprinnelig salgsordre — i så fall, er dette oppdatert i abm.ordre?",
-            hint: "Bruk AM Counter: http://toolbox.iwmac.local/am_counter/ for å sjekke om det stemmer med posisjonene i Younium." },
+            hint: deliveryYouniumHint(p) },
           { key: "q15", type: "choice", options: JA_NEI, label: "15. Har du lagret all dokumentasjon i anleggsmappe: 99-underlag fra kunde?" },
           { key: "q16", type: "fields", label: "16. Tilleggsinformasjon",
             fields: [
