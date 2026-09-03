@@ -35251,6 +35251,96 @@
         return L.join("\n");
       }
 
+      // The Zendesk macro "Sjekkliste Overlevering IWMAC Kulde til Service"
+      // (macro 1900005365194) is HTML: an <h3> heading, a real <ol> for the 16
+      // questions, nested <ul>s for the sub-points, <br> between the checkbox
+      // lines and an &nbsp; spacer closing each item. The wizard copied plain
+      // text with hand-drawn "1." numbers and "•" bullets — which is exactly why
+      // the pasted result never looked like the macro. This builds the same
+      // markup with the answers filled in; it goes on the clipboard as
+      // text/html, so pasting into the Zendesk composer reproduces the macro.
+      // Bold/plain per question follows the macro (11, 13, 14 and 15 are plain).
+      function buildOverleveringHtml(p, a) {
+        const e = (v) => escHtml(String(v ?? "").trim());
+        const box = (on) => (on ? "[x]" : "[]");
+        const c = (q, opt) => box(a[q] === opt);
+        const SP = "<br>&nbsp;";                       // the macro's end-of-item spacer
+        const q = (text, bold) => (bold === false ? e(text) : "<strong>" + e(text) + "</strong>");
+        const opts = (key, list) => list.map((o) => "<br>" + c(key, o) + " " + e(o)).join("");
+        const JA = ["Ja", "Nei"];
+        const H = [];
+
+        H.push("<h3><strong>Leveranseavdelingens Sjekkliste til Support</strong></h3>");
+        H.push("<p>Vennligst besvar følgende spørsmål i forbindelse med leveranse:</p>");
+        H.push("<ol>");
+        H.push("<li>" + q("Er abonnementsavtalen signert?") + opts("q1", ["Ja", "Nei", "ANEO"]) + SP + "</li>");
+        H.push("<li>" + q("Er det oppgitt anleggs administrator i abonnementsavtalen?") + opts("q2", JA) + SP + "</li>");
+        H.push("<li>" + q("Legg ved linker til Oneflow:") +
+          "<br>ordre tilbudet: " + e(a.q3_ordre) +
+          "<br>abonnementsavtalen: " + e(a.q3_abm) + SP + "</li>");
+        H.push("<li>" + q("Er nøkkelinformasjon og link til Zendesk-overlevering lagt til i PANG-notater?") + opts("q4", JA) + SP + "</li>");
+        H.push("<li>" + q("Er leveransen komplett i henhold til ordren?") + opts("q5", JA) + SP + "</li>");
+        H.push("<li>" + q("Hvis nei: Hva gjenstår etter overlevering?") +
+          "<br>Svar:&nbsp;" + (a.q5 === "Nei" ? e(a.q6) : "") + SP + "</li>");
+        H.push("<li>" + q("Hvis nei: Hvem er ansvarlig for å løse disse manglene?") +
+          "<br>Svar:&nbsp;" + (a.q5 === "Nei" ? e(a.q7) : "") + SP + "</li>");
+        H.push("<li>" + q("Skal kuldefirma stå på vaktliste") + opts("q8", JA) + SP + "</li>");
+        H.push("<li>" + q("Skal anlegget inn i Alarmsenteret vårt?") +
+          opts("q9", ["Ja", "Nei", "ANEO alarm senter"]) +
+          "<br><i>Hvis ja:</i>" +
+          "<ul><li>" + q("Har vi etterspurt ringeliste?") +
+          "<br>" + box(a.q9 === "Ja" && a.q9b === "Ja") + " Ja" +
+          "<br>" + box(a.q9 === "Ja" && a.q9b === "Nei") + " Nei" + SP + "</li></ul></li>");
+        H.push("<li>" + q("Er det lagt inn IK-mat?") + opts("q10", JA) + SP + "</li>");
+        H.push("<li>" + q("Er remote access satt opp? (Gjerne bekreft ved å sjekke om du får tilgang via remote access)", false) + opts("q11", JA) + SP + "</li>");
+        H.push("<li>" + q("Integrert i energinett?") + opts("q12", JA) + SP + "</li>");
+        H.push("<li>" + q("Er det lagt inn tidsstyring på ventilasjonen? (Hvis det er standard ventilasjon, skal dette alltid legges inn dersom ventilasjon er inkludert i ordren.)", false) + opts("q13", JA) + SP + "</li>");
+        H.push("<li>" + q("Er det gjort endringer av antall systemer på ordre iht opprinnelig salgsordre, i såfall; er dette oppdatert i abm.ordre", false) +
+          opts("q14", JA) +
+          "<br>(Bruk AM Counter: <a href=\"http://toolbox.iwmac.local/am_counter/\">http://toolbox.iwmac.local/am_counter/</a> for å sjekke om det stemmer med posisjonene i Younium)" + SP + "</li>");
+        H.push("<li>" + q("Har du lagret all dokumentasjon i anleggs mappe : 99-underlag fra kunde?", false) + opts("q15", JA) + SP + "</li>");
+        H.push("<li>" + q("Tilleggsinformasjon:") + "</li>");
+        H.push("</ol>");
+        H.push("<ul>" +
+          "<li>Hvem har gjort leveransen internt: " + e(a.q16_internt) + "</li>" +
+          "<li>Hvem er bestiller: " + e(a.q16_bestiller) + "</li>" +
+          "<li>Er det brukt 4G: " + e(a.q16_g4) + "</li>" +
+          "<li>Annen relevant informasjon: " + e(a.q16_annet) + "</li>" +
+          "</ul>");
+
+        H.push("<hr><p>&nbsp;</p>");
+        H.push("<p>DEL 2,</p>");
+        H.push("<p><strong>Følges opp Service</strong></p>");
+        H.push("<h3><strong>Sjekkliste for Service oppfølging</strong></h3>");
+        H.push("<p>Vennligst besvar og gjennomfør følgende ved oppfølging av sak:</p>");
+        H.push("<ul>");
+        H.push("<li><strong>Avblokker anlegg</strong><br>[] Fullført" + SP + "</li>");
+        H.push("<li><strong>Avklar med kunde:</strong><ul>" +
+          "<li><strong>Repetering og kopi av alarmer</strong><br>[] Ja<br>[] Nei</li>" +
+          "<li><strong>Tilgangsliste / Brukerliste</strong><br>[] Bekreftet med kunde</li>" +
+          "<li>[] Tildelt Firm_admin til korrekt bruker</li>" +
+          "<li>[] Ta bort partner / installatør fra vaktliste med mindre kunde bekrefter at de skal stå der.&nbsp;" + SP + "</li>" +
+          "</ul></li>");
+        H.push("<li><strong>Send lenke med opplæring til kunde</strong><ul>" +
+          "<li>Lenke: <a href=\"https://iwmac.zendesk.com/hc/no/articles/7301141845660-Kom-i-gang-med-IWMAC\">Kom i gang med IWMAC</a> (bruk macro - opplæring IWMAC)<br>[] Sendt</li>" +
+          "<li><strong>Avklar om mer opplæring trengs</strong><br>[] Kunde ønsker opplæring<br>[] Ønsker ikke videre opplæring" + SP + "</li>" +
+          "</ul></li>");
+        H.push("<li><strong>Sjekk om anlegg skal inn i Alarmsenter</strong><br>[] Ja<br>[] Nei" + SP + "</li>");
+        H.push("<li><strong>NB! Sjekk startdato om det er testperiode</strong><br>[] Bekreftet testperiode" + SP + "</li>");
+        H.push("<li><strong>Aktiver abonnent ordre i Younium</strong><br>[] Fullført<ul>" +
+          "<li><strong>NB! Sett riktig oppstartdato</strong><br>Oppstartdato:</li>" +
+          "<li>Younium ordre: " + e(p.youniumUrl) + "</li>" +
+          "</ul></li>");
+        H.push("</ul>");
+        H.push("<p><strong>Tilleggsinformasjon:</strong></p>");
+        H.push("<ul>" +
+          "<li><strong>NB!</strong> husk å legge til Kenneth Sjølstad - <a href=\"mailto:kenneth.sjolstad@bunnpris.no\">kenneth.sjolstad@bunnpris.no</a> på alle nye bunnpris anlegg!</li>" +
+          "<li><strong>NB!</strong> husk å legge til Øystein Eng (<a href=\"mailto:oystein.eng@kjopmannshuset.no\">oystein.eng@kjopmannshuset.no</a>) og Kristoffer Kjelsberg (<a href=\"mailto:kristoffer.kjelsberg@joker.no\">kristoffer.kjelsberg@joker.no</a>) om det er Joker eller SPAR-butikker</li>" +
+          "<li><strong>NB!</strong> husk å legge til Erik Halstensen med firm_admin og service-tilgang på alle nye Meny butikker</li>" +
+          "</ul>");
+        return H.join("");
+      }
+
       let deliveryWizardProject = null;
       let deliveryWizardStepIdx = 0;
       function deliverySaveAnswers(p) {
@@ -35352,14 +35442,19 @@
         } else if (step.type === "review") {
           const info = document.createElement("div");
           info.style.cssText = "color: var(--muted); font-size: 12.5px;";
-          info.textContent = "Sjekk teksten under (redigerbar). \"Copy & close\" kopierer alt — lim inn i Zendesk-saken der du bruker /overlevering-macroen. DEL 2 følger med utfylt tomt til service.";
+          info.textContent = "Sjekk teksten under (redigerbar). \"Copy & close\" kopierer den som formatert tekst — lim inn i Zendesk-saken, så ser den ut som macroen. DEL 2 følger med utfylt tomt til service.";
           wrap.appendChild(info);
-          const ta = document.createElement("textarea");
-          ta.id = "deliveryWizardReviewText";
-          ta.className = "input";
-          ta.style.cssText = "width: 100%; min-height: 380px; resize: vertical; font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.45;";
-          ta.value = buildOverleveringText(p, a);
-          wrap.appendChild(ta);
+          // Rich preview, not a textarea: the clipboard gets this element's HTML,
+          // so what you see here is exactly what lands in the Zendesk composer —
+          // numbered list, sub-bullets and links included. Still editable.
+          const ed = document.createElement("div");
+          ed.id = "deliveryWizardReviewHtml";
+          ed.contentEditable = "true";
+          ed.className = "input";
+          ed.style.cssText = "width: 100%; min-height: 380px; max-height: 55vh; overflow: auto; " +
+            "resize: vertical; font-size: 13px; line-height: 1.45; text-align: left;";
+          ed.innerHTML = buildOverleveringHtml(p, a);
+          wrap.appendChild(ed);
         }
         body.appendChild(wrap);
       }
@@ -35389,12 +35484,28 @@
         const steps = deliveryWizardSteps(p, a);
         const step = steps[deliveryWizardStepIdx];
         if (step?.type === "review") {
-          const ta = document.getElementById("deliveryWizardReviewText");
-          const text = ta ? ta.value : buildOverleveringText(p, a);
+          const ed = document.getElementById("deliveryWizardReviewHtml");
+          const html = ed ? ed.innerHTML : buildOverleveringHtml(p, a);
+          // Plain-text flavour comes from the same element, so a target that
+          // can't take HTML still gets the edited content, not a stale copy.
+          const text = ed ? ed.innerText : buildOverleveringText(p, a);
+          let copied = false;
           try {
-            await navigator.clipboard.writeText(text);
-            showLoadMessage("Overlevering-teksten er kopiert — lim inn i Zendesk.");
-          } catch (_) { try { alert(text); } catch (_) {} }
+            if (window.ClipboardItem && navigator.clipboard?.write) {
+              await navigator.clipboard.write([
+                new ClipboardItem({
+                  "text/html": new Blob([html], { type: "text/html" }),
+                  "text/plain": new Blob([text], { type: "text/plain" }),
+                }),
+              ]);
+              copied = true;
+            }
+          } catch (_) { /* fall through to the plain-text write below */ }
+          if (!copied) {
+            try { await navigator.clipboard.writeText(text); copied = true; } catch (_) {}
+          }
+          if (copied) showLoadMessage("Overlevering-teksten er kopiert som formatert tekst — lim inn i Zendesk.");
+          else { try { alert(text); } catch (_) {} }
           closeDeliveryWizard();
           return;
         }
