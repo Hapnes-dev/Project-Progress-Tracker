@@ -7558,6 +7558,9 @@
       <div class="dlgYouniumStatusFooter" id="dlgDeliveryWizardFooter">
         <span id="deliveryWizardProgress" style="align-self: center; color: var(--muted2); font-size: 12px; margin-right: auto;"></span>
         <button class="btn" type="button" id="btnDeliveryWizardBack">← Back</button>
+        <!-- Only shown on the review step; creates the ticket in Zendesk instead
+             of copying the checklist for a manual paste. -->
+        <button class="btn" type="button" id="btnDeliveryWizardCreateTicket" style="display: none;">📨 Opprett Zendesk-sak</button>
         <button class="btn primary" type="button" id="btnDeliveryWizardNext">Next →</button>
       </div>
     </dialog>
@@ -35382,6 +35385,46 @@
         return H.join("");
       }
 
+      // ── Create the handover ticket in Zendesk straight from the wizard ──
+      // The wizard already builds exactly what the macro "Sjekkliste Overlevering
+      // IWMAC Kulde til Service" produces, so instead of copying and pasting we
+      // POST it as a new ticket: same group (IWMAC Support), same tag, status
+      // open. group_id and the tag are re-read from the macro at call time so an
+      // edit in Zendesk carries over; the constants are the values as of
+      // 2026-09 and are only the fallback.
+      const ZENDESK_HANDOVER_MACRO_ID = "1900005365194";
+      const ZENDESK_HANDOVER_GROUP_ID = 24854481;   // IWMAC Support
+      const ZENDESK_HANDOVER_TAGS = ["aktivering_basic"];
+      const ZENDESK_AGENT_TICKET_URL = "https://iwmac.zendesk.com/agent/tickets/";
+      async function zendeskCreateHandoverTicket(subject, html) {
+        let groupId = ZENDESK_HANDOVER_GROUP_ID;
+        let tags = ZENDESK_HANDOVER_TAGS.slice();
+        try {
+          const m = await zendeskApiRequest("GET", "/macros/" + ZENDESK_HANDOVER_MACRO_ID + ".json");
+          const actions = m?.macro?.actions ?? [];
+          const g = Number(actions.find((x) => x?.field === "group_id")?.value);
+          const t = String(actions.find((x) => x?.field === "current_tags")?.value ?? "").trim();
+          if (Number.isFinite(g) && g > 0) groupId = g;
+          if (t) tags = t.split(/[\s,]+/).filter(Boolean);
+        } catch (e) {
+          // Macro unreadable (bridge down, macro moved) — the constants still
+          // route the ticket to the right group.
+          console.warn("[zendesk] handover macro lookup failed, using defaults:", e?.message ?? e);
+        }
+        // Internal note, not a public reply: the requester is the agent creating
+        // it, and a public comment would mail the checklist straight back out.
+        const res = await zendeskApiRequest("POST", "/tickets.json", {
+          ticket: {
+            subject: String(subject || "").trim() || "Avblokkering og Overlevering",
+            comment: { html_body: String(html || ""), public: false },
+            group_id: groupId,
+            tags,
+            status: "open",
+          },
+        });
+        return res?.ticket ?? null;
+      }
+
       let deliveryWizardProject = null;
       let deliveryWizardStepIdx = 0;
       function deliverySaveAnswers(p) {
@@ -35402,6 +35445,8 @@
         progress.textContent = "Steg " + (deliveryWizardStepIdx + 1) + " av " + steps.length;
         btnBack.style.visibility = deliveryWizardStepIdx === 0 ? "hidden" : "visible";
         btnNext.textContent = step.type === "review" ? "📋 Copy & close" : "Next →";
+        const btnTicket = document.getElementById("btnDeliveryWizardCreateTicket");
+        if (btnTicket) btnTicket.style.display = step.type === "review" ? "" : "none";
         body.innerHTML = "";
         const wrap = document.createElement("div");
         wrap.style.cssText = "max-width: 640px; margin: 0 auto; padding: 12px 4px; display: grid; gap: 12px;";
@@ -35517,6 +35562,44 @@
       }
       document.getElementById("btnDeliveryWizardBack")?.addEventListener("click", () => {
         if (deliveryWizardStepIdx > 0) { deliveryWizardStepIdx -= 1; renderDeliveryWizardStep(); }
+      });
+      document.getElementById("btnDeliveryWizardCreateTicket")?.addEventListener("click", async (ev) => {
+        const btn = /** @type {HTMLButtonElement} */ (ev.currentTarget);
+        const p = deliveryWizardProject;
+        if (!p) return;
+        const a = p.overleveringAnswers || {};
+        const ed = document.getElementById("deliveryWizardReviewHtml");
+        const html = ed ? ed.innerHTML : buildOverleveringHtml(p, a);
+        const subject = String(a.title || "").trim() ||
+          (deliveryPlantId(p) + " - " + deliveryPlantName(p) + " - Avblokkering og Overlevering");
+        // Creating a ticket is outward-facing and can't be undone from here, so
+        // it always asks first and names what it is about to do.
+        const already = String(a.zendeskTicketId ?? "").trim();
+        if (!confirm(
+          "Opprette Zendesk-sak?\n\n" + subject +
+          "\n\nGruppe: IWMAC Support · Status: Open\nSjekklisten legges inn som intern notat." +
+          (already ? "\n\nOBS: denne overleveringen har allerede sak #" + already + " — dette blir en NY sak." : "")
+        )) return;
+        const label = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Oppretter…";
+        try {
+          const ticket = await zendeskCreateHandoverTicket(subject, html);
+          const id = String(ticket?.id ?? "").trim();
+          if (!id) throw new Error("Zendesk returnerte ingen sak-id.");
+          // Remember it on the project so the wizard doesn't silently create a
+          // second ticket for the same handover.
+          a.zendeskTicketId = id;
+          deliverySaveAnswers(p);
+          showLoadMessage("Zendesk-sak #" + id + " opprettet (IWMAC Support, open).");
+          try { window.open(ZENDESK_AGENT_TICKET_URL + encodeURIComponent(id), "_blank", "noopener"); } catch (_) {}
+          closeDeliveryWizard();
+        } catch (e) {
+          const msg = e instanceof TypeError ? "Nettverks-/CORS-feil." : String(e?.message ?? e);
+          showLoadMessage("Kunne ikke opprette Zendesk-sak: " + msg);
+          btn.disabled = false;
+          btn.textContent = label;
+        }
       });
       document.getElementById("btnDeliveryWizardNext")?.addEventListener("click", async () => {
         const p = deliveryWizardProject;
