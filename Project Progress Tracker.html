@@ -35264,7 +35264,23 @@
         const e = (v) => escHtml(String(v ?? "").trim());
         const box = (on) => (on ? "[x]" : "[]");
         const c = (q, opt) => box(a[q] === opt);
-        const SP = "<br>&nbsp;";                       // the macro's end-of-item spacer
+        // The macro ends every item with `<br>&nbsp;` to get a blank line between
+        // the numbers. Zendesk's composer is CKEditor 5, which STRIPS a trailing
+        // <br>+nbsp from a list item on paste — verified by pasting the macro's
+        // OWN html into the composer: its spacer lines disappear too, which is
+        // why the pasted checklist came out with no gaps. An empty <p> inside the
+        // <li> survives, so each item is emitted as
+        //   <li><p>…</p><p>&nbsp;</p></li>
+        // and the blank lines are still there after pasting.
+        const SP = "<p>&nbsp;</p>";
+        const item = (inner) => "<li><p>" + inner + "</p>" + SP + "</li>";
+        // A saved link is emitted as a real anchor; Zendesk otherwise auto-links a
+        // bare URL and eats the text that follows it on the next line.
+        const link = (v) => {
+          const u = String(v ?? "").trim();
+          if (!/^https?:\/\//i.test(u)) return e(u);
+          return "<a href=\"" + escHtml(u) + "\">" + escHtml(u) + "</a>";
+        };
         const q = (text, bold) => (bold === false ? e(text) : "<strong>" + e(text) + "</strong>");
         const opts = (key, list) => list.map((o) => "<br>" + c(key, o) + " " + e(o)).join("");
         const JA = ["Ja", "Nei"];
@@ -35273,33 +35289,36 @@
         H.push("<h3><strong>Leveranseavdelingens Sjekkliste til Support</strong></h3>");
         H.push("<p>Vennligst besvar følgende spørsmål i forbindelse med leveranse:</p>");
         H.push("<ol>");
-        H.push("<li>" + q("Er abonnementsavtalen signert?") + opts("q1", ["Ja", "Nei", "ANEO"]) + SP + "</li>");
-        H.push("<li>" + q("Er det oppgitt anleggs administrator i abonnementsavtalen?") + opts("q2", JA) + SP + "</li>");
-        H.push("<li>" + q("Legg ved linker til Oneflow:") +
-          "<br>ordre tilbudet: " + e(a.q3_ordre) +
-          "<br>abonnementsavtalen: " + e(a.q3_abm) + SP + "</li>");
-        H.push("<li>" + q("Er nøkkelinformasjon og link til Zendesk-overlevering lagt til i PANG-notater?") + opts("q4", JA) + SP + "</li>");
-        H.push("<li>" + q("Er leveransen komplett i henhold til ordren?") + opts("q5", JA) + SP + "</li>");
-        H.push("<li>" + q("Hvis nei: Hva gjenstår etter overlevering?") +
-          "<br>Svar:&nbsp;" + (a.q5 === "Nei" ? e(a.q6) : "") + SP + "</li>");
-        H.push("<li>" + q("Hvis nei: Hvem er ansvarlig for å løse disse manglene?") +
-          "<br>Svar:&nbsp;" + (a.q5 === "Nei" ? e(a.q7) : "") + SP + "</li>");
-        H.push("<li>" + q("Skal kuldefirma stå på vaktliste") + opts("q8", JA) + SP + "</li>");
-        H.push("<li>" + q("Skal anlegget inn i Alarmsenteret vårt?") +
+        H.push(item(q("Er abonnementsavtalen signert?") + opts("q1", ["Ja", "Nei", "ANEO"])));
+        H.push(item(q("Er det oppgitt anleggs administrator i abonnementsavtalen?") + opts("q2", JA)));
+        // The two Oneflow links are wrapped in real anchors: a bare URL followed
+        // by a <br> got greedily auto-linked by Zendesk, swallowing the next line.
+        H.push(item(q("Legg ved linker til Oneflow:") +
+          "<br>ordre tilbudet: " + link(a.q3_ordre) +
+          "<br>abonnementsavtalen: " + link(a.q3_abm)));
+        H.push(item(q("Er nøkkelinformasjon og link til Zendesk-overlevering lagt til i PANG-notater?") + opts("q4", JA)));
+        H.push(item(q("Er leveransen komplett i henhold til ordren?") + opts("q5", JA)));
+        H.push(item(q("Hvis nei: Hva gjenstår etter overlevering?") +
+          "<br>Svar:&nbsp;" + (a.q5 === "Nei" ? e(a.q6) : "")));
+        H.push(item(q("Hvis nei: Hvem er ansvarlig for å løse disse manglene?") +
+          "<br>Svar:&nbsp;" + (a.q5 === "Nei" ? e(a.q7) : "")));
+        H.push(item(q("Skal kuldefirma stå på vaktliste") + opts("q8", JA)));
+        H.push("<li><p>" + q("Skal anlegget inn i Alarmsenteret vårt?") +
           opts("q9", ["Ja", "Nei", "ANEO alarm senter"]) +
-          "<br><i>Hvis ja:</i>" +
-          "<ul><li>" + q("Har vi etterspurt ringeliste?") +
-          "<br>" + box(a.q9 === "Ja" && a.q9b === "Ja") + " Ja" +
-          "<br>" + box(a.q9 === "Ja" && a.q9b === "Nei") + " Nei" + SP + "</li></ul></li>");
-        H.push("<li>" + q("Er det lagt inn IK-mat?") + opts("q10", JA) + SP + "</li>");
-        H.push("<li>" + q("Er remote access satt opp? (Gjerne bekreft ved å sjekke om du får tilgang via remote access)", false) + opts("q11", JA) + SP + "</li>");
-        H.push("<li>" + q("Integrert i energinett?") + opts("q12", JA) + SP + "</li>");
-        H.push("<li>" + q("Er det lagt inn tidsstyring på ventilasjonen? (Hvis det er standard ventilasjon, skal dette alltid legges inn dersom ventilasjon er inkludert i ordren.)", false) + opts("q13", JA) + SP + "</li>");
-        H.push("<li>" + q("Er det gjort endringer av antall systemer på ordre iht opprinnelig salgsordre, i såfall; er dette oppdatert i abm.ordre", false) +
+          "<br><i>Hvis ja:</i></p><ul>" +
+          item(q("Har vi etterspurt ringeliste?") +
+            "<br>" + box(a.q9 === "Ja" && a.q9b === "Ja") + " Ja" +
+            "<br>" + box(a.q9 === "Ja" && a.q9b === "Nei") + " Nei") +
+          "</ul></li>");
+        H.push(item(q("Er det lagt inn IK-mat?") + opts("q10", JA)));
+        H.push(item(q("Er remote access satt opp? (Gjerne bekreft ved å sjekke om du får tilgang via remote access)", false) + opts("q11", JA)));
+        H.push(item(q("Integrert i energinett?") + opts("q12", JA)));
+        H.push(item(q("Er det lagt inn tidsstyring på ventilasjonen? (Hvis det er standard ventilasjon, skal dette alltid legges inn dersom ventilasjon er inkludert i ordren.)", false) + opts("q13", JA)));
+        H.push(item(q("Er det gjort endringer av antall systemer på ordre iht opprinnelig salgsordre, i såfall; er dette oppdatert i abm.ordre", false) +
           opts("q14", JA) +
-          "<br>(Bruk AM Counter: <a href=\"http://toolbox.iwmac.local/am_counter/\">http://toolbox.iwmac.local/am_counter/</a> for å sjekke om det stemmer med posisjonene i Younium)" + SP + "</li>");
-        H.push("<li>" + q("Har du lagret all dokumentasjon i anleggs mappe : 99-underlag fra kunde?", false) + opts("q15", JA) + SP + "</li>");
-        H.push("<li>" + q("Tilleggsinformasjon:") + "</li>");
+          "<br>(Bruk AM Counter: <a href=\"http://toolbox.iwmac.local/am_counter/\">http://toolbox.iwmac.local/am_counter/</a> for å sjekke om det stemmer med posisjonene i Younium)"));
+        H.push(item(q("Har du lagret all dokumentasjon i anleggs mappe : 99-underlag fra kunde?", false) + opts("q15", JA)));
+        H.push("<li><p>" + q("Tilleggsinformasjon:") + "</p></li>");
         H.push("</ol>");
         H.push("<ul>" +
           "<li>Hvem har gjort leveransen internt: " + e(a.q16_internt) + "</li>" +
@@ -35314,22 +35333,22 @@
         H.push("<h3><strong>Sjekkliste for Service oppfølging</strong></h3>");
         H.push("<p>Vennligst besvar og gjennomfør følgende ved oppfølging av sak:</p>");
         H.push("<ul>");
-        H.push("<li><strong>Avblokker anlegg</strong><br>[] Fullført" + SP + "</li>");
-        H.push("<li><strong>Avklar med kunde:</strong><ul>" +
-          "<li><strong>Repetering og kopi av alarmer</strong><br>[] Ja<br>[] Nei</li>" +
-          "<li><strong>Tilgangsliste / Brukerliste</strong><br>[] Bekreftet med kunde</li>" +
-          "<li>[] Tildelt Firm_admin til korrekt bruker</li>" +
-          "<li>[] Ta bort partner / installatør fra vaktliste med mindre kunde bekrefter at de skal stå der.&nbsp;" + SP + "</li>" +
+        H.push(item("<strong>Avblokker anlegg</strong><br>[] Fullført"));
+        H.push("<li><p><strong>Avklar med kunde:</strong></p><ul>" +
+          "<li><p><strong>Repetering og kopi av alarmer</strong><br>[] Ja<br>[] Nei</p></li>" +
+          "<li><p><strong>Tilgangsliste / Brukerliste</strong><br>[] Bekreftet med kunde</p></li>" +
+          "<li><p>[] Tildelt Firm_admin til korrekt bruker</p></li>" +
+          item("[] Ta bort partner / installatør fra vaktliste med mindre kunde bekrefter at de skal stå der.") +
           "</ul></li>");
-        H.push("<li><strong>Send lenke med opplæring til kunde</strong><ul>" +
-          "<li>Lenke: <a href=\"https://iwmac.zendesk.com/hc/no/articles/7301141845660-Kom-i-gang-med-IWMAC\">Kom i gang med IWMAC</a> (bruk macro - opplæring IWMAC)<br>[] Sendt</li>" +
-          "<li><strong>Avklar om mer opplæring trengs</strong><br>[] Kunde ønsker opplæring<br>[] Ønsker ikke videre opplæring" + SP + "</li>" +
+        H.push("<li><p><strong>Send lenke med opplæring til kunde</strong></p><ul>" +
+          "<li><p>Lenke: <a href=\"https://iwmac.zendesk.com/hc/no/articles/7301141845660-Kom-i-gang-med-IWMAC\">Kom i gang med IWMAC</a> (bruk macro - opplæring IWMAC)<br>[] Sendt</p></li>" +
+          item("<strong>Avklar om mer opplæring trengs</strong><br>[] Kunde ønsker opplæring<br>[] Ønsker ikke videre opplæring") +
           "</ul></li>");
-        H.push("<li><strong>Sjekk om anlegg skal inn i Alarmsenter</strong><br>[] Ja<br>[] Nei" + SP + "</li>");
-        H.push("<li><strong>NB! Sjekk startdato om det er testperiode</strong><br>[] Bekreftet testperiode" + SP + "</li>");
-        H.push("<li><strong>Aktiver abonnent ordre i Younium</strong><br>[] Fullført<ul>" +
-          "<li><strong>NB! Sett riktig oppstartdato</strong><br>Oppstartdato:</li>" +
-          "<li>Younium ordre: " + e(p.youniumUrl) + "</li>" +
+        H.push(item("<strong>Sjekk om anlegg skal inn i Alarmsenter</strong><br>[] Ja<br>[] Nei"));
+        H.push(item("<strong>NB! Sjekk startdato om det er testperiode</strong><br>[] Bekreftet testperiode"));
+        H.push("<li><p><strong>Aktiver abonnent ordre i Younium</strong><br>[] Fullført</p><ul>" +
+          "<li><p><strong>NB! Sett riktig oppstartdato</strong><br>Oppstartdato:</p></li>" +
+          "<li><p>Younium ordre: " + link(p.youniumUrl) + "</p></li>" +
           "</ul></li>");
         H.push("</ul>");
         H.push("<p><strong>Tilleggsinformasjon:</strong></p>");
