@@ -7778,6 +7778,12 @@
         { key: "energy", label: "Energy", integrationTask: "Integration: Energi", designTask: "Design: Energi" },
         { key: "machine_room", label: "Machine Room", integrationTask: "Integration: Machine Room", designTask: "Design: Machine Room" },
         { key: "wireless", label: "Wireless", integrationTask: "Integration: Wireless overview", designTask: "Design: Wireless overview" },
+        // Smart Function is its own group (mirrors "IWMAC Modul: Smart
+        // Function" in the order) but carries NO generic Integration/Design
+        // pair — the category holds exactly the order's deliverables (the
+        // license carrier task + its sub-bullets). Both consumers of
+        // integrationTask/designTask skip falsy values.
+        { key: "smart_function", label: "Smart Function" },
       ];
 
       function safeParseJSON(text) {
@@ -28683,6 +28689,10 @@
         { re: /IWMAC\s*Modul:\s*Wireless/i,      key: "wireless" },
         { re: /IWMAC\s*Modul:\s*(Heating|VGV)/i, key: "heating_system" },
         { re: /IWMAC\s*Modul:\s*Machine\s*Room/i, key: "machine_room" },
+        // Smart Function gets its OWN category (user: "Smart Function should
+        // be under one group") — it used to be merged into Refrigeration via
+        // ORDER_INFO_HEADER_PROMOTE_RULES. Seen on 8013 (COOP EXTRA Verdal).
+        { re: /IWMAC\s*Modul:\s*Smart\s*Function/i, key: "smart_function" },
       ];
       // Some order line items describe a specific discipline rather than the
       // module they're physically nested under — e.g. the "System image -
@@ -28736,13 +28746,10 @@
         // ORDER_INFO_SUB_PROMOTE_RULES. Seen dropped on project 8013 (COOP
         // EXTRA Verdal).
         { re: /IWMAC\s*Product:\s*Images?\b/i, presetKey: "machine_room" },
-        // "IWMAC Modul: Smart Function" is a licensed add-on whose deliverables
-        // (Switch-løsning på endedisker, fuktighetssensor/karmvarmestyring på
-        // frysetorg, programming hours) are refrigeration-floor work → merge
-        // into Refrigeration. Its only line item is usually the "IWMAC License:
-        // Smart Function" carrier — kept because it has sub-deliverables (see
-        // the license skip below). Seen dropped on project 8013.
-        { re: /IWMAC\s*Modul:\s*Smart\s*Function/i, presetKey: "refrigeration_freezing" },
+        // ("IWMAC Modul: Smart Function" used to be merged into Refrigeration
+        // here; it now maps to its OWN category via ORDER_INFO_MODULE_MAP. Its
+        // usual line item is the "IWMAC License: Smart Function" carrier —
+        // kept because it has sub-deliverables, see the license skip below.)
       ];
       function orderInfoHeaderPromoteFor(headerText) {
         const t = String(headerText || "");
@@ -28785,6 +28792,9 @@
       // HubSpot line items resolve to Refrigeration/Energy/Ventilation/Machine
       // Room, with HW + generic License + Modbus driver dropped.
       const ORDER_INFO_FLAT_CLASSIFY = [
+        // Most specific first: "Smart Function" items must not fall through to
+        // a keyword hit (e.g. "frysetorg" in a sub would read as refrigeration).
+        { re: /smart\s*function/i, key: "smart_function" },
         { re: /maskin|machine|machinery/i, key: "machine_room" },
         { re: /refrigerat|freez|kjøl|kjol|frys/i, key: "refrigeration_freezing" },
         { re: /ventilat/i, key: "ventilation" },
@@ -29044,10 +29054,12 @@
           const preset = entry.preset;
           // Desired = generic Integration/Design + a task per order line item
           // (module's own + promoted into this preset), each with its sub-bullets.
-          const rawDesired = [
-            { text: preset.integrationTask, subs: [] },
-            { text: preset.designTask, subs: [] },
-          ];
+          const rawDesired = [];
+          // Presets without a generic pair (Smart Function) contribute only
+          // their order line items.
+          for (const gt of [preset.integrationTask, preset.designTask]) {
+            if (gt) rawDesired.push({ text: gt, subs: [] });
+          }
           const lineItems = [ ...(entry.items || []), ...(promotedByPreset.get(preset.key) || []) ];
           for (const item of lineItems) rawDesired.push({ text: item.text, subs: (item.subs || []).slice() });
           // Collapse duplicates by normalized text so a category never gets two
@@ -29389,7 +29401,7 @@
           );
           const jobItems = [];
           if (preset) {
-            for (const taskText of [preset.integrationTask, preset.designTask]) {
+            for (const taskText of [preset.integrationTask, preset.designTask].filter(Boolean)) {
               if (haveNorm.has(norm(taskText))) continue; // already present — skip
               const t = { id: id(), text: taskText, status: "todo", notes: "" };
               p.tasksByArea[key].push(t);
