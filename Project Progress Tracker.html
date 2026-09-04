@@ -28730,9 +28730,11 @@
         { re: /IWMAC\s*Modul:\s*Add[\s-]*on/i, presetKey: "machine_room" },
         // "IWMAC Product: Images" carries the image deliverables ("IWMAC Image —
         // 3 pcs" with sub-bullets like Nytt oversiktsbilde / Nytt maskinbilde /
-        // VGV/AC). Overview/machine/VGV image work is Machine Room discipline —
-        // same reasoning as the "System image - Machinery" item-promote rule.
-        // Seen dropped on project 8013 (COOP EXTRA Verdal).
+        // VGV/AC). Machine/VGV image work is Machine Room discipline — same
+        // reasoning as the "System image - Machinery" item-promote rule — while
+        // the oversiktsbilde sub-bullet is pulled out to Refrigeration by
+        // ORDER_INFO_SUB_PROMOTE_RULES. Seen dropped on project 8013 (COOP
+        // EXTRA Verdal).
         { re: /IWMAC\s*Product:\s*Images?\b/i, presetKey: "machine_room" },
         // "IWMAC Modul: Smart Function" is a licensed add-on whose deliverables
         // (Switch-løsning på endedisker, fuktighetssensor/karmvarmestyring på
@@ -28745,6 +28747,33 @@
       function orderInfoHeaderPromoteFor(headerText) {
         const t = String(headerText || "");
         return ORDER_INFO_HEADER_PROMOTE_RULES.find((r) => r.re.test(t)) || null;
+      }
+      // SUB-BULLET-level promotion: a sub-bullet that names a specific
+      // discipline is pulled OUT of its parent line item and becomes its own
+      // task in that discipline's category. "Nytt oversiktsbilde" (the store
+      // overview image) under "IWMAC Image — 3 pcs" / "IWMAC Product: Images"
+      // is refrigeration-floor work, unlike its Machine Room siblings
+      // (Maskinbilde, VGV-bilde). Seen on project 6272 (Coop Extra Moholt).
+      // Only fires when the sub's discipline DIFFERS from where the parent
+      // item is headed — a sub already travelling to the right category stays
+      // a subtask of its parent there.
+      const ORDER_INFO_SUB_PROMOTE_RULES = [
+        { re: /oversiktsbilde/i, presetKey: "refrigeration_freezing" },
+      ];
+      function orderInfoExtractSubPromotes(item, destKey, promotedByPreset) {
+        const subs = (item && item.subs) || [];
+        if (!subs.length) return;
+        const keep = [];
+        for (const s of subs) {
+          const rule = ORDER_INFO_SUB_PROMOTE_RULES.find((r) => r.re.test(String(s || "")));
+          if (rule && rule.presetKey !== destKey) {
+            if (!promotedByPreset.has(rule.presetKey)) promotedByPreset.set(rule.presetKey, []);
+            promotedByPreset.get(rule.presetKey).push({ text: s, subs: [] });
+          } else {
+            keep.push(s);
+          }
+        }
+        item.subs = keep;
       }
       // FLAT line-item classifier — used ONLY when the order info has NO
       // "IWMAC Modul:/Product:" headers (e.g. a pasted "HubSpot line items:"
@@ -28885,9 +28914,24 @@
       //   • a Rocketlane phase.
       // If the category already exists, BACKFILLS only the missing tasks/subtasks
       // (matched by normalized text) rather than skipping. Applies the dialog's Type + dates.
+      // ONE import at a time: the run is async (HubSpot fetch + Rocketlane
+      // sync take seconds), and clicking "Create from order info" again while
+      // one is still going used to start a second overlapping run — it
+      // re-queued the same tasks before the first had written/linked them, so
+      // line items could land twice, locally and in Rocketlane. The flag is
+      // held until the background sync finishes; a click after that runs as a
+      // normal backfill and finds nothing missing.
+      let orderInfoImportBusy = false;
       async function createCategoriesFromOrderInfo(p, opts) {
+        if (orderInfoImportBusy) { showLoadMessage("Order-info import is already running — give it a moment to finish."); return; }
+        orderInfoImportBusy = true;
+        try { await createCategoriesFromOrderInfoRun(p, opts); }
+        finally { orderInfoImportBusy = false; }
+      }
+      async function createCategoriesFromOrderInfoRun(p, opts) {
         const rlPid = String(p?.rocketlaneProjectId ?? "").trim();
         if (!rlPid) { showLoadMessage("This project isn't linked to Rocketlane — no order info to read."); return; }
+        showLoadMessage("Reading order info…");
         let info;
         try { info = await rocketlaneFetchHubspotOrderInfo(rlPid); }
         catch (e) { showLoadMessage("Couldn't read order info: " + (e?.message ?? e)); return; }
@@ -28908,6 +28952,10 @@
             for (const item of (pm.items || [])) {
               if (orderInfoSkipAsLicense(item)) continue; // bare IWMAC License (no subs): skipped
               const key = orderInfoClassifyDiscipline(item.text);
+              // Extract discipline-named sub-bullets BEFORE the null check so an
+              // oversiktsbilde sub is rescued even when its parent item classifies
+              // to nothing and is dropped.
+              orderInfoExtractSubPromotes(item, key, promotedByPreset);
               if (!key) continue;
               if (!promotedByPreset.has(key)) promotedByPreset.set(key, []);
               promotedByPreset.get(key).push(item);
@@ -28927,16 +28975,22 @@
             for (const item of (pm.items || [])) {
               if (orderInfoSkipAsLicense(item)) continue; // bare IWMAC License (no subs): skipped
               const key = (orderInfoPromoteRuleFor(item.text) || headerRule).presetKey;
+              orderInfoExtractSubPromotes(item, key, promotedByPreset);
               if (!promotedByPreset.has(key)) promotedByPreset.set(key, []);
               promotedByPreset.get(key).push(item);
             }
             pm.items = [];
             continue;
           }
+          // Where do this module's kept items land? (null when the module is
+          // unmapped and about to be dropped — an oversiktsbilde sub is still
+          // rescued from it.)
+          const moduleKey = (ORDER_INFO_MODULE_MAP.find((m) => m.re.test(pm.headerText)) || {}).key || null;
           const keep = [];
           for (const item of (pm.items || [])) {
             if (orderInfoSkipAsLicense(item)) continue; // bare IWMAC License (no subs): skipped
             const rule = orderInfoPromoteRuleFor(item.text);
+            orderInfoExtractSubPromotes(item, rule ? rule.presetKey : moduleKey, promotedByPreset);
             if (rule) {
               if (!promotedByPreset.has(rule.presetKey)) promotedByPreset.set(rule.presetKey, []);
               promotedByPreset.get(rule.presetKey).push(item);
@@ -29140,7 +29194,10 @@
         // ids back. Backfill reuses the existing phase (rocketlaneGetOrCreatePhase)
         // and nests new sub-bullets under the existing parent task's Rocketlane id.
         const phaseOpts = { private: !!(opts && opts.private), startDate: opts && opts.startDate, dueDate: opts && opts.dueDate };
-        void (async () => {
+        // Awaited (not fire-and-forget) so the orderInfoImportBusy guard stays
+        // held until the Rocketlane sync is done — nothing else waits on this
+        // promise, so the UI behaves exactly as before.
+        await (async () => {
           let okTasks = 0, failTasks = 0;
           // Fetch the project's Rocketlane tasks ONCE for the whole run. Each
           // category used to pull the full list itself just to dedup against it,
